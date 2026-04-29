@@ -1,0 +1,18 @@
+# Example projects.toml — copy to ~/.config/reck/projects.toml on the station,
+# edit to match your setup, then kickstart reck-stationd.
+#
+# This file is the explicit allow-list of project roots that reck-stationd
+# serves to connected satellites. Only the [[project]] entries listed here
+# are exposed; nothing else under /Users/reck-connect is reachable through
+# the daemon. Add or remove entries to control what the satellite can see.
+
+[[project]]
+id    = "reck-connect"
+name  = "Reck Connect"
+cwd   = "/Users/reck-connect/claude-code/Reck-Connect"
+default_pane = "claude"
+
+[[project]]
+id    = "example-project"
+name  = "Example Project"
+cwd   = "/Users/reck-connect/claude-code/example-project"

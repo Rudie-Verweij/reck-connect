@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 540" role="img" aria-label="Station and satellite — two halves of Reck Connect">
+  <defs>
+    <linearGradient id="paper" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#fffdf9"/>
+      <stop offset="100%" stop-color="#f7f4ed"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#e8875c"/>
+      <stop offset="100%" stop-color="#d4683a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="540" fill="url(#paper)"/>
+
+  <!-- top hairline + slug -->
+  <line x1="64" y1="56" x2="1216" y2="56" stroke="#c8c4b6"/>
+  <text x="64" y="44" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" letter-spacing="3" fill="#8a877d">CHAPTER ONE — TWO MACHINES</text>
+  <text x="1216" y="44" text-anchor="end" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" letter-spacing="3" fill="#8a877d">FIG. 01</text>
+
+  <!-- corner ornaments (top-left, top-right, bottom-left, bottom-right) -->
+  <g stroke="#d4683a" stroke-width="2" opacity="0.4">
+    <line x1="64" y1="80" x2="84" y2="80"/><line x1="64" y1="80" x2="64" y2="100"/>
+    <line x1="1216" y1="80" x2="1196" y2="80"/><line x1="1216" y1="80" x2="1216" y2="100"/>
+    <line x1="64" y1="460" x2="84" y2="460"/><line x1="64" y1="460" x2="64" y2="440"/>
+    <line x1="1216" y1="460" x2="1196" y2="460"/><line x1="1216" y1="460" x2="1216" y2="440"/>
+  </g>
+
+  <!-- ============== STATION (left) ============== -->
+  <g>
+    <!-- card -->
+    <rect x="120" y="130" width="420" height="280" rx="10" fill="#fffdf9" stroke="#c8c4b6"/>
+    <!-- chapter card -->
+    <text x="140" y="160" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10" letter-spacing="2.5" fill="#8a877d">// THE STATION</text>
+    <!-- title -->
+    <text x="140" y="208" font-family="'Playfair Display', Georgia, serif" font-weight="700" font-size="44" fill="#2a2927">Station</text>
+    <text x="140" y="236" font-family="'Lora', Georgia, serif" font-style="italic" font-size="16" fill="#5a5850">An always-on Mac. Holds the work.</text>
+
+    <!-- stack of labels -->
+    <g font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+      <circle cx="148" cy="278" r="4" fill="#7a9c6d"/>
+      <text x="166" y="282" fill="#2a2927">reck-stationd</text>
+      <text x="290" y="282" fill="#8a877d">— Go daemon</text>
+
+      <circle cx="148" cy="306" r="4" fill="#d4683a"/>
+      <text x="166" y="310" fill="#2a2927">panes</text>
+      <text x="290" y="310" fill="#8a877d">— PTY processes</text>
+
+      <circle cx="148" cy="334" r="4" fill="#c9982e"/>
+      <text x="166" y="338" fill="#2a2927">code</text>
+      <text x="290" y="338" fill="#8a877d">— never copied</text>
+
+      <circle cx="148" cy="362" r="4" fill="#8e7aad"/>
+      <text x="166" y="366" fill="#2a2927">agents</text>
+      <text x="290" y="366" fill="#8a877d">— Claude, codex, shells</text>
+    </g>
+
+    <!-- bottom note -->
+    <text x="140" y="392" font-family="'Lora', Georgia, serif" font-style="italic" font-size="13" fill="#5a5850">It does not move.</text>
+  </g>
+
+  <!-- ============== TAILSCALE LINK (center) ============== -->
+  <g transform="translate(640 270)">
+    <!-- ornamental divider: line - dot - diamond - dot - line, vertical -->
+    <line x1="0" y1="-100" x2="0" y2="-30" stroke="#d4683a" stroke-width="1" opacity="0.55"/>
+    <circle cx="0" cy="-22" r="3" fill="#d4683a" opacity="0.5"/>
+    <g transform="rotate(45)"><rect x="-6" y="-6" width="12" height="12" fill="#d4683a" opacity="0.7"/></g>
+    <circle cx="0" cy="22" r="3" fill="#d4683a" opacity="0.5"/>
+    <line x1="0" y1="30" x2="0" y2="100" stroke="#d4683a" stroke-width="1" opacity="0.55"/>
+    <!-- label -->
+    <text x="0" y="-12" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10" letter-spacing="2" fill="#8a877d" transform="rotate(-90)">TAILSCALE</text>
+    <text x="0" y="56" text-anchor="middle" font-family="'Lora', Georgia, serif" font-style="italic" font-size="13" fill="#5a5850">tailnet</text>
+  </g>
+
+  <!-- ============== SATELLITE (right) ============== -->
+  <g>
+    <rect x="740" y="130" width="420" height="280" rx="10" fill="#fffdf9" stroke="#c8c4b6"/>
+    <text x="760" y="160" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10" letter-spacing="2.5" fill="#8a877d">// THE SATELLITE</text>
+    <text x="760" y="208" font-family="'Playfair Display', Georgia, serif" font-weight="700" font-size="44" fill="#2a2927">Satellite</text>
+    <text x="760" y="236" font-family="'Lora', Georgia, serif" font-style="italic" font-size="16" fill="#5a5850">A laptop cockpit. Renders the rest.</text>
+
+    <g font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+      <circle cx="768" cy="278" r="4" fill="#5e97b5"/>
+      <text x="786" y="282" fill="#2a2927">xterm.js</text>
+      <text x="900" y="282" fill="#8a877d">— terminals</text>
+
+      <circle cx="768" cy="306" r="4" fill="#3d6b6b"/>
+      <text x="786" y="310" fill="#2a2927">rail</text>
+      <text x="900" y="310" fill="#8a877d">— project list</text>
+
+      <circle cx="768" cy="334" r="4" fill="#c8726e"/>
+      <text x="786" y="338" fill="#2a2927">stoplight</text>
+      <text x="900" y="338" fill="#8a877d">— per-pane state</text>
+
+      <circle cx="768" cy="362" r="4" fill="#7a9c6d"/>
+      <text x="786" y="366" fill="#2a2927">layouts</text>
+      <text x="900" y="366" fill="#8a877d">— remembered between sessions</text>
+    </g>
+
+    <text x="760" y="392" font-family="'Lora', Georgia, serif" font-style="italic" font-size="13" fill="#5a5850">It moves. State does not.</text>
+  </g>
+
+  <!-- bottom hairline + caption -->
+  <line x1="64" y1="484" x2="1216" y2="484" stroke="#c8c4b6"/>
+  <text x="64" y="510" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" letter-spacing="2" fill="#8a877d">SSH GIVES YOU BYTES · THE SATELLITE GIVES YOU STATE</text>
+  <text x="1216" y="510" text-anchor="end" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="11" letter-spacing="2" fill="#8a877d">RECK CONNECT</text>
+</svg>

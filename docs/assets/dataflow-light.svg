@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 760" role="img" aria-label="Reck Connect data flow — opening a project">
+  <defs>
+    <linearGradient id="paper" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#fffdf9"/>
+      <stop offset="100%" stop-color="#f7f4ed"/>
+    </linearGradient>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d4683a"/>
+    </marker>
+    <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7a9c6d"/>
+    </marker>
+    <marker id="ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a877d"/>
+    </marker>
+  </defs>
+  <style>
+    .h1   { font-family:'Playfair Display', Georgia, serif; font-weight:700; }
+    .body { font-family:'Lora', Georgia, serif; }
+    .it   { font-family:'Lora', Georgia, serif; font-style:italic; }
+    .mono { font-family:'JetBrains Mono', ui-monospace, monospace; }
+  </style>
+
+  <rect width="1400" height="760" fill="url(#paper)"/>
+
+  <!-- masthead -->
+  <line x1="60" y1="74" x2="1340" y2="74" stroke="#c8c4b6"/>
+  <text x="60"   y="58" class="mono" font-size="11" letter-spacing="3" fill="#8a877d">FIG. 2 — DATA FLOW</text>
+  <text x="1340" y="58" text-anchor="end" class="mono" font-size="11" letter-spacing="3" fill="#8a877d">OPENING A PROJECT</text>
+  <text x="700"  y="116" text-anchor="middle" class="h1" font-size="32" fill="#2a2927">From a click to a live PTY</text>
+  <text x="700"  y="142" text-anchor="middle" class="it" font-size="15" fill="#5a5850">Eight steps. Two channels. One bearer token.</text>
+
+  <!-- lane heads -->
+  <g>
+    <rect x="120"  y="170" width="320" height="46" rx="8" fill="#1c1b19"/>
+    <text x="280"  y="200" text-anchor="middle" class="mono" font-size="12" letter-spacing="3" fill="#d4683a">SATELLITE</text>
+    <rect x="540"  y="170" width="320" height="46" rx="8" fill="#1c1b19"/>
+    <text x="700"  y="200" text-anchor="middle" class="mono" font-size="12" letter-spacing="3" fill="#d4683a">RECK-STATIOND</text>
+    <rect x="960"  y="170" width="320" height="46" rx="8" fill="#1c1b19"/>
+    <text x="1120" y="200" text-anchor="middle" class="mono" font-size="12" letter-spacing="3" fill="#d4683a">PTY CHILD</text>
+  </g>
+
+  <!-- lane lifelines -->
+  <line x1="280"  y1="216" x2="280"  y2="700" stroke="#c8c4b6" stroke-dasharray="2 4"/>
+  <line x1="700"  y1="216" x2="700"  y2="700" stroke="#c8c4b6" stroke-dasharray="2 4"/>
+  <line x1="1120" y1="216" x2="1120" y2="700" stroke="#c8c4b6" stroke-dasharray="2 4"/>
+
+  <!-- step 1: user click -->
+  <g>
+    <circle cx="80" cy="258" r="14" fill="#d4683a"/>
+    <text x="80" y="263" text-anchor="middle" class="mono" font-size="12" font-weight="700" fill="#fffdf9">1</text>
+    <text x="110" y="252" class="body" font-weight="700" font-size="14" fill="#2a2927">Click project in rail</text>
+    <text x="110" y="270" class="it" font-size="13" fill="#5a5850">User picks reck-connect from the satellite rail.</text>
+  </g>
+
+  <!-- step 2: GET /projects/:id -->
+  <g>
+    <circle cx="80" cy="312" r="14" fill="#d4683a"/>
+    <text x="80" y="317" text-anchor="middle" class="mono" font-size="12" font-weight="700" fill="#fffdf9">2</text>
+    <line x1="280" y1="318" x2="700" y2="318" stroke="#d4683a" stroke-width="2" marker-end="url(#ah)"/>
+    <text x="490" y="308" text-anchor="middle" class="mono" font-size="12" fill="#2a2927">GET /projects/:id</text>
+    <text x="490" y="334" text-anchor="middle" class="it" font-size="11" fill="#8a877d">bearer auth · station mode · over Tailscale</text>
+  </g>
+
+  <!-- step 3: spawn pane -->
+  <g>
+    <circle cx="80" cy="372" r="14" fill="#d4683a"/>
+    <text x="80" y="377" text-anchor="middle" class="mono" font-size="12" font-weight="700" fill="#fffdf9">3</text>
+    <line x1="700" y1="378" x2="1120" y2="378" stroke="#d4683a" stroke-width="2" marker-end="url(#ah)"/>
+    <text x="910" y="368" text-anchor="middle" class="mono" font-size="12" fill="#2a2927">os/exec + creack/pty</text>
+    <text x="910" y="394" text-anchor="middle" class="it" font-size="11" fill="#8a877d">no live panes → spawn default_pane (e.g. claude)</text>
+  </g>
+
+  <!-- step 4: ProjectDetail back -->
+  <g>
+    <circle cx="80" cy="432" r="14" fill="#d4683a"/>
+    <text x="80" y="437" text-anchor="middle" class="mono" font-size="12" font-weight="700" fill="#fffdf9">4</text>
+    <line x1="700" y1="438" x2="280" y2="438" stroke="#d4683a" stroke-width="2" marker-end="url(#ah)"/>
+    <text x="490" y="428" text-anchor="middle" class="mono" font-size="12" fill="#2a2927">200 OK · ProjectDetail</text>
+    <text x="490" y="454" text-anchor="middle" class="it" font-size="11" fill="#8a877d">{ project, panes: [{ id: p_abc123, kind: "claude" }] }</text>
+  </g>
+
+  <!-- step 5: WS connect -->
+  <g>
+    <circle cx="80" cy="492" r="14" fill="#d4683a"/>
+    <text x="80" y="497" text-anchor="middle" class="mono" font-size="12" font-weight="700" fill="#fffdf9">5</text>
+    <line x1="280" y1="498" x2="700" y2="498" stroke="#d4683a" stroke-width="2" marker-end="url(#ah)"/>
+    <text x="490" y="488" text-anchor="middle" class="mono" font-size="12" fill="#2a2927">WS upgrade · /ws/:project/:pane</text>
+  </g>
+
+  <!-- step 6: hello replay -->
+  <g>
+    <circle cx="80" cy="540" r="14" fill="#d4683a"/>
+    <text x="80" y="545" text-anchor="middle" class="mono" font-size="12" font-weight="700" fill="#fffdf9">6</text>
+    <line x1="700" y1="546" x2="280" y2="546" stroke="#7a9c6d" stroke-width="2" marker-end="url(#ahg)"/>
+    <text x="490" y="536" text-anchor="middle" class="mono" font-size="12" fill="#2a2927">hello { replay: last 64 KB, stoplight }</text>
+    <text x="490" y="562" text-anchor="middle" class="it" font-size="11" fill="#8a877d">ring buffer flushes prior PTY output to xterm.js</text>
+  </g>
+
+  <!-- step 7: stream output / input back -->
+  <g>
+    <circle cx="80" cy="606" r="14" fill="#d4683a"/>
+    <text x="80" y="611" text-anchor="middle" class="mono" font-size="12" font-weight="700" fill="#fffdf9">7</text>
+    <line x1="280" y1="600" x2="700" y2="600" stroke="#d4683a" stroke-width="2" marker-end="url(#ah)"/>
+    <line x1="700" y1="616" x2="1120" y2="616" stroke="#d4683a" stroke-width="2" marker-end="url(#ah)"/>
+    <line x1="1120" y1="616" x2="700" y2="616" stroke="#7a9c6d" stroke-width="2" marker-end="url(#ahg)"/>
+    <line x1="700" y1="616" x2="280" y2="616" stroke="#7a9c6d" stroke-width="2" marker-end="url(#ahg)"/>
+    <text x="490" y="588" text-anchor="middle" class="mono" font-size="12" fill="#2a2927">input  (b64)  →  →  →</text>
+    <text x="910" y="606" text-anchor="middle" class="mono" font-size="12" fill="#2a2927">PTY master ⇄ child stdio</text>
+    <text x="490" y="640" text-anchor="middle" class="mono" font-size="12" fill="#2a2927">←  ←  ← output (b64)</text>
+  </g>
+
+  <!-- step 8: hook callback -->
+  <g>
+    <circle cx="80" cy="676" r="14" fill="#d4683a"/>
+    <text x="80" y="681" text-anchor="middle" class="mono" font-size="12" font-weight="700" fill="#fffdf9">8</text>
+    <path d="M 1120 686 C 1120 712, 700 712, 700 686" fill="none" stroke="#8a877d" stroke-width="1.6" stroke-dasharray="4 4" marker-end="url(#ahm)"/>
+    <text x="910" y="704" text-anchor="middle" class="mono" font-size="12" fill="#5a5850">POST /panes/:id/agent-event   →   stoplight ●</text>
+  </g>
+
+  <!-- footer -->
+  <line x1="60" y1="722" x2="1340" y2="722" stroke="#c8c4b6"/>
+  <text x="60" y="744" class="mono" font-size="10" letter-spacing="2" fill="#8a877d">SOLID · client → server     DASHED · loopback hook callback     GREEN · server → client</text>
+  <text x="1340" y="744" text-anchor="end" class="it" font-size="11" fill="#5a5850">No code leaves the station.</text>
+</svg>

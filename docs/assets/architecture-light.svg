@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" role="img" aria-label="Reck Connect architecture">
+  <defs>
+    <linearGradient id="paper" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#fffdf9"/>
+      <stop offset="100%" stop-color="#f7f4ed"/>
+    </linearGradient>
+    <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d4683a"/>
+    </marker>
+    <marker id="arrowhead-mid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a877d"/>
+    </marker>
+  </defs>
+
+  <style>
+    .h1   { font-family:'Playfair Display', Georgia, serif; font-weight:700; }
+    .h2   { font-family:'Playfair Display', Georgia, serif; font-weight:700; }
+    .body { font-family:'Lora', Georgia, serif; }
+    .it   { font-family:'Lora', Georgia, serif; font-style:italic; }
+    .mono { font-family:'JetBrains Mono', ui-monospace, monospace; }
+  </style>
+
+  <rect width="1400" height="900" fill="url(#paper)"/>
+
+  <!-- masthead -->
+  <line x1="60" y1="74" x2="1340" y2="74" stroke="#c8c4b6"/>
+  <text x="60"   y="58" class="mono" font-size="11" letter-spacing="3" fill="#8a877d">FIG. 1 — SYSTEM TOPOLOGY</text>
+  <text x="1340" y="58" text-anchor="end" class="mono" font-size="11" letter-spacing="3" fill="#8a877d">RECK CONNECT V2</text>
+  <text x="700"  y="120" text-anchor="middle" class="h1" font-size="38" fill="#2a2927">Station / Satellite, at a glance</text>
+  <text x="700"  y="152" text-anchor="middle" class="it" font-size="17" fill="#5a5850">The station owns the processes. The satellite is a thin display.</text>
+
+  <!-- ============== SATELLITE PANEL ============== -->
+  <g>
+    <rect x="60" y="200" width="560" height="600" rx="14" fill="#fffdf9" stroke="#c8c4b6"/>
+    <rect x="60" y="200" width="560" height="42" rx="14" fill="#1c1b19"/>
+    <rect x="60" y="228" width="560" height="14" fill="#1c1b19"/>
+    <text x="86"  y="228" class="mono" font-size="11" letter-spacing="3" fill="#d4683a">SATELLITE</text>
+    <text x="594" y="228" text-anchor="end" class="mono" font-size="11" letter-spacing="2" fill="#b5b3a9">your laptop</text>
+
+    <text x="86" y="282" class="h2" font-size="22" fill="#2a2927">Reck Satellite</text>
+    <text x="86" y="304" class="it" font-size="14" fill="#5a5850">Electron desktop app</text>
+
+    <!-- main process -->
+    <rect x="86" y="332" width="508" height="86" rx="8" fill="#f7f4ed" stroke="#c8c4b6"/>
+    <text x="100" y="358" class="mono" font-size="11" letter-spacing="2" fill="#8a877d">MAIN PROCESS</text>
+    <text x="100" y="386" class="body" font-size="14" fill="#2a2927">Spawns daemon child in Local mode</text>
+    <text x="100" y="406" class="body" font-size="14" fill="#2a2927">IPC bridge · window mgmt · settings</text>
+
+    <!-- renderer process -->
+    <rect x="86" y="430" width="508" height="338" rx="8" fill="#f7f4ed" stroke="#c8c4b6"/>
+    <text x="100" y="456" class="mono" font-size="11" letter-spacing="2" fill="#8a877d">RENDERER PROCESS</text>
+
+    <!-- shared-renderer -->
+    <rect x="100" y="472" width="480" height="60" rx="6" fill="#fffdf9" stroke="#e0ddd3"/>
+    <text x="114" y="494" class="body" font-weight="700" font-size="14" fill="#2a2927">shared-renderer</text>
+    <text x="114" y="514" class="mono" font-size="12" fill="#5a5850">typed HTTP client · PtyWS · xterm.js</text>
+
+    <!-- UI rail -->
+    <rect x="100" y="544" width="232" height="210" rx="6" fill="#fffdf9" stroke="#e0ddd3"/>
+    <text x="114" y="566" class="body" font-weight="700" font-size="14" fill="#2a2927">Project rail</text>
+    <text x="114" y="586" class="mono" font-size="11" fill="#7a9c6d">●</text><text x="128" y="586" class="mono" font-size="11" fill="#5a5850">reck-connect</text>
+    <text x="114" y="606" class="mono" font-size="11" fill="#c9982e">●</text><text x="128" y="606" class="mono" font-size="11" fill="#5a5850">my-app</text>
+    <text x="114" y="626" class="mono" font-size="11" fill="#8a877d">●</text><text x="128" y="626" class="mono" font-size="11" fill="#5a5850">scratch</text>
+    <line x1="114" y1="644" x2="318" y2="644" stroke="#e0ddd3"/>
+    <text x="114" y="664" class="it" font-size="12" fill="#5a5850">Stoplight per pane</text>
+    <text x="114" y="690" class="mono" font-size="10" fill="#8a877d">gray · orange · green · red</text>
+
+    <!-- xterm panes -->
+    <rect x="348" y="544" width="232" height="210" rx="6" fill="#141413"/>
+    <text x="362" y="566" class="mono" font-size="11" letter-spacing="2" fill="#d4683a">PANE — xterm.js</text>
+    <text x="362" y="592" class="mono" font-size="11" fill="#b5b3a9">$ claude</text>
+    <text x="362" y="612" class="mono" font-size="11" fill="#7a9c6d">● ready</text>
+    <text x="362" y="640" class="mono" font-size="11" fill="#b5b3a9">› feat(api): rotate token</text>
+    <text x="362" y="660" class="mono" font-size="11" fill="#b5b3a9">› fix(rail): dim per-pane…</text>
+    <text x="362" y="688" class="mono" font-size="11" fill="#d4683a">▍</text>
+  </g>
+
+  <!-- ============== STATION PANEL ============== -->
+  <g>
+    <rect x="780" y="200" width="560" height="600" rx="14" fill="#fffdf9" stroke="#c8c4b6"/>
+    <rect x="780" y="200" width="560" height="42" rx="14" fill="#1c1b19"/>
+    <rect x="780" y="228" width="560" height="14" fill="#1c1b19"/>
+    <text x="806"  y="228" class="mono" font-size="11" letter-spacing="3" fill="#d4683a">STATION</text>
+    <text x="1314" y="228" text-anchor="end" class="mono" font-size="11" letter-spacing="2" fill="#b5b3a9">Mac Studio · macOS 14+</text>
+
+    <text x="806" y="282" class="h2" font-size="22" fill="#2a2927">reck-stationd</text>
+    <text x="806" y="304" class="it" font-size="14" fill="#5a5850">Go daemon · HTTP + WS on :7315</text>
+
+    <!-- internal packages strip -->
+    <rect x="806" y="332" width="508" height="86" rx="8" fill="#f7f4ed" stroke="#c8c4b6"/>
+    <text x="820" y="358" class="mono" font-size="11" letter-spacing="2" fill="#8a877d">INTERNAL</text>
+    <text x="820" y="382" class="mono" font-size="12" fill="#2a2927">pty.Manager · sessions.Store · stoplight.Runner</text>
+    <text x="820" y="402" class="mono" font-size="12" fill="#2a2927">hooks · supervisor · agent (claude/codex/shell)</text>
+
+    <!-- project blocks -->
+    <text x="806" y="446" class="mono" font-size="11" letter-spacing="2" fill="#8a877d">PROJECTS &amp; PANES</text>
+
+    <!-- project A -->
+    <rect x="806" y="460" width="508" height="146" rx="8" fill="#f7f4ed" stroke="#c8c4b6"/>
+    <text x="820" y="484" class="body" font-weight="700" font-size="14" fill="#2a2927">project: reck-connect</text>
+    <text x="820" y="504" class="mono" font-size="11" fill="#5a5850">cwd /Users/reck-connect/projects/reck-connect</text>
+    <!-- pane rows -->
+    <rect x="820" y="516" width="480" height="34" rx="5" fill="#fffdf9" stroke="#e0ddd3"/>
+    <circle cx="836" cy="533" r="5" fill="#7a9c6d"/>
+    <text x="852" y="538" class="mono" font-size="12" fill="#2a2927">p_abc123</text>
+    <text x="958" y="538" class="mono" font-size="12" fill="#5a5850">PTY → /usr/local/bin/claude</text>
+
+    <rect x="820" y="556" width="480" height="34" rx="5" fill="#fffdf9" stroke="#e0ddd3"/>
+    <circle cx="836" cy="573" r="5" fill="#8a877d"/>
+    <text x="852" y="578" class="mono" font-size="12" fill="#2a2927">p_def456</text>
+    <text x="958" y="578" class="mono" font-size="12" fill="#5a5850">PTY → /bin/zsh -l</text>
+
+    <!-- project B -->
+    <rect x="806" y="618" width="508" height="106" rx="8" fill="#f7f4ed" stroke="#c8c4b6"/>
+    <text x="820" y="642" class="body" font-weight="700" font-size="14" fill="#2a2927">project: my-app</text>
+    <text x="820" y="662" class="mono" font-size="11" fill="#5a5850">default_pane = codex</text>
+    <rect x="820" y="676" width="480" height="34" rx="5" fill="#fffdf9" stroke="#e0ddd3"/>
+    <circle cx="836" cy="693" r="5" fill="#c9982e"/>
+    <text x="852" y="698" class="mono" font-size="12" fill="#2a2927">p_ghi789</text>
+    <text x="958" y="698" class="mono" font-size="12" fill="#5a5850">PTY → codex</text>
+
+    <!-- claude hooks -->
+    <rect x="806" y="736" width="508" height="44" rx="8" fill="#1c1b19"/>
+    <text x="820" y="755" class="mono" font-size="11" letter-spacing="2" fill="#d4683a">~/.claude/settings.json</text>
+    <text x="820" y="772" class="mono" font-size="11" fill="#b5b3a9">lifecycle hook shims (auto-installed, idempotent)</text>
+  </g>
+
+  <!-- ============== CONNECTIONS ============== -->
+  <g>
+    <!-- HTTP REST -->
+    <line x1="620" y1="375" x2="780" y2="375" stroke="#d4683a" stroke-width="2.5" marker-end="url(#arrowhead)" marker-start="url(#arrowhead)"/>
+    <text x="700" y="362" text-anchor="middle" class="mono" font-size="11" letter-spacing="2" fill="#5a5850">HTTP · REST</text>
+    <text x="700" y="394" text-anchor="middle" class="it" font-size="11" fill="#8a877d">/projects /panes /health</text>
+
+    <!-- WebSocket stream -->
+    <line x1="620" y1="540" x2="780" y2="540" stroke="#d4683a" stroke-width="2.5" marker-end="url(#arrowhead)" marker-start="url(#arrowhead)"/>
+    <text x="700" y="527" text-anchor="middle" class="mono" font-size="11" letter-spacing="2" fill="#5a5850">WS · PTY STREAM</text>
+    <text x="700" y="559" text-anchor="middle" class="it" font-size="11" fill="#8a877d">input · output · resize · stoplight</text>
+
+    <!-- hook callback -->
+    <path d="M 1060 778 C 1060 820, 700 820, 540 760" fill="none" stroke="#8a877d" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#arrowhead-mid)"/>
+    <text x="800" y="838" text-anchor="middle" class="mono" font-size="11" letter-spacing="2" fill="#8a877d">HOOK POST-BACK · loopback-exempt · /panes/:id/agent-event</text>
+
+    <!-- network label -->
+    <text x="700" y="700" text-anchor="middle" class="mono" font-size="10" letter-spacing="3" fill="#8a877d">— TAILSCALE (station) · LOOPBACK (local) —</text>
+  </g>
+
+  <!-- footer caption -->
+  <line x1="60" y1="858" x2="1340" y2="858" stroke="#c8c4b6"/>
+  <text x="60" y="884" class="mono" font-size="10" letter-spacing="2" fill="#8a877d">BEARER AUTH · DAEMON_TOKEN · LAUNCHD-MANAGED</text>
+  <text x="1340" y="884" text-anchor="end" class="it" font-size="11" fill="#5a5850">If the satellite quits, the daemon — and every pane — keeps going.</text>
+</svg>

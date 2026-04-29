@@ -1,0 +1,42 @@
+{
+  "name": "reck-connect-satellite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reck Connect Satellite — desktop control surface for Claude Code, by Reckon Labs",
+  "author": "Reckon Labs",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron \"vite --port 5173\" \"wait-on http://localhost:5173 && tsc -p tsconfig.main.json && electron dist/main/main.js\"",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "build": "pnpm build:main && pnpm build:renderer",
+    "dist": "pnpm build && electron-builder --mac --publish never",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:electron": "playwright test --config=playwright-electron.config.ts",
+    "make-icon": "node scripts/make-icon.mjs"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "@xterm/xterm": "^5.5.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0",
+    "@types/node": "^20.12.0",
+    "concurrently": "^8.2.2",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "jsdom": "^24.0.0",
+    "sharp": "^0.33.5",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0",
+    "vitest": "^1.5.0",
+    "wait-on": "^7.2.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild"]
+  }
+}
