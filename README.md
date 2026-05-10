@@ -1,13 +1,13 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
-  <img src="docs/assets/banner-light.svg" alt="Reck Connect: a station / satellite workbench for Claude Code" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/pitch/banner-dark.svg">
+  <img src="docs/assets/pitch/banner-light.svg" alt="Reck Connect: a satellite / station workbench for your coding agent" width="100%">
 </picture>
 
 <br>
 
-<sub><i>Built on the always-on Mac. Driven from a laptop. Edited where the work happens.</i></sub>
+<sub><i>Two machines. Connected as one.</i></sub>
 
 <br><br>
 
@@ -15,6 +15,7 @@
   <a href="INSTALL.md"><img alt="Install" src="https://img.shields.io/badge/install-runbook-d4683a?style=flat-square&labelColor=141413"></a>
   <a href="docs/architecture.md"><img alt="Architecture" src="https://img.shields.io/badge/architecture-station%20%2F%20satellite-141413?style=flat-square&labelColor=f7f4ed&color=141413"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2014%2B-7a9c6d?style=flat-square&labelColor=141413">
+  <img alt="Status" src="https://img.shields.io/badge/status-private%20beta-d4683a?style=flat-square&labelColor=141413">
   <img alt="License" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0-8a877d?style=flat-square&labelColor=141413">
 </p>
 
@@ -22,148 +23,108 @@
 
 ---
 
-<sub>// 01 &nbsp;—&nbsp; the idea</sub>
+<sub>// 01 &nbsp;·&nbsp; the problem</sub>
 
-## A workbench in two parts
+## A laptop is a fragile place to run an agent.
 
-Most developers code on a laptop. Some have a beefier Mac at home or in the office and would, given the choice, do the work there. ssh and tmux do half the job. They cannot show what an agent is up to. Remote desktop is laggy. File sync is a series of small heartbreaks.
+You found Claude Code, and Codex. You moved the work into the terminal. It is faster than you expected. The agent is good company. So you give it more, three things at once, then five.
 
-Reck Connect splits a development environment into two machines that know each other. The **station** is the one that does the work: code, shells, agents, files. The **satellite** is a thin laptop cockpit that renders all of it live over your tailnet. The code never leaves the station.
+Then the lid closes on the train and the build dies. The cooling fan starts pleading. Then you alt-tab between six terminal windows trying to remember which agent is waiting for you and which one quietly errored out forty minutes ago.
 
-Close the laptop. Catch a flight. Open it in a hotel. Every pane is exactly where you left it.
-
----
-
-<sub>// 02 &nbsp;—&nbsp; station and satellite</sub>
-
-## Two machines. *One* of them does not move.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/station-satellite-dark.svg">
-  <img src="docs/assets/station-satellite-light.svg" alt="The station and the satellite: two halves of Reck Connect" width="100%">
-</picture>
-
-The **station** is an always-on Mac. It runs `reck-stationd`, a Go daemon that owns every PTY (terminal process), spawns Claude Code and shells, and serves them over HTTP and WebSocket. The station holds the code, the shells, the running agents, the files.
-
-The **satellite** is a desktop app you run on a laptop. It connects to the station's daemon over Tailscale, renders panes via xterm.js, and shows you the project list, the agent state, and a small running stoplight per pane. Nothing on the satellite outlives a quit. The state is on the station.
-
-The split is the point. ssh gives you bytes. The satellite gives you state.
+The terminal is the right shape. The laptop is the wrong place.
 
 ---
 
-<sub>// 03 &nbsp;—&nbsp; what you get</sub>
+<sub>// 02 &nbsp;·&nbsp; the idea</sub>
 
-## Three things, in plain terms
+## Two machines. Connected as one.
 
-1. **Pick up where you left off, anywhere.** Quit the satellite. Open it in another timezone. Every pane, every project, every running agent, in the place you left them.
-2. **See what the agent is up to.** A small dot turns green when Claude is working, orange when it pauses, red when it asks for permission. You don't alt-tab to find out.
-3. **The code stays where it lives.** Files don't sync, don't replicate, don't drift. The station holds them; the satellite reads.
+The **station** is your always-on Mac at home or in the office. A Studio, a Mini, a spare MacBook on a shelf. It runs the daemon, owns the terminals, holds the code, hosts the agents. It does not move.
 
----
+The **satellite** is a thin desktop app on your laptop. It connects over your tailnet and renders every pane live. It carries no state. Close it on a train. Open it in a hotel. Open it on a different laptop entirely. Every project is exactly where you left it because it never left the station.
 
-<sub>// 04 &nbsp;—&nbsp; concepts</sub>
-
-## A small vocabulary
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/concepts-dark.svg">
-  <img src="docs/assets/concepts-light.svg" alt="Reck Connect concepts: project, pane, stoplight, rail" width="100%">
-</picture>
-
-- **Project.** A folder with at least one running pane.
-- **Pane.** A single PTY process. Could be a Claude Code session, a shell, a codex CLI. You can have many per project.
-- **Stoplight.** A four-state dot per pane. Gray when it spawned and is quiet, green when bytes are flowing, orange when it has gone idle, red when it is asking you something. The project's stoplight is the worst of its panes', which is honest.
-- **Rail.** The project list down the left edge of the satellite. Click a project, see its panes.
-
-There is also a **Mission Control** pane, a Claude that talks to your other Claudes. Not required. Sometimes useful.
+For the user, it feels exactly like normal. Just nicely organised. And if an agent needs your attention, it notifies you via a simple stoplight system.
 
 ---
 
-<sub>// 05 &nbsp;—&nbsp; hybrid mode</sub>
+<sub>// 03 &nbsp;·&nbsp; what it looks like</sub>
 
-## Hybrid by default
+## Every project. One glance.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hybrid-mode-dark.svg">
-  <img src="docs/assets/hybrid-mode-light.svg" alt="Hybrid mode: local and station daemons running side by side" width="100%">
-</picture>
+<p align="center">
+  <img src="docs/assets/pitch/satellite-ui.gif" alt="The Reck Satellite: a rail of projects on the left, multiple Claude Code panes tiled across the workspace, with a New Pane modal asking whether to host on the Station or Local" width="100%">
+</p>
 
-The satellite runs two daemons at the same time. One on the laptop, on `127.0.0.1:7315`. One on the station, over Tailscale on `:7315`. Each project lives on exactly one host; you switch focus by clicking. There is no shared state to confuse.
-
-Local-only is fine on a single Mac. Station-only is fine when the laptop is just a viewer. The default is both. See [`docs/concepts/modes.md`](docs/concepts/modes.md).
+A **rail** of projects on the left. Each project a stack of **panes**: Claude Code sessions, shells, codex CLIs, anything that wants a terminal. Each pane carries a **stoplight**: green when the agent is done, orange when it's running, red when it is asking you something.
 
 ---
 
-<sub>// 06 &nbsp;—&nbsp; status</sub>
+<sub>// 04 &nbsp;·&nbsp; features</sub>
 
-## Early access. Currently private.
+## Three things you actually feel.
 
-This is a maintainer's daily-driver project. It's hardened on one specific setup and has not been tested across the spread of macOS versions, hardware, and tailnet configurations a wider audience would bring. The repository is currently private; access is invite-only while the install flow stabilises. Treat anything you see here as "works for the maintainer; may surprise you."
-
-A reckoning, eventually. Not yet.
+1. **Private connection over Tailscale.** Code never leaves the station. No public endpoint. No middleman. Your laptop and your station meet on a tailnet that only the two of them can see.
+2. **Automatic folder sync.** Files exist on the station and appear on the satellite as if they were local. No `rsync`, no `scp`, no "did it save?" Open the file in your local editor; the station already has it.
+3. **Crash-proof.** Close the laptop and nothing stops. Laptop crashes? Bring it back up and the panes are right where they were.
 
 ---
 
-<sub>// 07 &nbsp;—&nbsp; install</sub>
+<sub>// 05 &nbsp;·&nbsp; install</sub>
 
 ## Install
 
-Open Claude Code in any directory and tell it:
+Open Claude Code or Codex in any directory and tell it:
 
 > install Reck Connect from github
 
-It clones the repo, reads [`INSTALL.md`](INSTALL.md), and drives both halves of the install (satellite and the station, over Tailscale SSH) end to end. The runbook is also there if you'd rather read it by hand.
+It clones the repo, reads [`INSTALL.md`](INSTALL.md), and drives both halves of the install end to end. Satellite first, then the station over Tailscale SSH. Prefer to read the runbook by hand? It is right there.
 
 ---
 
-<sub>// 08 &nbsp;—&nbsp; architecture</sub>
+<sub>// 06 &nbsp;·&nbsp; under the hood</sub>
 
 ## Architecture, for the curious
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
-  <img src="docs/assets/architecture-light.svg" alt="Reck Connect architecture: station / satellite topology" width="100%">
-</picture>
-
 | Component | Path | Role |
 |---|---|---|
-| **`reck-stationd`** | [`daemon/`](daemon/) | Go HTTP + WebSocket server. Spawns and owns PTY panes. Installs Claude Code lifecycle hook shims. |
+| **`reck-stationd`** | [`daemon/`](daemon/) | Go HTTP + WebSocket server. Spawns and owns every PTY pane. Installs Claude Code lifecycle hook shims. |
 | **Reck Satellite** | [`satellite/`](satellite/) | Electron desktop app. Renders panes via xterm.js. |
-| **client-core** | [`client-core/`](client-core/) | Platform-neutral browser plumbing. |
+| **client-core** | [`client-core/`](client-core/) | Platform-neutral browser plumbing shared by the satellite renderer. |
 | **proto** | [`proto/`](proto/) | Hand-maintained TypeScript and Go wire types. |
 | **ops** | [`ops/`](ops/) | Station and satellite install scripts, LaunchAgent plists, mount watchdog. |
 
----
+Tech stack: Go + [`creack/pty`](https://github.com/creack/pty) + [`go-chi/chi`](https://github.com/go-chi/chi) on the station. Electron + TypeScript + xterm.js + vitest on the satellite. Tailscale on the wire, FUSE-T plus sshfs for project mounts, `rsync` for project copies, launchd to keep it all alive.
 
-<sub>// 09 &nbsp;—&nbsp; tech</sub>
-
-## Tech stack
-
-- **Daemon.** Go, [`creack/pty`](https://github.com/creack/pty), [`go-chi/chi`](https://github.com/go-chi/chi), launchd.
-- **Satellite.** Electron, TypeScript, xterm.js, vitest.
-- **Network.** Tailscale (station mode), HTTP/1.1 plus WebSocket (RFC 6455).
-- **Ops.** launchd plist templates, FUSE-T plus sshfs (project mount), `rsync` (project copy).
+Full walk-through in [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
-<sub>// 10 &nbsp;—&nbsp; license</sub>
+<sub>// 07 &nbsp;·&nbsp; license</sub>
 
 ## License and contributing
 
 Source under **[PolyForm Noncommercial 1.0.0](LICENSE)**. Free to read, run, and modify for noncommercial purposes. Commercial use is not granted.
 
-This repository is the public mirror; active development happens in a separate private repo. Issues and Discussions are off here. Drive-by triage on a maintainer's daily driver does not scale. If something does not work, [`INSTALL.md`](INSTALL.md) lists the recovery paths. The path for reporting security issues lives in [`SECURITY.md`](SECURITY.md).
+This repository is the public mirror; active development happens in a separate private repo. Issues and Discussions are off here. Drive-by triage on a maintainer's daily driver does not scale. If something does not work, [`INSTALL.md`](INSTALL.md) lists the recovery paths. Security disclosures live in [`SECURITY.md`](SECURITY.md).
 
 ---
 
-<sub>// 11 &nbsp;—&nbsp; docs</sub>
+<sub>// 08 &nbsp;·&nbsp; docs</sub>
 
 ## Docs
 
-- [`docs/overview.md`](docs/overview.md) — what Reck Connect is and isn't
-- [`docs/architecture.md`](docs/architecture.md) — components, process model, data flow
-- [`docs/getting-started.md`](docs/getting-started.md) — install station and satellite, add a project, open a pane
-- [`docs/concepts/`](docs/concepts/) — projects, panes, modes, behaviors, stoplight
-- [`docs/operations.md`](docs/operations.md) — running the station day to day
-- [`docs/troubleshooting.md`](docs/troubleshooting.md) — when things go sideways
-- [`docs/internals.md`](docs/internals.md) — daemon internals, image-paste design
+- [`docs/overview.md`](docs/overview.md) · what Reck Connect is and isn't
+- [`docs/architecture.md`](docs/architecture.md) · components, process model, data flow
+- [`docs/getting-started.md`](docs/getting-started.md) · install station and satellite, add a project, open a pane
+- [`docs/concepts/`](docs/concepts/) · projects, panes, modes, behaviors, stoplight
+- [`docs/operations.md`](docs/operations.md) · running the station day to day
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) · when things go sideways
+- [`docs/internals.md`](docs/internals.md) · daemon internals, image-paste design
+
+---
+
+<div align="center">
+
+<sub><i>Reck Connect is a <a href="https://reckon.works">Reckon</a> project. We help teams reckon with AI.</i></sub>
+
+</div>
