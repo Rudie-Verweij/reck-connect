@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Email **rnv@verwey.eu** with the subject line `reck-connect security`. Please do not open a public issue (issues are off on this repo anyway, but the principle stands).
+Email **rnv@verwey.eu** with the subject line `reck-connect security`. Please report security issues privately by email rather than opening a public issue.
 
 A useful report includes:
 
@@ -11,7 +11,7 @@ A useful report includes:
 - Reproduction steps. Commands and expected vs. actual.
 - The blast radius as you understand it: local-only, on-tailnet, or wider.
 
-Response is best-effort while the project is in early access. You will get an acknowledgement within a week.
+Response is best-effort. You will get an acknowledgement within a week.
 
 ## What is in scope
 
@@ -27,4 +27,4 @@ Response is best-effort while the project is in early access. You will get an ac
 
 ## Disclosure
 
-Once a fix is in the public mirror (`main` on this repo), the report is yours to disclose. Coordinated timing on request.
+Once a fix is in `main`, the report is yours to disclose. Coordinated timing on request.

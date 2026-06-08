@@ -74,8 +74,7 @@ command -v tailscale >/dev/null 2>&1 || brew install --cask tailscale
 command -v node >/dev/null 2>&1 || brew install node
 command -v pnpm >/dev/null 2>&1 || brew install pnpm
 
-# 4. Clone this repo. Private during early access; you'll need GitHub
-#    access (run `gh auth login` first time). Skip if already present.
+# 4. Clone this repo (public). Skip if already present.
 mkdir -p ~/claude-code
 cd ~/claude-code
 [ -d reck-connect ] || git clone https://github.com/Rudie-Verweij/reck-connect reck-connect
@@ -191,19 +190,8 @@ Rollback: `sudo sysadminctl -deleteUser reck-connect` (also takes
 Goal: get the daemon running as `reck-connect`. This is the existing
 `install-station.sh` flow — unchanged from the manual install.
 
-**Heads-up for early access (private repo).** The station's
-`reck-connect` user needs its own GitHub auth before the clone in this
-stage can succeed. One-shot, on the station, before running Stage 3:
-
-```bash
-tailscale ssh -t <admin-user>@<station-name>
-sudo -u reck-connect -i
-gh auth login   # follow the device-code flow once
-exit; exit
-```
-
-After that, the clone command below works non-interactively. Once the
-public mirror flips to public visibility, this step goes away.
+The repo is public, so the station's `reck-connect` user clones it
+without any GitHub auth.
 
 Commands:
 

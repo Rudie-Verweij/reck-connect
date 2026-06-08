@@ -15,7 +15,7 @@
   <a href="INSTALL.md"><img alt="Install" src="https://img.shields.io/badge/install-runbook-d4683a?style=flat-square&labelColor=141413"></a>
   <a href="docs/architecture.md"><img alt="Architecture" src="https://img.shields.io/badge/architecture-station%20%2F%20satellite-141413?style=flat-square&labelColor=f7f4ed&color=141413"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%2014%2B-7a9c6d?style=flat-square&labelColor=141413">
-  <img alt="Status" src="https://img.shields.io/badge/status-private%20beta-d4683a?style=flat-square&labelColor=141413">
+  <img alt="Status" src="https://img.shields.io/badge/status-public%20beta-7a9c6d?style=flat-square&labelColor=141413">
   <img alt="License" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0-8a877d?style=flat-square&labelColor=141413">
 </p>
 
@@ -105,7 +105,7 @@ Full walk-through in [`docs/architecture.md`](docs/architecture.md).
 
 Source under **[PolyForm Noncommercial 1.0.0](LICENSE)**. Free to read, run, and modify for noncommercial purposes. Commercial use is not granted.
 
-This repository is the public mirror; active development happens in a separate private repo. Issues and Discussions are off here. Drive-by triage on a maintainer's daily driver does not scale. If something does not work, [`INSTALL.md`](INSTALL.md) lists the recovery paths. Security disclosures live in [`SECURITY.md`](SECURITY.md).
+Issues and pull requests are welcome. Before filing, check [`INSTALL.md`](INSTALL.md) — it lists the recovery paths for most setup snags. This is a side project maintained on a best-effort basis, so triage may be slow. Security disclosures go through [`SECURITY.md`](SECURITY.md), not the public issue tracker.
 
 ---
 
