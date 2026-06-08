@@ -1,0 +1,30 @@
+appId: com.reckonlabs.reckconnect.satellite
+productName: Reck Connect Satellite
+copyright: "© 2026 Reckon Labs"
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - package.json
+mac:
+  icon: build/icon.icns
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  category: public.app-category.developer-tools
+  # Ad-hoc signed (identity "-") so TCC grants (mic, AX) stick across launches.
+  # Each user's local build gets its own ad-hoc signature on their machine.
+  identity: "-"
+  gatekeeperAssess: false
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: >-
+      Reck Connect Satellite needs microphone access so macOS Dictation
+      ("voice-to-text") can transcribe speech into terminal panes.
+extraMetadata:
+  main: dist/main/main.js

@@ -1,0 +1,2146 @@
+/* Reck Connect Satellite — V1-aligned styling.
+   Typography: Playfair Display (display), Lora (body), JetBrains Mono (code/labels).
+   Palette: Claude Cream chrome + Claude Dark terminals.
+   Rule: "If it feels like it belongs in a well-edited book, keep it."
+*/
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --claude-orange: #d4683a;
+  --claude-orange-glow: #e8875c;
+  --claude-dark: #141413;
+  --claude-cream: #f7f4ed;
+  --claude-cream-raised: #fffdf9;
+  --claude-mid: #8a877d;
+  --claude-light-gray: #e0ddd3;
+
+  --text-primary: #2a2927;
+  --text-secondary: #5a5850;
+
+  --wes-rose: #c8726e;
+  --wes-sage: #7a9c6d;
+  --wes-mustard: #c9982e;
+
+  --dark-title: #f5f2ea;
+  --dark-body: #b5b3a9;
+
+  --sl-gray: var(--claude-mid);
+  --sl-green: var(--wes-sage);
+  --sl-orange: var(--wes-mustard);
+  --sl-red: var(--wes-rose);
+
+  --radius: 6px;
+  --radius-lg: 10px;
+
+  --font-display: "Playfair Display", Georgia, serif;
+  --font-body: "Lora", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ease-smooth: cubic-bezier(0.25, 0.1, 0.25, 1);
+
+  --nav-height: 50px;
+  --status-height: 28px;
+  --tab-height: 34px;
+  --rail-width: 240px;
+
+  /* Role tokens (light theme defaults) */
+  --app-bg: var(--claude-cream);
+  --app-bg-raised: var(--claude-cream-raised);
+  --app-text: var(--text-primary);
+  --app-text-dim: var(--text-secondary);
+  --app-text-muted: var(--claude-mid);
+  --app-border: var(--claude-light-gray);
+  --app-border-strong: #c8c4b6;
+  --app-hover: rgba(212, 104, 58, 0.06);
+  --app-active-bg: rgba(212, 104, 58, 0.12);
+  --app-input-bg: var(--claude-cream-raised);
+}
+
+/* Dark theme */
+:root[data-theme="dark"] {
+  --app-bg: #141413;
+  --app-bg-raised: #1c1b19;
+  --app-text: var(--dark-title);
+  --app-text-dim: var(--dark-body);
+  --app-text-muted: var(--claude-mid);
+  --app-border: #2a2927;
+  --app-border-strong: #3a3937;
+  --app-hover: rgba(212, 104, 58, 0.08);
+  --app-active-bg: rgba(212, 104, 58, 0.14);
+  --app-input-bg: #201f1d;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--app-text);
+  background: var(--app-bg);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.25s var(--ease-smooth), color 0.25s var(--ease-smooth);
+}
+
+/* === App shell: nav / main (rail + right) / status === */
+
+.app-shell {
+  display: grid;
+  grid-template-rows: var(--nav-height) 1fr var(--status-height);
+  height: 100%;
+  background: var(--app-bg);
+}
+
+.app-main {
+  display: grid;
+  grid-template-columns: var(--rail-width) 6px 1fr;
+  min-height: 0;
+  background: var(--app-bg);
+}
+
+.app-main.rail-hidden {
+  grid-template-columns: 0 0 1fr;
+}
+
+/* === Top nav (V1 .nav) === */
+
+.nav {
+  background: var(--claude-dark);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 1rem;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--claude-dark);
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.nav > * { -webkit-app-region: no-drag; }
+
+.nav-brand {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.1rem;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--claude-cream);
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: 80px;
+}
+
+.nav-brand .dot {
+  width: 7px;
+  height: 7px;
+  background: var(--claude-orange);
+  border-radius: 50%;
+  display: inline-block;
+  margin: 0 0.2rem;
+  /* Slight drop so the optical baseline sits lower than a cap-height dot would */
+  transform-origin: center;
+  position: relative;
+  top: 1px;
+  /* Slow morph between circle and diamond (brand guide) */
+  animation: brand-dot-morph 7s var(--ease-smooth) infinite;
+}
+
+/* Hover pauses & snaps to diamond (interactive accent) */
+.nav-brand:hover .dot {
+  animation-play-state: paused;
+  transform: rotate(45deg);
+  border-radius: 1px;
+}
+
+@keyframes brand-dot-morph {
+  0%, 100% {
+    transform: rotate(0deg);
+    border-radius: 50%;
+    box-shadow: 0 0 0 0 rgba(212, 104, 58, 0);
+  }
+  48% {
+    transform: rotate(38deg);
+    border-radius: 22%;
+    box-shadow: 0 0 8px 0 rgba(212, 104, 58, 0.3);
+  }
+  52% {
+    transform: rotate(45deg);
+    border-radius: 1px;
+    box-shadow: 0 0 10px 0 rgba(212, 104, 58, 0.35);
+  }
+}
+
+
+.nav-subtitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--claude-mid);
+  align-self: center;
+  opacity: 0.7;
+  position: relative;
+  top: 1px;
+}
+
+.nav-spacer { flex: 1; }
+
+.nav-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--claude-mid);
+}
+
+.nav-meta .host { color: var(--dark-body); letter-spacing: 0.06em; text-transform: none; font-size: 11.5px; }
+.nav-meta .sep { opacity: 0.3; }
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--claude-mid);
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth);
+  padding: 0;
+}
+
+.icon-btn:hover {
+  color: var(--claude-cream);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.icon-btn.active {
+  color: var(--claude-orange);
+  background: rgba(212, 104, 58, 0.12);
+}
+
+.icon-btn svg { width: 16px; height: 16px; display: block; }
+
+/* Tab-bar variant of icon-btn (sits on dark pane-box) */
+.pane-leaf .tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding: 0 6px;
+}
+
+.pane-leaf .tab-actions .icon-btn {
+  width: 26px;
+  height: 26px;
+  color: var(--app-text-muted);
+}
+
+.pane-leaf .tab-actions .icon-btn:hover {
+  color: var(--claude-orange);
+  background: rgba(212, 104, 58, 0.12);
+}
+
+/* === Rail (cream) === */
+
+.rail {
+  background: var(--app-bg);
+  overflow-y: auto;
+  padding: 1.25rem 0 0.75rem;
+  min-width: 0;
+  transition: background 0.25s var(--ease-smooth);
+}
+
+.rail-header {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--claude-mid);
+  padding: 0 1.25rem;
+  margin-bottom: 0.6rem;
+}
+
+.rail-divider {
+  height: 1px;
+  width: 60px;
+  background: var(--claude-orange);
+  opacity: 0.45;
+  margin: 0 1.25rem 1rem;
+}
+
+/* (rail-list styles moved below to include flex growth) */
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 0.9rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  color: var(--app-text);
+  transition: background 0.2s var(--ease-smooth), color 0.2s var(--ease-smooth);
+  line-height: 1.3;
+}
+
+.rail-item:hover { background: var(--app-hover); }
+
+.rail-item.selected {
+  background: var(--app-active-bg);
+  color: var(--app-text);
+  font-weight: 500;
+  box-shadow: inset 2px 0 0 var(--claude-orange);
+}
+
+.rail-item.dragging {
+  opacity: 0.45;
+}
+
+.rail-item.drop-before {
+  box-shadow: inset 0 2px 0 0 var(--claude-orange);
+}
+
+.rail-item.drop-after {
+  box-shadow: inset 0 -2px 0 0 var(--claude-orange);
+}
+
+.rail-item .name-edit {
+  flex: 1;
+  min-width: 40px;
+  outline: none;
+  background: var(--app-input-bg);
+  border: 1px solid var(--claude-orange);
+  border-radius: 3px;
+  padding: 2px 6px;
+  color: var(--app-text);
+  font: inherit;
+  font-size: 0.95rem;
+  font-family: var(--font-body);
+}
+
+.tab .tab-title-edit {
+  outline: none;
+  background: var(--app-input-bg);
+  border: 1px solid var(--claude-orange);
+  border-radius: 3px;
+  padding: 0 4px;
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  min-width: 80px;
+}
+
+.rail-item .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-footer {
+  margin-top: 0.5rem;
+  padding: 0.75rem 1.25rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  border-top: 1px solid var(--app-border);
+  margin-left: 0.75rem;
+  margin-right: 0.75rem;
+  padding-top: 0.75rem;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+}
+
+.rail-list {
+  padding: 0 0.5rem;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.rail-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.3rem 0.55rem 0.3rem 0.45rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.2s var(--ease-smooth);
+}
+
+.rail-add svg { width: 12px; height: 12px; stroke-width: 1.8; }
+
+.rail-add:hover {
+  border-color: var(--claude-orange);
+  color: var(--claude-orange);
+}
+
+/* === Rail resize handle === */
+
+.rail-resize {
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+}
+
+.rail-resize::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--app-border);
+  transition: background 0.15s var(--ease-smooth), width 0.15s var(--ease-smooth);
+}
+
+.rail-resize:hover::after,
+.rail-resize.dragging::after {
+  background: var(--claude-orange);
+  width: 2px;
+  left: 2px;
+}
+
+/* === Stoplight dots === */
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--sl-gray);
+  flex-shrink: 0;
+  transition: background 0.35s var(--ease-smooth),
+              border-radius 0.45s var(--ease-smooth),
+              transform 0.45s var(--ease-smooth);
+}
+/* Shape escalates with severity: round → rounded square → diamond → sharp square */
+.dot.gray   { background: var(--sl-gray);   border-radius: 50%; }
+.dot.green  { background: var(--sl-green);  border-radius: 35%; }
+.dot.orange { background: var(--sl-orange); border-radius: 15%; transform: rotate(45deg) scale(0.9); }
+.dot.red    { background: var(--sl-red);    border-radius: 1px; }
+
+/* === Pane-count indicator (rail row) === */
+
+.pane-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.pane-indicator-dot {
+  --dot-rotate: 0deg;
+  --dot-scale: 1;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sl-gray);
+  transform: rotate(var(--dot-rotate)) scale(var(--dot-scale));
+  transition: background 0.35s var(--ease-smooth),
+              border-radius 0.45s var(--ease-smooth),
+              opacity 0.22s var(--ease-smooth),
+              transform 0.22s var(--ease-smooth);
+}
+/* Shape escalates with severity: round → rounded square → diamond → sharp square */
+.pane-indicator-dot.gray   { background: var(--sl-gray);   border-radius: 50%; }
+.pane-indicator-dot.green  { background: var(--sl-green);  border-radius: 35%; }
+.pane-indicator-dot.orange { background: var(--sl-orange); border-radius: 15%; --dot-rotate: 45deg; --dot-scale: 0.9; }
+.pane-indicator-dot.red    { background: var(--sl-red);    border-radius: 1px; }
+
+.pane-indicator-dot.entering,
+.pane-indicator-dot.leaving {
+  opacity: 0;
+  --dot-scale: 0.4;
+}
+
+/* === Right side: pane area === */
+
+.right-pane {
+  background: var(--app-bg);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  transition: background 0.25s var(--ease-smooth);
+}
+
+.pane-layout {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--app-bg);
+  padding: 8px;
+}
+
+.pane-layout .empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: var(--app-text-dim);
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  opacity: 0.7;
+}
+
+.pane-layout .empty-state kbd {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border: 1px solid var(--app-text-muted);
+  border-radius: 3px;
+  color: var(--app-text);
+  background: var(--app-hover);
+}
+
+/* A leaf is a "pane-box" — tab bar on top, terminal below. */
+
+.pane-leaf {
+  position: absolute;
+  background: var(--app-bg-raised);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  transition: border-color 0.15s var(--ease-smooth), background 0.25s var(--ease-smooth);
+}
+
+.pane-leaf.active {
+  border-color: var(--claude-orange);
+}
+
+/* Tab bar (V1 .tab exactly, restyled for dark chrome within the leaf) */
+
+.tab-bar {
+  display: flex;
+  align-items: stretch;
+  background: transparent;
+  border-bottom: 1px solid var(--app-border);
+  min-height: var(--tab-height);
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+
+.tab-bar::-webkit-scrollbar { display: none; }
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--app-text-dim);
+  padding: 0 0.9rem;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  position: relative;
+  white-space: nowrap;
+  transition: color 0.2s var(--ease-smooth), background 0.2s var(--ease-smooth);
+}
+
+.tab:hover { color: var(--app-text); background: var(--app-hover); }
+
+.tab .tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sl-gray);
+  flex-shrink: 0;
+  transition: background 0.35s var(--ease-smooth),
+              border-radius 0.45s var(--ease-smooth),
+              transform 0.45s var(--ease-smooth);
+}
+/* Shape escalates with severity: round → rounded square → diamond → sharp square */
+.tab .tab-dot.gray   { background: var(--sl-gray);   border-radius: 50%; }
+.tab .tab-dot.green  { background: var(--sl-green);  border-radius: 35%; }
+.tab .tab-dot.orange { background: var(--sl-orange); border-radius: 15%; transform: rotate(45deg) scale(0.9); }
+.tab .tab-dot.red    { background: var(--sl-red);    border-radius: 1px; }
+
+/* Hybrid-mode host badge. Only rendered on LOCAL tabs so station stays
+   the visual default; absence of badge implicitly marks station. Kept
+   small + monospace letter so a local pane is scannable in the tab
+   strip without crowding the title. */
+.tab .tab-host-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.tab .tab-host-badge.local {
+  background: var(--claude-orange);
+  color: var(--claude-cream);
+}
+
+/* Mission Control per-pane host tag (phase 11). Matches the tab-strip
+   convention — station is the visual default, local stands out. */
+.pane-host-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  margin-right: 0.3rem;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: middle;
+}
+.pane-host-badge.local {
+  background: var(--claude-orange);
+  color: var(--claude-cream);
+}
+
+.tab.active {
+  color: var(--claude-orange);
+  border-bottom-color: var(--claude-orange);
+}
+
+.tab.dragging {
+  opacity: 0.5;
+}
+
+.tab.drop-before {
+  box-shadow: inset 2px 0 0 0 var(--claude-orange);
+}
+
+.tab.drop-after {
+  box-shadow: inset -2px 0 0 0 var(--claude-orange);
+}
+
+/* Issue #163: drag-tab-onto-split-button. While a tab is being
+   dragged, the split-right / split-down icon buttons highlight as
+   drop targets when the pointer enters them. Visual matches the
+   active icon-btn (orange tint, light cream border) so the user
+   reads it as the same "this is where the action lands" affordance.
+   Stronger than the regular hover state so it's distinguishable
+   under a drag in flight. */
+.pane-leaf .tab-actions .icon-btn.split-button-drop-target {
+  color: var(--claude-cream);
+  background: rgba(212, 104, 58, 0.28);
+  border-color: var(--claude-orange);
+}
+/* SVG inside the split icon-btn must not absorb pointer events:
+   without this, dragleave fires every time the drag pointer crosses
+   into the SVG child element, causing the highlight to flicker on
+   each sub-element boundary. Confining the rule to the two split
+   buttons keeps the existing close / detach buttons unchanged. */
+.pane-leaf .tab-actions .icon-btn[data-act="split-right"] svg,
+.pane-leaf .tab-actions .icon-btn[data-act="split-down"] svg {
+  pointer-events: none;
+}
+
+.tab .tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  opacity: 0;
+  color: var(--claude-mid);
+  background: transparent;
+  transition: opacity 0.15s var(--ease-smooth), background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  line-height: 1;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close { opacity: 1; }
+
+.tab .tab-close:hover {
+  background: var(--claude-orange);
+  color: var(--claude-cream);
+}
+
+.tab-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  color: var(--app-text-muted);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  transition: color 0.15s var(--ease-smooth), background 0.15s var(--ease-smooth);
+  flex-shrink: 0;
+}
+
+.tab-new:hover { color: var(--claude-orange); background: rgba(212, 104, 58, 0.08); }
+
+/* While the current project is inside selectProject's retry budget
+   (#105 / #112), every layout-mutating control is greyed out. The
+   runtime gates in boot.ts are the source of truth — these rules
+   provide the visual signal that the click would be a no-op. Tabs
+   stay readable (no opacity dim) so the user can still see what
+   they're switching to once the overlay clears. */
+.restoring-layout .tab-new,
+.restoring-layout .tab,
+.restoring-layout .tab-close,
+.restoring-layout .tab-actions .icon-btn {
+  pointer-events: none;
+  cursor: not-allowed;
+}
+.restoring-layout .tab-new,
+.restoring-layout .tab-actions .icon-btn {
+  opacity: 0.35;
+}
+.restoring-layout .split-handle {
+  pointer-events: none;
+}
+
+/* Splash-styled overlay covering the panes area while restoring.
+   Sits above the leaves (.pane-leaf has z-index < 50) but below
+   modal dialogs. The card markup is mounted by boot.ts when
+   `.restoring-layout` is added to layoutRoot and reuses the
+   .boot-splash-* classes for the wordmark, animated dot, divider,
+   step label and shimmer-progress treatment so the in-pane wait
+   matches the cold-start splash. */
+.layout-restoring-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--app-bg);
+  color: var(--app-text);
+  pointer-events: none;
+  animation: boot-splash-tint 1.4s var(--ease-smooth);
+}
+
+/* Indeterminate progress: the cold-start splash drives width via JS
+   per boot milestone; here there's no milestone signal, so pin to a
+   high-confidence value and let the shimmer animation carry the
+   activity feel. */
+.layout-restoring-overlay .boot-splash-progress-fill {
+  width: 70%;
+}
+
+/* Terminal host inside a leaf */
+
+.pane-terminals {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--app-bg-raised);
+  transition: background 0.25s var(--ease-smooth);
+}
+
+.pane-terminal {
+  position: absolute;
+  inset: 0;
+  padding: 6px;
+}
+
+.pane-terminal.hidden { display: none; }
+
+/* Hide xterm's scrollbar — it renders as a white strip on dark mode */
+.pane-terminal .xterm-viewport {
+  scrollbar-width: none;
+  overflow: hidden !important;
+}
+.pane-terminal .xterm-viewport::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none;
+}
+
+/* Detached-pane placeholder (issue #142). Replaces the TerminalPane in
+   a slot whose pane has been popped out into its own window. Tappable
+   anywhere in the wrapper — the click closes the popout, which folds
+   the pane back into this slot via the daemon's ring-buffer replay. */
+.pane-detached-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: var(--app-bg-raised);
+  color: var(--app-text-dim);
+  transition: background 0.2s var(--ease-smooth), color 0.2s var(--ease-smooth);
+}
+.pane-detached-placeholder:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+.pane-detached-card {
+  text-align: center;
+  padding: 1.5rem;
+  max-width: 320px;
+  border: 1px dashed var(--app-border);
+  border-radius: var(--radius-lg);
+  background: var(--app-bg);
+}
+.pane-detached-title {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--app-text);
+  margin-bottom: 0.4rem;
+  letter-spacing: 0.02em;
+}
+.pane-detached-subtitle {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  color: var(--app-text-dim);
+  line-height: 1.4;
+}
+
+/* Disabled icon-btn (e.g. Detach button when active pane is already
+   detached). Uses the same dimming as the .restoring-layout rule. */
+.pane-leaf .tab-actions .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Popout window chrome (issue #142). The popout has no rail / status
+   bar / app bar — just a single TerminalPane with a thin header strip
+   that hosts the title and a Reattach button. Reuses the dark/light
+   theme tokens so light/dark switching from the main window propagates
+   trivially via the saved theme on next popout boot. */
+.popout-shell {
+  display: grid;
+  grid-template-rows: 38px 1fr;
+  height: 100%;
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+.popout-header {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 12px 0 78px; /* leave room for the macOS traffic lights */
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--app-text-dim);
+}
+.popout-header .popout-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.popout-header .popout-actions {
+  -webkit-app-region: no-drag;
+  display: flex;
+  gap: 4px;
+}
+.popout-header .popout-actions button {
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text-dim);
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth);
+}
+.popout-header .popout-actions button:hover {
+  color: var(--claude-orange);
+  border-color: var(--claude-orange);
+  background: rgba(212, 104, 58, 0.08);
+}
+.popout-body {
+  position: relative;
+  background: var(--app-bg-raised);
+  overflow: hidden;
+}
+.popout-body .pane-terminal {
+  position: absolute;
+  inset: 0;
+  padding: 6px;
+}
+.popout-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-family: var(--font-body);
+  color: var(--app-text-dim);
+  text-align: center;
+  padding: 2rem;
+}
+
+/* Split handles */
+
+.split-handle {
+  position: absolute;
+  background: transparent;
+  z-index: 10;
+}
+
+.split-handle::after {
+  content: "";
+  position: absolute;
+  background: rgba(224, 221, 211, 0.1);
+  transition: background 0.15s var(--ease-smooth);
+}
+
+.split-handle:hover::after,
+.split-handle.dragging::after {
+  background: var(--claude-orange);
+}
+
+.split-handle.vertical {
+  cursor: col-resize;
+  width: 6px;
+  transform: translateX(-3px);
+}
+.split-handle.vertical::after { left: 2px; top: 0; bottom: 0; width: 1px; }
+
+.split-handle.horizontal {
+  cursor: row-resize;
+  height: 6px;
+  transform: translateY(-3px);
+}
+.split-handle.horizontal::after { top: 2px; left: 0; right: 0; height: 1px; }
+
+/* === Status bar === */
+
+.status-bar {
+  background: var(--app-bg);
+  border-top: 1px solid var(--app-border);
+  padding: 0 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  transition: background 0.25s var(--ease-smooth);
+}
+
+.status-bar .status-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  color: var(--app-text-dim);
+  letter-spacing: 0.12em;
+  font-size: 0.7rem;
+}
+
+.status-bar .status-right .dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.status-bar .status-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-right: 2px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius);
+  color: var(--app-text-muted);
+  cursor: pointer;
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
+}
+
+.status-bar .status-refresh-btn:hover:not(:disabled) {
+  color: var(--claude-cream);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.status-bar .status-refresh-btn:disabled {
+  cursor: default;
+}
+
+.status-bar .status-refresh-btn svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+.status-bar .status-refresh-btn.refreshing svg {
+  animation: status-refresh-spin 0.9s linear infinite;
+}
+
+.status-bar .status-refresh-btn.error {
+  color: var(--wes-rose);
+}
+
+@keyframes status-refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* === New-pane dialog (kind picker) === */
+
+.new-pane-dialog {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 20, 19, 0.35);
+  z-index: 200;
+  backdrop-filter: blur(3px);
+}
+
+.new-pane-dialog .options {
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  min-width: 340px;
+  box-shadow: 0 12px 40px rgba(20, 20, 19, 0.25);
+  color: var(--app-text);
+}
+
+.new-pane-dialog .dialog-title {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--claude-mid);
+  margin-bottom: 0.5rem;
+}
+
+.new-pane-dialog .dialog-body {
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  color: var(--app-text-dim);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.tab-title[contenteditable="true"] {
+  outline: none;
+  background: rgba(212, 104, 58, 0.12);
+  padding: 0 3px;
+  border-radius: 2px;
+  min-width: 40px;
+  display: inline-block;
+}
+
+.new-pane-dialog .dialog-buttons {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.new-pane-dialog .dialog-buttons button {
+  flex: 1;
+  padding: 0.55rem 1rem;
+}
+
+/* Hybrid-mode host picker row inside the new-pane dialog. Rendered
+   only when both hosts are enabled; single-host setups suppress it. */
+.new-pane-dialog .dialog-host-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.new-pane-dialog .dialog-host-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.new-pane-dialog .host-chip {
+  flex: 1;
+  padding: 0.4rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-radius: var(--radius);
+  border: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text-dim);
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease-smooth),
+    color 0.15s var(--ease-smooth),
+    background 0.15s var(--ease-smooth);
+}
+
+.new-pane-dialog .host-chip:not(:disabled):not(.selected):hover {
+  border-color: var(--claude-orange);
+  color: var(--claude-orange);
+}
+
+.new-pane-dialog .host-chip.selected {
+  border-color: var(--claude-orange);
+  color: var(--claude-cream);
+  background: var(--claude-orange);
+}
+
+/* Hovering the selected chip used to fall through to the catch-all
+   `.new-pane-dialog button:not(.primary):hover` rule below, which sets
+   color=orange. Combined with this rule's orange background that
+   produced an invisible orange-on-orange label (#230). Keep the cream
+   text on hover, and nudge the background to the slightly-brighter
+   orange-glow so the user still gets a hover affordance. */
+.new-pane-dialog .host-chip.selected:hover {
+  color: var(--claude-cream);
+  background: var(--claude-orange-glow);
+  border-color: var(--claude-orange-glow);
+}
+
+/* New-pane composer: the host chip and default kind button are
+   "preselected indicators" — they don't need orange. Use the same
+   neutral gray treatment as the unselected siblings so the dialog
+   doesn't feel permanently lit up. Selection state still shown via
+   the focus ring + Enter-key default action. */
+.new-pane-composer .host-chip.selected {
+  background: var(--app-bg-raised);
+  color: var(--app-text);
+  border-color: var(--app-text-dim);
+}
+.new-pane-composer .host-chip.selected:hover {
+  background: var(--app-bg-raised);
+  color: var(--app-text);
+  border-color: var(--app-text-dim);
+}
+.new-pane-composer .dialog-buttons button.primary {
+  background: transparent;
+  color: var(--app-text);
+  border-color: var(--app-border-strong, var(--app-border));
+}
+.new-pane-composer .dialog-buttons button.primary:hover {
+  background: none;
+  color: var(--claude-orange);
+  border-color: var(--claude-orange);
+}
+
+.new-pane-dialog .host-chip:disabled,
+.new-pane-dialog .host-chip.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.new-pane-dialog .inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  background: var(--app-hover);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  color: var(--app-text);
+}
+
+.new-pane-dialog .dialog-hint-label {
+  margin-top: 0.75rem;
+  margin-bottom: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+}
+
+.new-pane-dialog .code-block {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  background: var(--app-input-bg);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+/* === Buttons (V1 .btn) === */
+
+.btn,
+.new-pane-dialog button,
+.settings-card button {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 1px;
+  padding: 0.6rem 1.25rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: background 0.2s var(--ease-smooth),
+    border-color 0.2s var(--ease-smooth),
+    color 0.2s var(--ease-smooth);
+  background: none;
+  color: var(--app-text);
+  text-transform: uppercase;
+}
+
+.btn-primary,
+.new-pane-dialog button.primary,
+.settings-card button.primary {
+  background: var(--claude-orange);
+  color: var(--claude-cream);
+  border-color: var(--claude-orange);
+}
+
+.btn-danger,
+.new-pane-dialog button.danger {
+  background: var(--wes-rose);
+  color: var(--claude-cream);
+  border-color: var(--wes-rose);
+}
+
+.btn-danger:hover,
+.new-pane-dialog button.danger:hover {
+  background: #d68986;
+  border-color: #d68986;
+}
+
+.btn-primary:hover,
+.new-pane-dialog button.primary:hover,
+.settings-card button.primary:hover {
+  background: var(--claude-orange-glow);
+  border-color: var(--claude-orange-glow);
+}
+
+.btn-secondary,
+.new-pane-dialog button:not(.primary) {
+  background: none;
+  color: var(--app-text-dim);
+  border-color: var(--app-border);
+}
+
+.btn-secondary:hover,
+.new-pane-dialog button:not(.primary):hover {
+  border-color: var(--claude-orange);
+  color: var(--claude-orange);
+}
+
+/* Resume-session picker — styled as a scrollable list of button rows. */
+.new-pane-dialog .session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-top: 0.75rem;
+  padding-right: 0.25rem;
+}
+.new-pane-dialog .session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  text-align: left;
+  font-size: 0.95rem;
+}
+.new-pane-dialog .session-row .session-name {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-pane-dialog .session-row .session-meta {
+  opacity: 0.65;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+/* Restore-on-reconnect prompt. Groups sessions by project. */
+.new-pane-dialog .restore-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.new-pane-dialog .restore-group-title {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  opacity: 0.8;
+  font-size: 0.9rem;
+}
+.new-pane-dialog .restore-group-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.new-pane-dialog .restore-group-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 0.3rem;
+  background: rgba(0, 0, 0, 0.04);
+  font-size: 0.9rem;
+}
+.new-pane-dialog .restore-group-list .session-name {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-pane-dialog .restore-group-list .session-meta {
+  opacity: 0.65;
+  flex-shrink: 0;
+}
+
+/* === Forms (V1) === */
+
+.settings-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2.5rem;
+  background: var(--app-bg);
+}
+
+.settings-card {
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius-lg);
+  padding: 2.25rem;
+  width: 460px;
+  box-shadow: 0 2px 12px rgba(20, 20, 19, 0.06);
+}
+
+.settings-card .brand-wordmark {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 28px;
+  letter-spacing: -0.01em;
+  color: var(--app-text);
+}
+
+.settings-card .brand-wordmark em {
+  font-style: italic;
+  font-weight: 600;
+  color: var(--claude-orange);
+}
+
+.settings-card .subtitle {
+  margin-top: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--claude-mid);
+}
+
+.settings-card h3 {
+  margin: 1.75rem 0 0.25rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.15rem;
+  color: var(--app-text);
+}
+
+.settings-card .divider {
+  width: 40px;
+  height: 1px;
+  background: var(--claude-orange);
+  opacity: 0.45;
+  margin: 1rem 0 1.25rem;
+}
+
+.settings-card label,
+.form-label {
+  display: block;
+  margin-top: 1.1rem;
+  margin-bottom: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--claude-mid);
+}
+
+.settings-card input,
+.form-input {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  background: var(--app-input-bg);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  color: var(--app-text);
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s var(--ease-smooth);
+}
+
+.settings-card input::placeholder,
+.form-input::placeholder {
+  color: var(--claude-mid);
+  opacity: 0.8;
+}
+
+.settings-card input:focus,
+.form-input:focus {
+  border-color: var(--claude-orange);
+}
+
+.settings-card .actions {
+  margin-top: 1.75rem;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.settings-card button {
+  min-width: 110px;
+}
+
+/* === Mode chooser (first launch) === */
+
+.mode-chooser {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2.5rem;
+  background: var(--app-bg);
+}
+
+.mode-card {
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius-lg);
+  padding: 2.25rem;
+  max-width: 640px;
+  width: 100%;
+  box-shadow: 0 2px 12px rgba(20, 20, 19, 0.06);
+}
+
+.mode-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 28px;
+  letter-spacing: -0.01em;
+  color: var(--app-text);
+}
+
+.mode-title em {
+  font-style: italic;
+  font-weight: 600;
+  color: var(--claude-orange);
+}
+
+.mode-eyebrow {
+  margin-top: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--claude-mid);
+}
+
+.mode-divider {
+  width: 40px;
+  height: 1px;
+  background: var(--claude-orange);
+  opacity: 0.45;
+  margin: 1rem 0 1.25rem;
+}
+
+.mode-heading {
+  margin: 1.25rem 0 0.4rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.15rem;
+  color: var(--app-text);
+}
+
+.mode-sub {
+  margin: 0 0 1.5rem 0;
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  color: var(--app-text-dim);
+}
+
+.mode-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.mode-btn {
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+  padding: 1.1rem 1.1rem 1.2rem;
+  color: var(--app-text);
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-body);
+  border-radius: var(--radius);
+  transition: border-color 0.15s var(--ease-smooth), background 0.15s var(--ease-smooth);
+}
+
+.mode-btn:hover {
+  border-color: var(--claude-orange);
+  background: var(--app-hover);
+}
+
+.mode-btn-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin-bottom: 0.45rem;
+  color: var(--app-text);
+}
+
+.mode-btn-desc {
+  color: var(--app-text-dim);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* === Generic text input (used by add-project dialog) === */
+
+.text-input {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  background: var(--app-input-bg);
+  border: 1px solid var(--app-border);
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color 0.15s var(--ease-smooth);
+}
+
+.text-input:focus {
+  border-color: var(--claude-orange);
+}
+
+.rail-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  color: var(--app-text);
+}
+.rail-context-menu button {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 6px 10px;
+  text-align: left;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.rail-context-menu button:hover {
+  background: var(--app-hover);
+}
+.rail-context-menu button.danger {
+  color: var(--wes-rose);
+}
+
+/* --- Mission Control (issue #19) --- */
+
+.rail-mission-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 10px 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--app-text);
+  border: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  font-family: var(--font-display);
+  font-size: 14px;
+  transition: background 120ms var(--ease-smooth), border-color 120ms var(--ease-smooth);
+}
+.rail-mission-control:hover {
+  background: var(--app-hover);
+  border-color: var(--app-border-strong);
+}
+.rail-mission-control.selected {
+  background: var(--app-active-bg);
+  border-color: var(--claude-orange);
+}
+.rail-mission-control .name {
+  letter-spacing: 0.01em;
+  flex: 1 1 auto;
+}
+.rail-item.docked .name {
+  text-decoration: underline;
+  text-decoration-color: var(--claude-orange);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+
+.mission-control {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+.mc-header {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--app-border);
+}
+.mc-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.mc-title h1 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 22px;
+  letter-spacing: 0.01em;
+}
+
+.mc-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--app-text-muted);
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--app-border);
+}
+.mc-status.ok {
+  color: var(--wes-sage);
+  border-color: var(--wes-sage);
+}
+.mc-actions {
+  display: flex;
+  gap: 8px;
+}
+.mc-btn {
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--claude-orange);
+  background: var(--claude-orange);
+  color: var(--claude-cream-raised);
+  cursor: pointer;
+}
+.mc-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mc-btn-ghost {
+  background: transparent;
+  color: var(--app-text);
+  border-color: var(--app-border-strong);
+}
+.mc-cards {
+  flex: 0 0 auto;
+  padding: 16px 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  overflow-y: auto;
+  max-height: 50%;
+}
+.mc-empty {
+  grid-column: 1 / -1;
+  padding: 28px;
+  text-align: center;
+  color: var(--app-text-dim);
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+.mc-empty em {
+  color: var(--claude-orange);
+  font-style: normal;
+}
+.mc-card {
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: pointer;
+  transition: border-color 120ms var(--ease-smooth), background 180ms var(--ease-smooth), transform 180ms var(--ease-smooth);
+}
+.mc-card:hover {
+  border-color: var(--app-border-strong);
+}
+.mc-card:focus-visible {
+  outline: 2px solid var(--claude-orange);
+  outline-offset: 2px;
+}
+.mc-card.asking {
+  background: color-mix(in srgb, var(--claude-orange) 12%, var(--app-bg-raised));
+  border-color: var(--claude-orange);
+  transform: scale(0.995);
+}
+.mc-card.ask-failed {
+  border-color: var(--sl-red);
+  background: color-mix(in srgb, var(--sl-red) 10%, var(--app-bg-raised));
+}
+.mc-card-red { border-left: 3px solid var(--sl-red); }
+.mc-card-orange { border-left: 3px solid var(--sl-orange); }
+.mc-card-green { border-left: 3px solid var(--sl-green); }
+.mc-card-gray { border-left: 3px solid var(--sl-gray); }
+
+.mc-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mc-card-name {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 500;
+}
+.mc-card-cwd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--app-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-card-panes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.mc-card-panes li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mc-card-panes li.empty {
+  color: var(--app-text-muted);
+  font-style: italic;
+}
+.pane-kind {
+  color: var(--app-text-muted);
+}
+.pane-state {
+  color: var(--app-text);
+}
+.pane-state-working { color: var(--wes-mustard); }
+.pane-state-attention { color: var(--sl-red); }
+.pane-state-idle { color: var(--wes-sage); }
+.pane-session {
+  color: var(--app-text-muted);
+  margin-left: auto;
+  font-size: 10px;
+}
+.mc-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px dashed var(--app-border);
+  padding-top: 8px;
+  font-size: 12px;
+  color: var(--app-text-dim);
+}
+.mc-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.mc-card-open {
+  border: 0;
+  background: transparent;
+  color: var(--claude-orange);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+.mc-card-open:hover {
+  text-decoration: underline;
+}
+.mc-card-undock {
+  border: 0;
+  background: transparent;
+  color: var(--app-text-dim);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 0;
+}
+.mc-card-undock:hover {
+  color: var(--app-text);
+  text-decoration: underline;
+}
+
+.mc-supervisor {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 220px;
+  border-top: 1px solid var(--app-border);
+}
+.mc-supervisor-header {
+  padding: 8px 20px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--app-text-dim);
+  background: var(--app-bg-raised);
+  border-bottom: 1px solid var(--app-border);
+}
+.mc-supervisor-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  background: var(--claude-dark);
+}
+.mc-supervisor-host .pane-terminal {
+  position: absolute;
+  inset: 0;
+}
+.mc-supervisor-idle {
+  padding: 40px 24px;
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--claude-mid);
+  background: var(--app-bg);
+}
+.mc-supervisor-idle strong {
+  color: var(--claude-orange);
+  font-weight: 500;
+}
+
+/* === Startup splash (first paint → first project rendered) ===
+   Seeded in index.html so it's on screen before any JS runs. Controlled
+   by src/ui/startup-splash.ts as boot milestones complete. */
+
+#boot-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--app-bg);
+  color: var(--app-text);
+  opacity: 1;
+  transition: opacity 0.36s var(--ease-smooth);
+  animation: boot-splash-tint 1.4s var(--ease-smooth);
+  pointer-events: none;
+}
+
+#boot-splash.boot-splash-dismissed {
+  opacity: 0;
+}
+
+/* Subtle warm wash that fades away over the first second — makes the splash
+   feel like it's emerging rather than popping in. */
+@keyframes boot-splash-tint {
+  0%   { background: var(--app-bg); }
+  25%  { background: color-mix(in srgb, var(--app-bg) 92%, var(--claude-orange) 8%); }
+  100% { background: var(--app-bg); }
+}
+
+.boot-splash-card {
+  text-align: center;
+  padding: 2rem 3rem;
+  max-width: 520px;
+  animation: boot-splash-rise 0.7s var(--ease-smooth) both;
+}
+
+@keyframes boot-splash-rise {
+  0%   { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.boot-splash-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  margin-bottom: 0.75rem;
+  animation: boot-splash-fade 0.9s var(--ease-smooth) 0.15s both;
+}
+
+.boot-splash-wordmark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 44px;
+  letter-spacing: -0.015em;
+  color: var(--app-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  margin: 0;
+  line-height: 1.1;
+  animation: boot-splash-fade 1s var(--ease-smooth) 0.25s both;
+}
+
+.boot-splash-wordmark span:first-child,
+.boot-splash-wordmark span:last-child {
+  font-style: italic;
+  font-weight: 600;
+}
+
+/* The animated brand dot — same circle↔diamond morph as .nav-brand .dot,
+   sized up and with a soft halo. */
+.boot-splash-dot {
+  width: 14px;
+  height: 14px;
+  background: var(--claude-orange);
+  border-radius: 50%;
+  display: inline-block;
+  position: relative;
+  top: -2px;
+  animation: boot-splash-dot-morph 3.2s var(--ease-smooth) infinite,
+             boot-splash-dot-glow 3.2s var(--ease-smooth) infinite;
+}
+
+@keyframes boot-splash-dot-morph {
+  0%, 100% {
+    transform: rotate(0deg) scale(1);
+    border-radius: 50%;
+  }
+  48% {
+    transform: rotate(38deg) scale(1.05);
+    border-radius: 22%;
+  }
+  52% {
+    transform: rotate(45deg) scale(1.1);
+    border-radius: 2px;
+  }
+}
+
+@keyframes boot-splash-dot-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212, 104, 58, 0.0); }
+  50%      { box-shadow: 0 0 18px 4px rgba(212, 104, 58, 0.28); }
+}
+
+.boot-splash-divider {
+  width: 48px;
+  height: 1px;
+  background: var(--claude-orange);
+  opacity: 0.55;
+  margin: 1.4rem auto 1.6rem;
+  animation: boot-splash-divider-grow 0.8s var(--ease-smooth) 0.4s both;
+  transform-origin: center;
+}
+
+@keyframes boot-splash-divider-grow {
+  0%   { transform: scaleX(0); opacity: 0; }
+  100% { transform: scaleX(1); opacity: 0.55; }
+}
+
+.boot-splash-step {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--app-text-dim);
+  margin-bottom: 1rem;
+  animation: boot-splash-fade 0.8s var(--ease-smooth) 0.5s both;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  min-height: 1em;
+}
+
+.boot-splash-step-label {
+  transition: opacity 0.2s var(--ease-smooth);
+}
+
+.boot-splash-step-ellipsis {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+.boot-splash-step-ellipsis i {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--app-text-dim);
+  animation: boot-splash-ellipsis 1.4s var(--ease-smooth) infinite;
+}
+
+.boot-splash-step-ellipsis i:nth-child(2) { animation-delay: 0.18s; }
+.boot-splash-step-ellipsis i:nth-child(3) { animation-delay: 0.36s; }
+
+@keyframes boot-splash-ellipsis {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30%           { opacity: 1;    transform: translateY(-2px); }
+}
+
+.boot-splash-progress {
+  width: 180px;
+  height: 2px;
+  margin: 0 auto;
+  background: var(--app-border);
+  border-radius: 2px;
+  overflow: hidden;
+  animation: boot-splash-fade 0.8s var(--ease-smooth) 0.55s both;
+}
+
+.boot-splash-progress-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--claude-orange) 0%,
+    var(--claude-orange-glow) 50%,
+    var(--claude-orange) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: 2px;
+  transition: width 0.6s var(--ease-smooth);
+  animation: boot-splash-progress-shimmer 2s linear infinite;
+}
+
+@keyframes boot-splash-progress-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes boot-splash-fade {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #boot-splash,
+  .boot-splash-card,
+  .boot-splash-eyebrow,
+  .boot-splash-wordmark,
+  .boot-splash-divider,
+  .boot-splash-step,
+  .boot-splash-progress,
+  .boot-splash-dot {
+    animation: none !important;
+  }
+  .boot-splash-progress-fill { transition: width 0.2s linear; }
+}

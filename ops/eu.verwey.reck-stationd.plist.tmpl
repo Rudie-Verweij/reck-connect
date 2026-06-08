@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>eu.verwey.reck-stationd</string>
+
+    <!-- Issue #215 phase 2: LaunchAgent (per-user Aqua scope). The
+         daemon writes images to NSPasteboard directly via cgo, so the
+         reck-clipboard sidecar is gone. Direct PTY spawn is the only
+         spawn path; no audit-session inheritance dance. -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/reck-stationd</string>
+        <string>--config</string>
+        <string>__HOME__/.config/reck/projects.toml</string>
+        <string>--addr</string>
+        <string>0.0.0.0:7315</string>
+        <!-- Phase 6 of issue #91 (hybrid mode): the station launchd plist
+             always passes --mode=station so the baseline preamble emits
+             station-aware text (cross-host, satellite MCPs unreachable).
+             A laptop-side daemon child started by Satellite passes
+             --mode=local instead. -->
+        <string>--mode=station</string>
+    </array>
+
+    <!-- LimitLoadToSessionType=Aqua: only load this agent in the user's
+         GUI session, never in Background/StandardIO/LoginWindow contexts.
+         Documents the architectural requirement (#215): the daemon must
+         be in Aqua for direct PTY spawn + NSPasteboard writes to work. -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <!-- LaunchAgent inherits less env than a login shell; without
+             this Claude Code's supports-color check downgrades 24-bit
+             truecolor escapes to the nearest xterm-256 palette index —
+             brand orange #d4683a snaps to palette 208/215 and renders
+             muted. pane.go's allowlist forwards COLORTERM into pane
+             children; we just need it set on the daemon. -->
+        <key>COLORTERM</key>
+        <string>truecolor</string>
+        <!-- DAEMON_TOKEN deliberately NOT here.
+             Even per-user LaunchAgent EnvironmentVariables surface via
+             `launchctl print gui/<uid>/...` to the same user, which
+             leaks into diagnostics dumps and crash reports. Token lives
+             on disk at __HOME__/.config/reck/token (mode 0600) — see
+             config.ResolveToken for the fallback chain. -->
+        <!-- Claude Code experimental flags. Forwarded to pane children via
+             the CLAUDE_CODE_* prefix in pane.go's envAllowlistPrefixes. -->
+        <key>CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</key>
+        <string>1</string>
+
+        <!-- Issue #54: optional hint about which satellite is connecting. -->
+        <key>RECK_SATELLITE_HINT</key>
+        <string></string>
+
+        <!-- Kill switch for the baseline preamble. -->
+        <key>RECK_DISABLE_BASELINE_PREAMBLE</key>
+        <string></string>
+
+        <!-- Required: absolute path to the daemon-managed projects root.
+             config.ManagedProjectsRoot is initialized from this value;
+             main.go fail-fast checks it at startup. install-station.sh
+             sed-substitutes __RECK_STATION_ROOT__ → $RECK_STATION_ROOT
+             at install time. launchd does not expand env vars in this
+             dict, so the value must be baked in literally. -->
+        <key>RECK_STATION_ROOT</key>
+        <string>__RECK_STATION_ROOT__</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>__HOME__</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Minimum 30 s between (re)launches to prevent respawn-loop on
+         a daemon that crashes immediately at startup. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/reck-stationd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/reck-stationd.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

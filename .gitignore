@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.wrangler/
+*.log
+.env
+worker/public/*
+!worker/public/.gitkeep
+.reck-worktrees/
+.claude/
+.superpowers/
+
+# Archived / parked code (kept on disk, not tracked, not shipped)
+legacy-v1/
+share-reck-connect/
+mini-satellite/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+
+# macOS AppleDouble metadata (._foo sidecars on non-HFS volumes)
+**/._*
+
+# Microsoft Office lock files (created while a doc is open)
+**/~$*

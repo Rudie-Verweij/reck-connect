@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reck Connect Satellite</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,800;1,400;1,600&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./src/styles.css" />
+    <style>
+      /* Inline so the splash is styled on first paint, before the main
+         stylesheet has finished loading over the network. Kept minimal —
+         the rich animation rules live in styles.css alongside the rest. */
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        background: #f7f4ed;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: Georgia, serif;
+        color: #2a2927;
+      }
+      @media (prefers-color-scheme: dark) {
+        #boot-splash { background: #141413; color: #f5f2ea; }
+      }
+      html[data-theme="dark"] #boot-splash { background: #141413; color: #f5f2ea; }
+      html[data-theme="light"] #boot-splash { background: #f7f4ed; color: #2a2927; }
+    </style>
+  </head>
+  <body>
+    <div id="boot-splash" aria-hidden="true">
+      <div class="boot-splash-card">
+        <div class="boot-splash-eyebrow">by Reckon Labs</div>
+        <h1 class="boot-splash-wordmark">
+          <span>Reck</span>
+          <span class="boot-splash-dot" aria-hidden="true"></span>
+          <span>Connect</span>
+        </h1>
+        <div class="boot-splash-divider"></div>
+        <div class="boot-splash-step">
+          <span class="boot-splash-step-label">Preparing workspace</span><span class="boot-splash-step-ellipsis" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
+        <div class="boot-splash-progress" role="progressbar" aria-label="Starting up">
+          <div class="boot-splash-progress-fill"></div>
+        </div>
+      </div>
+    </div>
+    <div id="app"></div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

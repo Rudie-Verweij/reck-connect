@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>eu.verwey.reck-mount</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/reck-mount-watchdog</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- RECK_STATION_ROOT is read by reck-mount-watchdog. install-satellite.sh
+         sed-substitutes __RECK_STATION_ROOT__ → $RECK_STATION_ROOT at install
+         time. launchd does not expand env vars in this dict, so the value
+         must be baked in literally. -->
+    <key>RECK_STATION_ROOT</key>
+    <string>__RECK_STATION_ROOT__</string>
+  </dict>
+  <!-- Logs live under ~/Library/Logs/reck-stationd/ — per-user (parent
+       home is 0700) instead of the world-readable /tmp, and they
+       survive reboot. install-satellite.sh substitutes __HOME__ for
+       the actual $HOME when it copies this template into place, since
+       launchd does NOT expand environment variables in path keys. -->
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/reck-stationd/mount.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/reck-stationd/mount.log</string>
+</dict>
+</plist>

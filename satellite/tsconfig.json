@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["vite/client", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@proto/*": ["../proto/*"],
+      "@client-core/*": ["../client-core/src/*"],
+      "@xterm/*": ["./node_modules/@xterm/*"]
+    }
+  },
+  "include": ["renderer/**/*.ts", "renderer/**/*.tsx", "../proto/proto.ts"]
+}
