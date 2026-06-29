@@ -252,6 +252,19 @@ export class TerminalPane {
   }
 
   /**
+   * Public read-only access to the underlying xterm `Terminal`. Used by
+   * features that need to interact with xterm directly — installing the
+   * path linkifier on scrollback, registering decorations/markers for
+   * live highlighting, querying selection state, etc.
+   *
+   * Callers MUST NOT dispose the returned terminal — its lifecycle is
+   * owned by this `TerminalPane`.
+   */
+  public getXterm(): Terminal {
+    return this.term;
+  }
+
+  /**
    * Return a shallow snapshot of this pane's xterm viewport/buffer state.
    * Matches the capture checklist from an earlier release so a developer with devtools
    * open can eyeball the numbers in one line without navigating

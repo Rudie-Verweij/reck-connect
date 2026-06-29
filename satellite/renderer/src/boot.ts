@@ -29,6 +29,12 @@ import { Rail } from "./ui/rail";
 import { effectiveStoplight as filterEffectiveStoplight } from "./ui/effective-stoplight";
 import { AppBar, type Theme } from "./ui/app-bar";
 import { PaneLayout } from "./ui/pane-layout";
+import { installPathLinkProvider } from "./viewer/PathLinkProvider";
+import { resolveActivatePath } from "./viewer/resolveActivatePath";
+import {
+  setExtensionlessAllowlist,
+  SEEDED_EXTENSIONLESS_FILENAMES,
+} from "./viewer/LinkDetector";
 import { HoverFocusController } from "./ui/hover-focus-controller";
 import { StatusBar } from "./ui/status-bar";
 import { MissionControl } from "./ui/mission-control";
@@ -73,6 +79,8 @@ import {
   loadClaudeLaunchArgs,
   loadClaudeLaunchArgsByProject,
   loadHoverToFocus,
+  loadLinkifierAllowlist,
+  saveLinkifierAllowlist,
   loadLayouts,
   loadProjectNameOverrides,
   loadProjectOrder,
@@ -144,6 +152,21 @@ export async function boot(splash?: StartupSplashController) {
   // background (the inline block in index.html keys off it).
   let theme: Theme = await loadTheme();
   document.documentElement.setAttribute("data-theme", theme);
+
+  // Hydrate the linkifier's extensionless-filename allowlist from persisted
+  // config. First run (no list yet) seeds the documented defaults and
+  // persists them immediately so the Preferences UI can show them as chips.
+  // Later runs honour the persisted list — even when empty, which signals
+  // the user emptied it on purpose.
+  {
+    const persisted = await loadLinkifierAllowlist();
+    if (persisted === null) {
+      await saveLinkifierAllowlist(SEEDED_EXTENSIONLESS_FILENAMES);
+      setExtensionlessAllowlist(SEEDED_EXTENSIONLESS_FILENAMES);
+    } else {
+      setExtensionlessAllowlist(persisted);
+    }
+  }
 
   const settings = await loadSettings();
   // No settings file → render Preferences. an earlier release made local always
@@ -966,6 +989,86 @@ export async function boot(splash?: StartupSplashController) {
     isRestoring: () => isRetrying(),
     // seed theme so new terminals use the right colors from first mount
     onActiveLeafChange: () => {},
+    // Install the xterm path linkifier on every new pane so file paths in
+    // scrollback (from `ls`, `grep`, Claude Code edit messages, …) become
+    // Cmd+clickable. The provider is hover-driven — no cost until the user
+    // hovers a line. The resolve batch and openInViewer route through
+    // main's allowlist.
+    onPaneCreated: (paneId, pane) => {
+      installPathLinkProvider(pane.getXterm(), {
+        resolveBatch: (paths) => window.reckAPI.files.resolve(paths),
+        onActivate: (filePath) => {
+          // Route the click through the pane's host so main can expand
+          // `~/` against the right home (station vs Mac) and apply the
+          // station-cwd translation. Lookup is by paneId because the
+          // pane's host is tracked at the tab level (see paneHost()).
+          const directHost = paneHost(paneId);
+          // paneHost can return null transiently while the layout tree
+          // rebuilds (e.g. during selectProject) or before the daemon's
+          // first pane-state push lands. Defaulting to "local" silently
+          // misrouted station-pane clicks to the Mac filesystem (a
+          // "file doesn't exist" error against a /Users/... path). Fall
+          // back to primaryHost instead — for users running with station
+          // enabled that's "station", the right guess for the vast
+          // majority of clicks. A console.warn flags the fallback.
+          const host: HostRef = directHost ?? primaryHost;
+          if (directHost === null) {
+            console.warn(
+              `[linkifier] paneHost(${paneId}) returned null — falling back to primaryHost=${primaryHost}`,
+            );
+          }
+          // Resolve bare filenames AND `./X` / `../X` against the active
+          // project's cwd; absolute (`/abs`) and home-anchored (`~/x`)
+          // paths pass through unchanged.
+          //
+          // The cwd lookup keys off the UI-SELECTED project, but the
+          // clicked pane is only provably that project's when it sits in
+          // the current layout tree (directHost !== null). Outside it
+          // (selectProject race), a WRONG cwd poisons resolveActivatePath
+          // and main's rescue pipeline, while an ABSENT cwd is safe — main
+          // derives the project anchor from the resolved path. So drop the
+          // cwd when the pane isn't provably the current project's.
+          const projectCwd =
+            directHost !== null
+              ? currentProjects.find((p) => p.id === currentProjectId)?.cwd ??
+                null
+              : null;
+          const target = resolveActivatePath(filePath, projectCwd);
+          console.log("[click:pane] activate -> openInViewer", {
+            paneId,
+            paneHost: directHost,
+            resolvedHost: host,
+            sourceHost: host,
+            projectCwd,
+            originalText: filePath,
+            rawPath: filePath,
+            target,
+          });
+          window.reckAPI.files
+            .openInViewer(target, {
+              sourceHost: host,
+              originalText: filePath,
+              projectCwd: projectCwd ?? undefined,
+            })
+            .then((r) => {
+              if (!r || (r as { ok?: boolean }).ok !== true) {
+                console.warn("[click:pane] openInViewer rejected", {
+                  target,
+                  sourceHost: host,
+                  result: r,
+                });
+              }
+            })
+            .catch((err: unknown) => {
+              console.warn("[click:pane] openInViewer threw", {
+                target,
+                sourceHost: host,
+                error: err,
+              });
+            });
+        },
+      });
+    },
     onStoplightChange: (paneId, s) => {
       // Bump the shared epoch first thing so any in-flight poll
       // response landing after this event sees `wsEpoch > pollEpoch`

@@ -14,6 +14,23 @@ import { registerRsyncIpc } from "./rsync-copy";
 import { checkExternalUrl, resolveInsideMountPoint } from "./ipc-validation";
 import { planMigration } from "./settings-migration";
 import { planBootstrapImport } from "./bootstrap-import";
+import {
+  registerFileViewerIpc,
+  closeAllFileViewers,
+  type CreateViewerOptions,
+} from "./file-viewer";
+import { composeFileViewerRoots } from "./file-roots";
+
+// Pin the Electron app name before any path / safeStorage resolution.
+//
+// In packaged builds Electron reads the name from the asar-bundled
+// package.json ("reck-connect-satellite"). Under `pnpm dev` it is launched
+// as `electron dist/main/main.js` with no adjacent package.json, so it
+// falls back to "Electron". That drift repoints `app.getPath("userData")`
+// and the safeStorage keychain entry, so a dev run can't decrypt the
+// station token / settings / layouts a packaged run wrote. Calling setName
+// here aligns both modes onto the packaged name (a no-op when packaged).
+app.setName("reck-connect-satellite");
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -189,6 +206,7 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
     closeAllPopouts();
+    closeAllFileViewers();
     // Decision A: main close = app quit on every platform. The legacy
     // `window-all-closed` handler below only quits on non-darwin; this
     // explicit quit avoids the popout-only edge where main is gone but
@@ -910,6 +928,55 @@ ipcMain.handle(
 // --- IPC: rsync copy-to-station for "From existing folder…" flow ---
 
 registerRsyncIpc(() => mainWindow);
+
+// --- IPC: file-viewer popup + Cmd+click path linkifier ---
+//
+// File-viewer allowed roots. Built-ins are the sshfs station mount, the
+// user's $HOME (covers ~/Desktop, ~/dev, etc.), and /tmp (where dev tools
+// dump generated paths). User-managed extras come from the
+// `fileViewerExtraRoots` config key, editable via the Settings UI. The
+// getter passed to registerFileViewerIpc reads them fresh on every IPC, so
+// adding/removing a path in Settings takes effect without a restart.
+const fileViewerBuiltInRoots = (): string[] => [MOUNT_POINT, homedir(), "/tmp"];
+const resolveFileViewerRoots = (): string[] =>
+  composeFileViewerRoots(
+    fileViewerBuiltInRoots(),
+    readConfig("fileViewerExtraRoots"),
+  );
+console.log(
+  `[file-viewer] allowed roots at boot: ${resolveFileViewerRoots().join(", ")}`,
+);
+
+// Station root + home come from the env var `RECK_STATION_ROOT` (e.g.
+// `/home/pi/projects`); the station home is its parent directory. Used for
+// host-aware tilde expansion: `~/foo.md` clicked in a station pane expands
+// against the station's home, not the Mac's. Absent on a Mac-local-only
+// setup → treated as null.
+const stationRootEnv = process.env.RECK_STATION_ROOT;
+const stationHomeEnv =
+  stationRootEnv && stationRootEnv.length > 0
+    ? path.dirname(stationRootEnv)
+    : null;
+
+registerFileViewerIpc({
+  roots: resolveFileViewerRoots,
+  mountPoint: () => MOUNT_POINT,
+  localHome: () => homedir(),
+  stationHome: () => stationHomeEnv,
+  stationRoot: () => stationRootEnv ?? null,
+  mountPointPath: () => MOUNT_POINT,
+  buildCreateOptions(resolvedPath): Omit<CreateViewerOptions, "title"> {
+    const savedTheme = readConfig("theme");
+    const bgColor = savedTheme === "dark" ? "#141413" : "#f7f4ed";
+    return {
+      resolvedPath,
+      bgColor,
+      rendererHtmlPath: path.join(__dirname, "../renderer/file-viewer.html"),
+      devServerUrl: isDev ? "http://localhost:5173" : null,
+      preloadPath: path.join(__dirname, "../preload/preload.js"),
+    };
+  },
+});
 
 // --- Phase 2 settings migration (an earlier release, plan rev 3.1) ---
 //

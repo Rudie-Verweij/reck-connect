@@ -60,6 +60,18 @@ vi.mock("@client-core/terminal/terminal-pane", () => {
       // tail, so the pane is no longer pinned.
       if (offset > 0) this.atBottom = false;
     }
+    /**
+     * The real TerminalPane exposes its underlying xterm Terminal so the
+     * file-viewer path linkifier (`installPathLinkProvider`) can hook into
+     * it when `onPaneCreated` is wired. The mock supplies the minimum
+     * shape the linkifier touches.
+     */
+    getXterm() {
+      return {
+        registerLinkProvider: () => ({ dispose: () => {} }),
+        buffer: { active: { getLine: () => undefined } },
+      };
+    }
   }
   return { TerminalPane: MockTerminalPane };
 });

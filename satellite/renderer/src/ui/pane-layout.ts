@@ -25,6 +25,14 @@ export interface PaneLayoutCallbacks {
    */
   buildWsSubprotocols: (host: HostRef) => string[];
   onActiveLeafChange: (leafId: string | null) => void;
+  /**
+   * Fires once per newly-constructed pane terminal, right after its
+   * `TerminalPane` is built. Used to install the xterm path linkifier so
+   * file paths in scrollback become Cmd+clickable. Optional — consumers
+   * that don't need per-pane setup omit it; existing callers are
+   * unaffected.
+   */
+  onPaneCreated?: (paneId: string, pane: TerminalPane) => void;
   onStoplightChange: (paneId: string, s: Stoplight) => void;
   onExit: (paneId: string) => void;
   onTreeChange: (tree: TreeNode | null) => void;
@@ -629,6 +637,10 @@ export class PaneLayout {
       wrapper.appendChild(term.container);
       view.termsEl.appendChild(wrapper);
       term.mount();
+      // Install the xterm path linkifier on the freshly-mounted pane so
+      // file paths in scrollback become Cmd+clickable (hover-driven — no
+      // cost until the user hovers a line). Optional; a no-op when unset.
+      this.cb.onPaneCreated?.(t.paneId, term);
       view.terminals.set(t.id, {
         kind: "terminal",
         tab: t,

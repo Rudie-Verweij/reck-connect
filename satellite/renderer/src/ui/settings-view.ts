@@ -1,9 +1,18 @@
 import {
+  loadFileViewerExtraRoots,
   loadHoverToFocus,
+  loadLinkifierAllowlist,
   loadSettings,
+  saveFileViewerExtraRoots,
   saveHoverToFocus,
+  saveLinkifierAllowlist,
   saveSettings,
 } from "../config";
+import {
+  SEEDED_EXTENSIONLESS_FILENAMES,
+  setExtensionlessAllowlist,
+} from "../viewer/LinkDetector";
+import { confirmDialog } from "./new-pane-dialog";
 
 function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -135,6 +144,37 @@ export async function renderSettings(
         <p style="margin-top:0.25rem;margin-left:1.5rem;color:var(--text-secondary);font-size:0.85rem;">
           Move the cursor over a pane to focus it, no click needed. Suppresses during text selection, drags, and right after typing.
         </p>
+        <div class="divider" style="margin-top:1.5rem;"></div>
+        <h3>File viewer allowed paths</h3>
+        <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
+          Cmd+click on a file path in a pane opens a popup viewer. Paths are only
+          clickable when they live inside one of the allowed roots below. Built-in
+          roots cover most workflows; add custom roots for code that lives elsewhere
+          (e.g. external drives). Changes take effect immediately, no restart needed.
+        </p>
+        <div class="settings-roots-builtin" id="s-roots-builtin"></div>
+        <div class="settings-roots-custom" id="s-roots-custom"></div>
+        <div class="actions" style="margin-top:0.5rem;">
+          <button id="s-roots-add" class="secondary" type="button">Add path…</button>
+        </div>
+        <div id="s-roots-err" style="color:var(--sl-red);margin-top:0.5rem;font-size:0.85rem;display:none;"></div>
+        <div class="divider" style="margin-top:1.5rem;"></div>
+        <h3>File-link allowlist</h3>
+        <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
+          Files without an extension (Makefile, .env, etc.) are only Cmd-clickable when their basename appears in this list. Add a name and press Save or Enter; hover a chip and click <code>×</code> to remove.
+        </p>
+        <div class="linkifier-allowlist-input-row">
+          <input
+            id="s-linkifier-input"
+            class="linkifier-allowlist-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="e.g. Procfile"
+          />
+          <button id="s-linkifier-save" class="secondary" type="button">Save</button>
+        </div>
+        <div id="s-linkifier-chips" class="linkifier-allowlist-chips"></div>
         <div id="s-err" style="color:var(--sl-red);margin-top:0.75rem;font-size:0.85rem;display:none;"></div>
         <div class="actions">
           <button id="s-save" class="primary">Save</button>
@@ -142,6 +182,8 @@ export async function renderSettings(
       </div>
     </div>
   `;
+  await renderFileViewerRootsSection(root);
+  await renderLinkifierAllowlistSection(root);
   const btn = root.querySelector("#s-save") as HTMLButtonElement;
   const err = root.querySelector("#s-err") as HTMLDivElement;
   btn.onclick = async () => {
@@ -211,4 +253,225 @@ export async function renderSettings(
     }
     onSaved();
   };
+}
+
+/**
+ * Built-in file-viewer roots, shown read-only in Preferences. $HOME is
+ * shown as the literal "$HOME" rather than the resolved path because the
+ * renderer never sees the user's home-dir literal (same privacy the rest
+ * of the renderer enforces).
+ */
+const BUILT_IN_ROOT_LABELS: ReadonlyArray<{ label: string; hint: string }> = [
+  { label: "$HOME", hint: "your local files (~/Desktop, ~/dev, etc.)" },
+  { label: "$HOME/reck/projects", hint: "station files via the sshfs mount" },
+  { label: "/tmp", hint: "scratch space (where dev tools dump generated paths)" },
+];
+
+/**
+ * Render the file-viewer allowed-roots section. Idempotent: re-rendering
+ * replaces the previous list DOM and rebinds handlers, so add/remove
+ * operations can re-call this to refresh.
+ */
+async function renderFileViewerRootsSection(root: HTMLElement): Promise<void> {
+  const builtInHost = root.querySelector("#s-roots-builtin") as HTMLElement | null;
+  const customHost = root.querySelector("#s-roots-custom") as HTMLElement | null;
+  const addBtn = root.querySelector("#s-roots-add") as HTMLButtonElement | null;
+  const errEl = root.querySelector("#s-roots-err") as HTMLElement | null;
+  if (!builtInHost || !customHost || !addBtn || !errEl) return;
+
+  // Built-ins: read-only display.
+  builtInHost.innerHTML = "";
+  const builtInTitle = document.createElement("div");
+  builtInTitle.className = "settings-roots-section-title";
+  builtInTitle.textContent = "Built-in";
+  builtInHost.appendChild(builtInTitle);
+  for (const entry of BUILT_IN_ROOT_LABELS) {
+    const row = document.createElement("div");
+    row.className = "settings-roots-row settings-roots-row-builtin";
+    const path = document.createElement("code");
+    path.className = "settings-roots-path";
+    path.textContent = entry.label;
+    const hint = document.createElement("span");
+    hint.className = "settings-roots-hint";
+    hint.textContent = entry.hint;
+    row.appendChild(path);
+    row.appendChild(hint);
+    builtInHost.appendChild(row);
+  }
+
+  // Custom: live list with remove buttons.
+  const extras = await loadFileViewerExtraRoots();
+  customHost.innerHTML = "";
+  const customTitle = document.createElement("div");
+  customTitle.className = "settings-roots-section-title";
+  customTitle.textContent = "Custom";
+  customHost.appendChild(customTitle);
+  if (extras.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "settings-roots-empty";
+    empty.textContent = "No custom paths yet.";
+    customHost.appendChild(empty);
+  } else {
+    for (const p of extras) {
+      const row = document.createElement("div");
+      row.className = "settings-roots-row settings-roots-row-custom";
+      const path = document.createElement("code");
+      path.className = "settings-roots-path";
+      path.textContent = p;
+      const remove = document.createElement("button");
+      remove.className = "settings-roots-remove";
+      remove.type = "button";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", async () => {
+        errEl.style.display = "none";
+        const next = extras.filter((entry) => entry !== p);
+        await saveFileViewerExtraRoots(next);
+        await renderFileViewerRootsSection(root);
+      });
+      row.appendChild(path);
+      row.appendChild(remove);
+      customHost.appendChild(row);
+    }
+  }
+
+  // Re-bind the Add button each render so the closure captures the
+  // latest `extras` slice.
+  addBtn.onclick = async () => {
+    errEl.style.display = "none";
+    let picked: string | null;
+    try {
+      picked = await window.reckAPI.dialog.pickFolder();
+    } catch (e) {
+      errEl.textContent =
+        "Couldn't open the folder picker: " +
+        (e instanceof Error ? e.message : String(e));
+      errEl.style.display = "block";
+      return;
+    }
+    if (!picked) return; // user cancelled
+    if (typeof picked !== "string" || !picked.startsWith("/")) {
+      errEl.textContent = "Picked path must be absolute.";
+      errEl.style.display = "block";
+      return;
+    }
+    if (extras.includes(picked)) {
+      errEl.textContent = "That path is already in the list.";
+      errEl.style.display = "block";
+      return;
+    }
+    await saveFileViewerExtraRoots([...extras, picked]);
+    await renderFileViewerRootsSection(root);
+  };
+}
+
+/**
+ * Render the editable linkifier allowlist section.
+ *
+ * Layout: single-line input + Save button on one row, then a chip grid
+ * below — one chip per persisted entry; hovering a chip reveals an `×`.
+ *
+ * Behaviour:
+ *   - First render with no persisted list → seed with
+ *     `SEEDED_EXTENSIONLESS_FILENAMES` and persist immediately so the
+ *     defaults are visible as chips (and editable).
+ *   - Add via Save button OR Enter on the input. Empty/whitespace-only
+ *     input is a silent no-op. Duplicates flash the input red.
+ *   - Remove via × → `confirmDialog` (reused from new-pane-dialog.ts).
+ *     Confirm → filter, persist, re-render. Cancel → no change.
+ *
+ * On any persist, `setExtensionlessAllowlist` is also called so the live
+ * linkifier in the SAME renderer (Preferences runs in the main window)
+ * sees the new allowlist without waiting for reload. Existing file-viewer
+ * popups have their own renderer process; they re-hydrate on next mount.
+ */
+async function renderLinkifierAllowlistSection(
+  root: HTMLElement,
+): Promise<void> {
+  const chipsHost = root.querySelector(
+    "#s-linkifier-chips",
+  ) as HTMLElement | null;
+  const input = root.querySelector(
+    "#s-linkifier-input",
+  ) as HTMLInputElement | null;
+  const saveBtn = root.querySelector(
+    "#s-linkifier-save",
+  ) as HTMLButtonElement | null;
+  if (!chipsHost || !input || !saveBtn) return;
+
+  let list: string[];
+  const persisted = await loadLinkifierAllowlist();
+  if (persisted === null) {
+    list = [...SEEDED_EXTENSIONLESS_FILENAMES];
+    await saveLinkifierAllowlist(list);
+  } else {
+    list = [...persisted];
+  }
+  // Keep the live allowlist in sync for any path-detection happening
+  // in the main renderer (e.g. terminal panes rendered behind a
+  // half-open Preferences view).
+  setExtensionlessAllowlist(list);
+
+  const renderChips = (): void => {
+    chipsHost.innerHTML = "";
+    for (const name of list) {
+      const chip = document.createElement("span");
+      chip.className = "linkifier-allowlist-chip";
+      chip.setAttribute("data-name", name);
+      const label = document.createElement("span");
+      label.className = "linkifier-chip-label";
+      label.textContent = name;
+      const remove = document.createElement("button");
+      remove.className = "linkifier-chip-remove";
+      remove.type = "button";
+      remove.setAttribute("aria-label", `Remove ${name}`);
+      remove.textContent = "×";
+      remove.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const confirmed = await confirmDialog(document.body, {
+          title: "Remove from allowlist",
+          body: `Are you sure you want to remove "${name}" from the file-link allowlist? Files with this basename will no longer be Cmd-clickable.`,
+          confirmLabel: "Remove",
+        });
+        if (!confirmed) return;
+        list = list.filter((entry) => entry !== name);
+        await saveLinkifierAllowlist(list);
+        setExtensionlessAllowlist(list);
+        renderChips();
+      });
+      chip.appendChild(label);
+      chip.appendChild(remove);
+      chipsHost.appendChild(chip);
+    }
+  };
+  renderChips();
+
+  const flashError = (): void => {
+    input.classList.add("linkifier-input-error");
+    window.setTimeout(() => {
+      input.classList.remove("linkifier-input-error");
+    }, 2000);
+  };
+
+  const submit = async (): Promise<void> => {
+    const raw = input.value.trim();
+    if (raw.length === 0) return;
+    if (list.includes(raw)) {
+      flashError();
+      return;
+    }
+    list = [...list, raw];
+    await saveLinkifierAllowlist(list);
+    setExtensionlessAllowlist(list);
+    input.value = "";
+    renderChips();
+  };
+
+  saveBtn.onclick = () => void submit();
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      void submit();
+    }
+  });
 }

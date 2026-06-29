@@ -16,6 +16,7 @@
 
 import "@xterm/xterm/css/xterm.css";
 import { TerminalPane } from "@client-core/terminal/terminal-pane";
+import { installPathLinkProvider } from "./viewer/PathLinkProvider";
 import type { HostRef } from "./host";
 // `loadSettings` reads via the same IPC channels the main renderer uses;
 // the popout's preload exposes the same `reckAPI` surface, so this works
@@ -150,6 +151,20 @@ async function bootPopout(): Promise<void> {
   });
   body.appendChild(term.container);
   term.mount();
+  // Install the file-path xterm linkifier on the popout's terminal so
+  // detached panes behave like main-window panes — Cmd+click on a path in
+  // scrollback opens the file viewer popup. No projectCwd here (a popout
+  // has no active-project context); main derives the project anchor from
+  // the resolved path. `info.host` lets main expand `~/` against the right
+  // home and route station paths through the local sshfs mount.
+  installPathLinkProvider(term.getXterm(), {
+    resolveBatch: (paths) => window.reckAPI.files.resolve(paths),
+    onActivate: (filePath) => {
+      void window.reckAPI.files.openInViewer(filePath, {
+        sourceHost: info.host,
+      });
+    },
+  });
   // First-paint guard: even though TerminalPane installs a
   // ResizeObserver, it skips fitting when the container measures 0×0
   // (FitAddon would otherwise clamp to 2×1 and ship that to the PTY).
