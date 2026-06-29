@@ -17,10 +17,14 @@
   <dict>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    <!-- RECK_STATION_ROOT is read by reck-mount-watchdog. install-satellite.sh
-         sed-substitutes __RECK_STATION_ROOT__ → $RECK_STATION_ROOT at install
-         time. launchd does not expand env vars in this dict, so the value
-         must be baked in literally. -->
+    <!-- RECK_STATION_ROOT is the path on the station where managed
+         projects live (e.g. /Users/reck-connect/projects for the
+         upstream macOS station, /home/<user>/projects for a Linux
+         station). install-satellite.sh substitutes __RECK_STATION_ROOT__
+         with the operator-supplied value at install time; launchd does
+         not expand env vars in this dict, so the value is baked in
+         literally. The watchdog (reck-mount-watchdog.sh) reads it via
+         shell env on every tick and fails-fast if absent. -->
     <key>RECK_STATION_ROOT</key>
     <string>__RECK_STATION_ROOT__</string>
   </dict>
