@@ -30,6 +30,11 @@ var mimeToUTI = map[string]string{
 	"image/webp": "org.webmproject.webp",
 }
 
+// Available reports whether WriteImage can succeed on this host.
+// On darwin the AppKit pasteboard is always accessible from the
+// daemon's Aqua user session — no probe needed.
+func Available() bool { return true }
+
 // WriteImage places `body` on the general pasteboard under the UTI
 // that corresponds to `mime`. Returns:
 //
