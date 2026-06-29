@@ -11,6 +11,7 @@
     "build:renderer": "vite build",
     "build": "pnpm build:main && pnpm build:renderer",
     "dist": "pnpm build && electron-builder --mac --publish never",
+    "package": "pnpm build && electron-builder --mac --dir --publish never",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
     "test": "vitest run",
     "test:watch": "vitest",
