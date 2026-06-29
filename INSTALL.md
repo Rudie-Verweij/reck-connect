@@ -1,5 +1,9 @@
 # Installing Reck Connect
 
+> **Running the station on Linux / Raspberry Pi instead of macOS?** Follow
+> [`INSTALL-LINUX.md`](INSTALL-LINUX.md) — a step-by-step Pi walkthrough. The
+> runbook below targets a macOS station.
+
 This document is a runbook for **Claude Code** to drive end-to-end on
 your behalf. Open Claude Code in any directory and tell it:
 
