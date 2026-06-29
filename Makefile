@@ -1,4 +1,4 @@
-.PHONY: help build test vet typecheck dist dist-dir clean
+.PHONY: help build test vet typecheck dist dist-dir clean cross install-linux
 
 help:
 	@echo "Reck Connect — common tasks"
@@ -12,6 +12,8 @@ help:
 	@echo "                   — required on macOS 26+ where dmg-builder hits"
 	@echo "                     a libexpat ABI clash and python-symlink issues"
 	@echo "  make clean       Remove build artefacts"
+	@echo "  make cross       Cross-compile the daemon for Linux ARM64 (Raspberry Pi, no cgo)"
+	@echo "  make install-linux  Install the station on a Linux/Pi host (run on the Pi)"
 
 build:
 	go build ./...
@@ -48,3 +50,17 @@ dist-dir:
 clean:
 	rm -rf satellite/dist satellite/release
 	go clean ./...
+
+# Cross-compile the daemon from any host (Mac or Linux) to Linux ARM64
+# (Raspberry Pi). CGO_ENABLED=0: the linux pasteboard backend shells out
+# to xclip (os/exec) rather than cgo, so no C toolchain is needed. Also
+# vets to catch any darwin-only import slipping past the build tags.
+cross:
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go vet ./...
+
+# Install the station on a Linux/Pi host. Run this ON the Pi (it builds
+# into ~/.local/bin and renders a systemd-user unit); see
+# ops/install-station-linux.sh.
+install-linux:
+	./ops/install-station-linux.sh
