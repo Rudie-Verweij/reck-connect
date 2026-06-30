@@ -1386,11 +1386,19 @@ html, body, #app {
 /* === Forms (V1) === */
 
 .settings-shell {
+  /* flex-start + height: 100% + overflow-y: auto. The parent #app uses
+     `overflow: hidden`, so `.settings-shell` MUST have a fixed height
+     (not min-height) to become its own scroll container; otherwise tall
+     content gets clipped by #app instead of scrolling. Centring is
+     sacrificed when content overflows; the card still hugs the
+     horizontal center via justify-content. */
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   height: 100%;
   padding: 2.5rem;
+  box-sizing: border-box;
+  overflow-y: auto;
   background: var(--app-bg);
 }
 
