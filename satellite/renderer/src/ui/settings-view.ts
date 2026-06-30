@@ -12,6 +12,7 @@ import {
   SEEDED_EXTENSIONLESS_FILENAMES,
   setExtensionlessAllowlist,
 } from "../viewer/LinkDetector";
+import { loadTtsSettings, saveTtsSettings } from "../tts/ttsSettings";
 import { confirmDialog } from "./new-pane-dialog";
 
 function escapeAttr(s: string): string {
@@ -94,6 +95,7 @@ export async function renderSettings(
   // preserve whatever they had.
   const savedLocalAutoStart = existing?.local?.autoStart ?? true;
   const savedHoverToFocus = await loadHoverToFocus();
+  const ttsSettings = await loadTtsSettings();
   root.innerHTML = `
     <div class="settings-shell">
       <div class="settings-card">
@@ -144,6 +146,19 @@ export async function renderSettings(
         <p style="margin-top:0.25rem;margin-left:1.5rem;color:var(--text-secondary);font-size:0.85rem;">
           Move the cursor over a pane to focus it, no click needed. Suppresses during text selection, drags, and right after typing.
         </p>
+        <div class="divider" style="margin-top:1.5rem;"></div>
+        <h3>Text to speech</h3>
+        <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
+          Colour of the highlight that tracks the word being read aloud. Set one per appearance mode; the matching colour is used automatically when you switch between light and dark.
+        </p>
+        <div class="tts-color-row">
+          <label for="s-tts-color-light">Light mode</label>
+          <input id="s-tts-color-light" type="color" value="${escapeAttr(ttsSettings.highlightColorLight)}" />
+        </div>
+        <div class="tts-color-row">
+          <label for="s-tts-color-dark">Dark mode</label>
+          <input id="s-tts-color-dark" type="color" value="${escapeAttr(ttsSettings.highlightColorDark)}" />
+        </div>
         <div class="divider" style="margin-top:1.5rem;"></div>
         <h3>File viewer allowed paths</h3>
         <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
@@ -239,6 +254,19 @@ export async function renderSettings(
       },
     });
     await saveHoverToFocus(hoverToFocus);
+
+    // Persist the TTS highlight colours. Reload first so a voice/rate the
+    // control bar may have changed since this panel opened isn't clobbered
+    // by the render-time snapshot.
+    const ttsLight = (root.querySelector("#s-tts-color-light") as HTMLInputElement).value;
+    const ttsDark = (root.querySelector("#s-tts-color-dark") as HTMLInputElement).value;
+    const liveTts = await loadTtsSettings();
+    await saveTtsSettings({
+      ...liveTts,
+      highlightColorLight: ttsLight,
+      highlightColorDark: ttsDark,
+    });
+
     // Bounce the local daemon so a port change (or a fresh-install
     // first-save) picks up immediately rather than waiting for the
     // next Satellite restart. The spawn registry keys by host so
