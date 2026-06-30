@@ -273,6 +273,20 @@ export class PaneLayout {
     return l.tabs.find((t) => t.id === l.activeTabId) ?? l.tabs[0] ?? null;
   }
 
+  // Resolve the active leaf's focused terminal record (term + wrapper +
+  // tab), or null when the active tab isn't a terminal. The TTS subsystem
+  // uses this to wrap the live xterm pane as a speak surface.
+  getActiveTerminalRecord(): { term: TerminalPane; wrapper: HTMLElement; tab: Tab } | null {
+    if (!this.activeLeafId) return null;
+    const view = this.views.get(this.activeLeafId);
+    if (!view) return null;
+    const tab = this.getActiveTabForLeaf(this.activeLeafId);
+    if (!tab) return null;
+    const record = view.terminals.get(tab.id);
+    if (!record || record.kind !== "terminal") return null;
+    return { term: record.term, wrapper: record.wrapper, tab: record.tab };
+  }
+
   focusLeaf(leafId: string) {
     // Defensive: hover-focus's dwell path can fire on a leaf that was
     // removed during setTree between request and apply. Early-return

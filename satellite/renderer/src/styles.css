@@ -2697,6 +2697,87 @@ html, body, #app {
   /* Inherit item styling from the static picker. */
 }
 
+/* ── Text-to-speech control bar (floating per-pane overlay) ───────── */
+
+.tts-control-bar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--tts-control-bg, rgba(30, 30, 32, 0.92));
+  border: 1px solid var(--tts-control-border, rgba(255, 255, 255, 0.16));
+  color: var(--tts-control-text, #f3f4f6);
+  font-size: 12px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.tts-control-bar[hidden] { display: none !important; }
+
+.tts-control-bar .tts-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 0;
+}
+
+.tts-control-bar .tts-btn:hover {
+  background: var(--tts-control-accent, #60a5fa);
+  color: white;
+}
+
+.tts-control-bar .tts-btn:focus-visible {
+  outline: 2px solid var(--tts-control-accent, #60a5fa);
+  outline-offset: 1px;
+}
+
+.tts-control-bar .tts-btn[hidden] { display: none; }
+
+.tts-control-bar .tts-rate-slider {
+  width: 90px;
+  margin: 0;
+  accent-color: var(--tts-control-accent, #60a5fa);
+}
+
+.tts-control-bar .tts-rate-label {
+  min-width: 32px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  opacity: 0.85;
+}
+
+.tts-control-bar .tts-voice-label {
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.7;
+  border-left: 1px solid var(--tts-control-border, rgba(255, 255, 255, 0.16));
+  padding-left: 8px;
+  margin-left: 2px;
+}
+
+.tts-control-bar .tts-voice-label:empty {
+  display: none;
+}
+
 /* Speak/TTS control bar inside the file viewer popup. Pinned TOP-right
    of the popup, JUST BELOW the 38px header so the Edit-source toggle
    and the bar can both live in the upper-right corner without overlap.
@@ -2724,8 +2805,8 @@ html, body, #app {
 
 /* The viewer root needs a positioning context so the absolute-positioned
    speak bar stays anchored to the popup chrome (not the document or the
-   inner scrolling body). The previous P3 rule scoped this to `.file-viewer-body`
-   which scrolled, so the bar rode up off-screen on long files. */
+   inner scrolling body — anchoring to the scrolling body would let the
+   bar ride up off-screen on long files). */
 .file-viewer-root {
   position: relative;
 }

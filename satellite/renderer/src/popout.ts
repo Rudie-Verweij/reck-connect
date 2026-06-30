@@ -23,6 +23,8 @@ import type { HostRef } from "./host";
 // unchanged. Theme is loaded the same way for parity with the main
 // window's first paint.
 import { loadSettings, loadTheme } from "./config";
+import { initTts } from "./tts/initTts";
+import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
 
 const DEFAULT_LOCAL_PORT = 7315;
 
@@ -165,6 +167,37 @@ async function bootPopout(): Promise<void> {
       });
     },
   });
+
+  // Wire the unified TTS subsystem into the popout. Detached panes share
+  // the same controller + control bar + shortcuts as the main window.
+  void (async () => {
+    try {
+      await initTts({
+        getActiveSpeakSurface: () => {
+          const xterm = term.getXterm();
+          const xtermEl = (xterm.element as HTMLElement | undefined) ?? body;
+          const dims = (xterm as unknown as {
+            _core?: { _renderService?: { dimensions?: {
+              css?: { cell?: { width?: number; height?: number } };
+              actualCellWidth?: number;
+              actualCellHeight?: number;
+            } } };
+          })._core?._renderService?.dimensions;
+          const cellWidth = dims?.css?.cell?.width ?? dims?.actualCellWidth ?? 8;
+          const cellHeight = dims?.css?.cell?.height ?? dims?.actualCellHeight ?? 16;
+          return new TerminalPaneAdapter({
+            term: xterm as unknown as ConstructorParameters<typeof TerminalPaneAdapter>[0]["term"],
+            xtermEl,
+            containerEl: body,
+            cellWidth,
+            cellHeight,
+          });
+        },
+      });
+    } catch (e) {
+      console.warn("[popout] TTS disabled:", e);
+    }
+  })();
   // First-paint guard: even though TerminalPane installs a
   // ResizeObserver, it skips fitting when the container measures 0×0
   // (FitAddon would otherwise clamp to 2×1 and ship that to the PTY).

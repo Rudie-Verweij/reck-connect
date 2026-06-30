@@ -48,6 +48,8 @@ import { installShortcuts } from "./ui/shortcuts";
 import { renderSettings } from "./ui/settings-view";
 import { addProjectFlow } from "./ui/add-project-dialog";
 import { confirmDeleteProject } from "./ui/delete-project-dialog";
+import { initTts } from "./tts/initTts";
+import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
 import {
   addTab,
   allLeaves,
@@ -1806,6 +1808,47 @@ export async function boot(splash?: StartupSplashController) {
       if (p) void selectProject(p.id);
     },
   });
+
+  // Text-to-speech subsystem. Resolves the active TerminalPane via the
+  // layout, listens for the speak shortcuts, and renders the floating
+  // control bar anchored to the active pane wrapper. Failures here are
+  // non-fatal — the rest of the app should still boot if the browser
+  // doesn't expose speechSynthesis (e.g. headless test harness).
+  void (async () => {
+    try {
+      await initTts({
+        getActiveSpeakSurface: () => {
+          const rec = layout.getActiveTerminalRecord();
+          if (!rec) return null;
+          // Wrap the active xterm pane in a TerminalPaneAdapter so the
+          // TtsController treats it as a generic SpeakSurfaceAdapter,
+          // identical to how the file-viewer popup wraps its markdown /
+          // CodeMirror surfaces. Cell metrics are read off xterm's
+          // render service when available, with a defaulted fallback.
+          const term = rec.term.getXterm();
+          const xtermEl = (term.element as HTMLElement | undefined) ?? rec.wrapper;
+          const dims = (term as unknown as {
+            _core?: { _renderService?: { dimensions?: {
+              css?: { cell?: { width?: number; height?: number } };
+              actualCellWidth?: number;
+              actualCellHeight?: number;
+            } } };
+          })._core?._renderService?.dimensions;
+          const cellWidth = dims?.css?.cell?.width ?? dims?.actualCellWidth ?? 8;
+          const cellHeight = dims?.css?.cell?.height ?? dims?.actualCellHeight ?? 16;
+          return new TerminalPaneAdapter({
+            term: term as unknown as ConstructorParameters<typeof TerminalPaneAdapter>[0]["term"],
+            xtermEl,
+            containerEl: rec.wrapper,
+            cellWidth,
+            cellHeight,
+          });
+        },
+      });
+    } catch (e) {
+      console.warn("[tts] disabled:", e);
+    }
+  })();
 
   async function selectProject(projectId: string) {
     if (missionControlActive) hideMissionControl();
