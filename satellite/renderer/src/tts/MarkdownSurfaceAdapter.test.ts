@@ -82,6 +82,20 @@ describe("MarkdownSurfaceAdapter", () => {
     expect(container.querySelector(".tts-highlight-overlay")).toBeTruthy();
   });
 
+  it("setTheme colours the overlay (applied even when set before the overlay exists)", () => {
+    const { container, body } = makeBodyWithHTML("<p>Hello world!</p>");
+    const adapter = new MarkdownSurfaceAdapter({ container, body });
+    adapter.setTheme({ backgroundColor: "rgb(10, 20, 30)" });
+    adapter.resolveSpokenChunk();
+    adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "Hello", charIndex: 0 });
+    const overlay = container.querySelector<HTMLDivElement>(".tts-highlight-overlay");
+    expect(overlay).not.toBeNull();
+    expect(overlay!.style.background).toBe("rgb(10, 20, 30)");
+    // And a later setTheme recolours the live overlay.
+    adapter.setTheme({ backgroundColor: "rgb(40, 50, 60)" });
+    expect(overlay!.style.background).toBe("rgb(40, 50, 60)");
+  });
+
   it("clearHighlight removes the overlay", () => {
     const { container, body } = makeBodyWithHTML("<p>Hello world!</p>");
     const adapter = new MarkdownSurfaceAdapter({ container, body });

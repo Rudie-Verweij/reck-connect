@@ -43,6 +43,21 @@ describe("resolveTtsTheme", () => {
   it("returns the light palette when isDark=false", () => {
     expect(resolveTtsTheme(false)).toBe(TTS_THEME_LIGHT);
   });
+
+  it("overrides backgroundColor with the chosen colour per mode", () => {
+    const dark = resolveTtsTheme(true, { light: "#aaa111", dark: "#bbb222" });
+    expect(dark.backgroundColor).toBe("#bbb222");
+    const light = resolveTtsTheme(false, { light: "#aaa111", dark: "#bbb222" });
+    expect(light.backgroundColor).toBe("#aaa111");
+    // Control-bar chrome is untouched by the override.
+    expect(dark.controlAccent).toBe(TTS_THEME_DARK.controlAccent);
+  });
+
+  it("falls back to the default palette when the override for the mode is absent", () => {
+    expect(resolveTtsTheme(true, { light: "#aaa111" }).backgroundColor).toBe(
+      TTS_THEME_DARK.backgroundColor,
+    );
+  });
 });
 
 describe("createThemeWatcher (data-theme attribute on <html>)", () => {

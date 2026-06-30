@@ -15,6 +15,7 @@ import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
 import type { SpokenChunk, TtsBoundary, RangeMapEntry } from "./TtsEngine";
 import type {
   SpeakSurfaceAdapter,
+  SurfaceHighlightTheme,
   SurfaceKind,
   SurfacePoint,
 } from "./SpeakSurfaceAdapter";
@@ -144,6 +145,22 @@ export class CodeMirrorSurfaceAdapter implements SpeakSurfaceAdapter {
       this.view.dispatch({ effects: clearHighlight.of(null) });
     } catch {
       // see highlightBoundary.
+    }
+  }
+
+  setTheme(theme: SurfaceHighlightTheme): void {
+    if (this.disposed) return;
+    if (this.isViewDestroyed()) return;
+    // The highlight is a CSS-class decoration (.cm-tts-highlight); drive its
+    // colour through a custom property on the editor root so the class can
+    // pick it up (with a translucent mix — see styles.css).
+    try {
+      this.view.dom.style.setProperty(
+        "--cm-tts-highlight-bg",
+        theme.backgroundColor,
+      );
+    } catch {
+      // view.dom may be unavailable on a destroyed view; ignore.
     }
   }
 

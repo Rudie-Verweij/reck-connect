@@ -80,6 +80,9 @@ export class TtsController {
     this.opts.engine.start(chunk, { voice, rate: this.settings.rate });
     this.state = "playing";
     this.currentSurface = surface;
+    // Push the configured highlight colour to the surface so its highlight
+    // uses the user's choice (surfaces are built without a theme).
+    surface.setTheme?.(this.theme);
 
     this.ensureBar(surface);
     this.currentBar?.show();
@@ -134,6 +137,8 @@ export class TtsController {
   setTheme(theme: TtsTheme): void {
     this.theme = theme;
     this.currentBar?.setTheme(theme);
+    // Recolour the live highlight too (e.g. on a light/dark toggle mid-read).
+    this.currentSurface?.setTheme?.(theme);
   }
 
   isActive(): boolean {

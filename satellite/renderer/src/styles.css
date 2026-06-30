@@ -2799,7 +2799,15 @@ html, body, #app {
    highlighter (rgba(255, 255, 0, 0.6) — the terminal-pane theme
    default). Slight rounding to match the markdown overlay style. */
 .cm-tts-highlight {
-  background: rgba(255, 235, 59, 0.6);
+  /* Colour is the user-configured highlight, pushed as --cm-tts-highlight-bg
+     by CodeMirrorSurfaceAdapter.setTheme(); mixed with transparent so the
+     text reads through the tint (matching the other surfaces' opacity).
+     Falls back to the neutral yellow when no theme has been pushed yet. */
+  background: color-mix(
+    in srgb,
+    var(--cm-tts-highlight-bg, #ffeb3b) 55%,
+    transparent
+  );
   border-radius: 2px;
 }
 

@@ -197,4 +197,20 @@ describe("TerminalPaneAdapter", () => {
     adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "alpha", charIndex: 0 });
     expect(adapter.__highlights()).toEqual([]);
   });
+
+  it("setTheme recolours the highlight overlay (configured colour)", () => {
+    const term = fakeTerm({ lines: ["alpha"] });
+    const adapter = new TerminalPaneAdapter({
+      term,
+      xtermEl: fakeXtermEl(),
+      containerEl: fakeContainer(),
+      cellWidth: 8,
+      cellHeight: 16,
+    });
+    adapter.setTheme({ backgroundColor: "rgb(9, 8, 7)" });
+    adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "alpha", charIndex: 0 });
+    const overlay = document.querySelector<HTMLDivElement>(".reck-tts-highlight");
+    expect(overlay).not.toBeNull();
+    expect(overlay!.style.backgroundColor).toBe("rgb(9, 8, 7)");
+  });
 });
