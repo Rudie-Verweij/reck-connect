@@ -19,6 +19,11 @@ export interface ScrollSurface {
   scrollToFraction(fraction: number): void;
   /** Subscribe to scroll changes; returns an unsubscribe thunk. */
   onScroll(cb: () => void): () => void;
+  /** Optional: fires when the surface re-renders without a scroll (new
+   *  output, in-place TUI redraw, font/size change). The scrollbar uses this
+   *  to recompute geometry — e.g. clear its disabled state once scrollback
+   *  grows — WITHOUT flashing into view. Returns an unsubscribe thunk. */
+  onRender?(cb: () => void): () => void;
 }
 
 /** A DOM scroll container (markdown `.file-viewer-body`, CodeMirror
@@ -46,6 +51,7 @@ interface ScrollableTerminal {
   buffer: { active: { length: number; baseY: number; viewportY: number } };
   scrollToLine(line: number): void;
   onScroll(cb: () => void): { dispose(): void };
+  onRender?(cb: () => void): { dispose(): void };
 }
 
 /** An xterm terminal. Scroll position is line-based: `viewportY` is the
@@ -66,6 +72,12 @@ export function terminalScrollSurface(term: ScrollableTerminal): ScrollSurface {
       const sub = term.onScroll(cb);
       return () => sub.dispose();
     },
+    onRender: term.onRender
+      ? (cb) => {
+          const sub = term.onRender!(cb);
+          return () => sub.dispose();
+        }
+      : undefined,
   };
 }
 

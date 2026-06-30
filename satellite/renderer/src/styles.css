@@ -809,10 +809,14 @@ html, body, #app {
 
 .pane-terminal.hidden { display: none; }
 
-/* Hide xterm's scrollbar — it renders as a white strip on dark mode */
+/* Hide xterm's native scrollbar — it renders as a white strip on dark mode.
+   Hide only the CHROME (scrollbar-width / ::-webkit-scrollbar); do NOT force
+   `overflow: hidden`, which suppresses xterm's wheel → scroll → onScroll
+   pipeline and so kept the custom overlay scrollbar from ever appearing and
+   the search highlight from repositioning on wheel. Keeping the viewport
+   scrollable lets those fire; the custom .reck-scrollbar is the visible one. */
 .pane-terminal .xterm-viewport {
   scrollbar-width: none;
-  overflow: hidden !important;
 }
 .pane-terminal .xterm-viewport::-webkit-scrollbar {
   width: 0 !important;

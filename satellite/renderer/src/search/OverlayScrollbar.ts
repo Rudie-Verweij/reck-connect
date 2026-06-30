@@ -97,6 +97,11 @@ export function createOverlayScrollbar(
   }
 
   function onWheel(): void {
+    // Recompute first: the bar may still be `--disabled` (display:none) from
+    // construction (the pane was empty then). A wheel gesture is the signal
+    // that the user wants to scroll, so clear the disabled state if there's
+    // now scrollback, then flash into view.
+    update();
     flashShow();
   }
 
@@ -130,8 +135,21 @@ export function createOverlayScrollbar(
   }
 
   const offScroll = opts.surface.onScroll(onScroll);
+  // Recompute geometry (and clear `--disabled` once scrollback exists) when
+  // the surface re-renders, WITHOUT flashing the bar into view — output and
+  // in-place TUI redraws must not pop the scrollbar; only real scroll/wheel
+  // does that.
+  const offRender = opts.surface.onRender?.(() => update()) ?? null;
   opts.host.addEventListener("wheel", onWheel, { passive: true });
   thumb.addEventListener("pointerdown", onPointerDown);
+
+  // Resize of the host (pane re-layout, font change) changes the metrics too.
+  // Guarded — jsdom has no ResizeObserver.
+  let resizeObs: ResizeObserver | null = null;
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObs = new ResizeObserver(() => update());
+    resizeObs.observe(opts.host);
+  }
 
   update();
 
@@ -144,6 +162,8 @@ export function createOverlayScrollbar(
       disposed = true;
       if (hideTimer) clearTimeout(hideTimer);
       offScroll();
+      offRender?.();
+      resizeObs?.disconnect();
       opts.host.removeEventListener("wheel", onWheel);
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
