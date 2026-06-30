@@ -1,27 +1,26 @@
 import type { TtsBoundary } from "./TtsEngine";
 import { computeHighlightRect } from "./highlightGeometry";
+import { relocateWord, type BufferTextLine } from "./wordLocator";
 
-// XtermHighlighter — paints the TTS reading highlight as a DOM overlay
-// anchored to an xterm marker, repositioned on every render/scroll/resize.
+// XtermHighlighter — paints the TTS reading highlight as a DOM overlay whose
+// position is RE-FOUND in the live terminal text on every render.
 //
-// Why a DOM overlay rather than an xterm decoration: a decoration with
-// `backgroundColor` + `layer:"bottom"` is painted by the WebGL renderer as
-// a cell background keyed by ON-SCREEN cell, refreshed only for dirty rows.
-// It therefore stays at a fixed screen position on scroll and is cleared on
-// resize. A self-positioned overlay, recomputed from the marker's live
-// buffer line minus the viewport scroll, tracks the text instead — and is
-// renderer-agnostic. See highlightGeometry.ts for the (pure) placement math.
+// Why not anchor to a buffer line: Claude's TUI runs in mouse-tracking mode
+// and repaints cells in place (scrolling the wheel does NOT scroll xterm's
+// viewport — viewportY never moves). A highlight pinned to a buffer line ends
+// up pointing at whatever the TUI later redrew there. Instead we treat the
+// spoken word like a live search: each render we locate the word in the
+// current visible buffer and move the overlay to it, disambiguating repeated
+// words by reading-order continuity (see wordLocator). When the word isn't
+// visible we hide rather than paint a stale box. This tracks the text through
+// in-place repaints AND ordinary scrolls, and is renderer-agnostic.
 
 export interface HighlighterDisposable {
   dispose(): void;
 }
 
-export interface HighlighterMarker {
-  /** Live absolute buffer line; xterm reports a disposed/evicted marker as
-   *  a negative line. */
-  readonly line: number;
-  readonly isDisposed: boolean;
-  dispose(): void;
+export interface HighlighterBufferLine {
+  translateToString(trimRight?: boolean): string;
 }
 
 export interface HighlighterTerminal {
@@ -31,9 +30,14 @@ export interface HighlighterTerminal {
    *  one isn't supplied explicitly. */
   readonly element?: HTMLElement;
   buffer: {
-    active: { baseY: number; cursorY: number; viewportY: number };
+    active: {
+      /** Buffer line currently at the top of the viewport. */
+      viewportY: number;
+      /** Total lines in the buffer (scrollback + viewport). */
+      length: number;
+      getLine(index: number): HighlighterBufferLine | undefined;
+    };
   };
-  registerMarker(cursorYOffset?: number): HighlighterMarker | undefined;
   onRender(listener: () => void): HighlighterDisposable;
   onScroll(listener: () => void): HighlighterDisposable;
   onResize?(listener: () => void): HighlighterDisposable;
@@ -77,8 +81,11 @@ export class XtermHighlighter {
   private readonly measureCell: () => CellMetrics;
   private readonly doc: Document | null;
   private overlay: HTMLDivElement | null = null;
-  private activeMarker: HighlighterMarker | null = null;
   private activeBoundary: TtsBoundary | null = null;
+  // Last found position — the continuity hint that disambiguates repeated
+  // words. Reset between reads so a new read starts from its own snapshot.
+  private lastLine: number | null = null;
+  private lastCol: number | null = null;
   private subs: HighlighterDisposable[] = [];
   private disposed = false;
 
@@ -100,29 +107,22 @@ export class XtermHighlighter {
 
   highlight(boundary: TtsBoundary): void {
     if (this.disposed) return;
-    this.disposeMarker();
-
-    const cursorAbs =
-      this.term.buffer.active.baseY + this.term.buffer.active.cursorY;
-    const cursorYOffset = boundary.line - cursorAbs;
-    const marker = this.term.registerMarker(cursorYOffset);
-    if (!marker) {
-      // Couldn't anchor (line outside the buffer) — withdraw rather than
-      // paint a stale highlight, and release any listeners from the prior
-      // anchored word so tracking stays strictly episode-scoped (the next
-      // successful highlight() re-subscribes).
-      this.unsubscribe();
-      this.activeBoundary = null;
-      this.hide();
-      return;
+    const prev = this.activeBoundary;
+    if (this.lastLine === null) {
+      // First word of the read: seed the continuity hint from the snapshot
+      // (the freshest guess we have before the TUI repaints).
+      this.lastLine = boundary.line;
+      this.lastCol = boundary.col;
+    } else if (prev) {
+      // Advance the hint past the previously-spoken word so the next word —
+      // even an identical repeat ("the ... the") — is searched for FORWARD
+      // of where we just were, not re-selecting the same occurrence.
+      this.lastCol = (this.lastCol ?? 0) + prev.word.length;
     }
-    this.activeMarker = marker;
     this.activeBoundary = boundary;
-    // Subscribe lazily, only while a highlight is live. The adapter that
-    // owns this highlighter is created fresh per playback and released via
-    // clear()/dispose() — keeping the listeners episode-scoped means a
-    // finished read leaves no listeners on the shared terminal and no
-    // orphaned overlay in the DOM.
+    // Subscribe lazily, only while a highlight is live. The adapter that owns
+    // this highlighter is created fresh per playback and released via
+    // clear()/dispose() — episode-scoped listeners leave nothing behind.
     this.subscribe();
     this.reposition();
   }
@@ -130,8 +130,9 @@ export class XtermHighlighter {
   clear(): void {
     if (this.disposed) return;
     this.unsubscribe();
-    this.disposeMarker();
     this.activeBoundary = null;
+    this.lastLine = null;
+    this.lastCol = null;
     this.removeOverlay();
   }
 
@@ -139,8 +140,9 @@ export class XtermHighlighter {
     if (this.disposed) return;
     this.disposed = true;
     this.unsubscribe();
-    this.disposeMarker();
     this.activeBoundary = null;
+    this.lastLine = null;
+    this.lastCol = null;
     this.removeOverlay();
   }
 
@@ -149,20 +151,28 @@ export class XtermHighlighter {
   private reposition(): void {
     if (this.disposed) return;
     const boundary = this.activeBoundary;
-    const marker = this.activeMarker;
-    if (!boundary || !marker || marker.isDisposed) {
+    if (!boundary) {
       this.hide();
       return;
     }
 
+    const hit = this.locate(boundary.word);
+    this.diag(boundary.word, hit);
+    if (!hit) {
+      this.hide();
+      return;
+    }
+    this.lastLine = hit.line;
+    this.lastCol = hit.col;
+
     const cell = this.measureCell();
     const rect = computeHighlightRect({
-      markerLine: marker.line,
+      markerLine: hit.line,
       viewportY: this.term.buffer.active.viewportY,
       rows: this.term.rows,
       cols: this.term.cols,
-      col: boundary.col,
-      len: boundary.len,
+      col: hit.col,
+      len: boundary.word.length,
       cellWidth: cell.width,
       cellHeight: cell.height,
     });
@@ -181,6 +191,26 @@ export class XtermHighlighter {
     el.style.backgroundColor = theme.backgroundColor;
     if (theme.foregroundColor) el.style.color = theme.foregroundColor;
     el.style.display = "block";
+  }
+
+  /** Re-find the word in the current visible buffer, or null if it isn't
+   *  on screen. Only the visible rows are searched — an off-screen word can't
+   *  be highlighted anyway, and it keeps the per-render cost tiny. */
+  private locate(word: string): { line: number; col: number } | null {
+    const ba = this.term.buffer.active;
+    const top = Math.max(0, ba.viewportY);
+    const bottom = Math.min(ba.viewportY + this.term.rows - 1, ba.length - 1);
+    const lines: BufferTextLine[] = [];
+    for (let i = top; i <= bottom; i++) {
+      const text = ba.getLine(i)?.translateToString(true) ?? "";
+      lines.push({ line: i, text });
+    }
+    return relocateWord(
+      lines,
+      word,
+      this.lastLine ?? top,
+      this.lastCol ?? 0,
+    );
   }
 
   private ensureOverlay(): HTMLDivElement | null {
@@ -203,11 +233,21 @@ export class XtermHighlighter {
     if (this.overlay) this.overlay.style.display = "none";
   }
 
+  // TEMP DIAGNOSTIC — confirms the live re-find lands on the spoken word.
+  // Deduped so the constant onRender stream doesn't flood. Remove before commit.
+  private lastDiag = "";
+  private diag(word: string, hit: { line: number; col: number } | null): void {
+    const key = hit ? `HIT "${word}" -> line=${hit.line} col=${hit.col}` : `MISS "${word}"`;
+    if (key === this.lastDiag) return;
+    this.lastDiag = key;
+    // eslint-disable-next-line no-console
+    console.log(`[hl-diag] ${key}`);
+  }
+
   private subscribe(): void {
     if (this.subs.length > 0) return; // already tracking
-    // Reposition whenever the viewport changes: scroll, new output
-    // (render), and resize are the three cases where a fixed-screen
-    // highlight would drift off the word.
+    // Reposition whenever the terminal repaints: render (in-place TUI redraw
+    // or new output), scroll, and resize are the cases where the word moves.
     this.subs.push(this.term.onRender(() => this.reposition()));
     this.subs.push(this.term.onScroll(() => this.reposition()));
     if (this.term.onResize) {
@@ -224,13 +264,6 @@ export class XtermHighlighter {
     if (this.overlay) {
       this.overlay.remove();
       this.overlay = null;
-    }
-  }
-
-  private disposeMarker(): void {
-    if (this.activeMarker) {
-      this.activeMarker.dispose();
-      this.activeMarker = null;
     }
   }
 }

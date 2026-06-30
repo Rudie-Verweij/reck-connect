@@ -5,7 +5,6 @@ import {
   type HighlightTheme,
 } from "./XtermHighlighter";
 
-// A fireable event emitter standing in for xterm's onRender/onScroll/onResize.
 function makeEmitter() {
   const listeners = new Set<() => void>();
   return {
@@ -22,36 +21,20 @@ function makeEmitter() {
   };
 }
 
-interface FakeMarker {
-  id: number;
-  _line: number;
-  isDisposed: boolean;
-  readonly line: number;
-  dispose(): void;
-}
-
+// Fake xterm whose buffer is an absolute-indexed array of line strings. The
+// visible window is viewportY .. viewportY+rows-1.
 function fakeTerm(
-  init: Partial<{
-    baseY: number;
-    cursorY: number;
-    viewportY: number;
-    cols: number;
-    rows: number;
-  }> = {},
+  init: { lines?: string[]; viewportY?: number; cols?: number; rows?: number } = {},
 ) {
   const state = {
-    baseY: init.baseY ?? 100,
-    cursorY: init.cursorY ?? 5,
-    viewportY: init.viewportY ?? 100,
+    lines: init.lines ?? [],
+    viewportY: init.viewportY ?? 0,
     cols: init.cols ?? 80,
     rows: init.rows ?? 24,
   };
   const render = makeEmitter();
   const scroll = makeEmitter();
   const resize = makeEmitter();
-  const markers: FakeMarker[] = [];
-  let markerSeq = 0;
-  const cursorAbs = () => state.baseY + state.cursorY;
 
   const term: HighlighterTerminal = {
     get cols() {
@@ -62,31 +45,17 @@ function fakeTerm(
     },
     buffer: {
       active: {
-        get baseY() {
-          return state.baseY;
-        },
-        get cursorY() {
-          return state.cursorY;
-        },
         get viewportY() {
           return state.viewportY;
         },
+        get length() {
+          return state.lines.length;
+        },
+        getLine(i: number) {
+          const t = state.lines[i];
+          return t === undefined ? undefined : { translateToString: () => t };
+        },
       },
-    },
-    registerMarker(offset = 0) {
-      const m: FakeMarker = {
-        id: ++markerSeq,
-        _line: cursorAbs() + offset,
-        isDisposed: false,
-        get line() {
-          return this.isDisposed ? -1 : this._line;
-        },
-        dispose() {
-          this.isDisposed = true;
-        },
-      };
-      markers.push(m);
-      return m;
     },
     onRender: render.on,
     onScroll: scroll.on,
@@ -96,7 +65,6 @@ function fakeTerm(
   return {
     term,
     state,
-    markers,
     fireRender: () => render.fire(),
     fireScroll: () => scroll.fire(),
     fireResize: () => resize.fire(),
@@ -112,7 +80,6 @@ function setup(
   const env = fakeTerm(init);
   const parent = document.createElement("div");
   document.body.appendChild(parent);
-  // Fixed cell metrics, mutable so resize can be simulated.
   const cell = { width: 8, height: 16 };
   let currentTheme = theme;
   const h = new XtermHighlighter(env.term, () => currentTheme, {
@@ -133,148 +100,163 @@ function setup(
   };
 }
 
-const B = (line: number, col: number, len: number) => ({
+const B = (line: number, col: number, word: string) => ({
   line,
   col,
-  len,
-  word: "x".repeat(len),
+  len: word.length,
+  word,
   charIndex: 0,
 });
 
-describe("XtermHighlighter.highlight — overlay placement", () => {
+describe("XtermHighlighter — re-find placement", () => {
   let s: ReturnType<typeof setup>;
-  beforeEach(() => {
-    s = setup({ baseY: 100, cursorY: 5, viewportY: 100 }); // cursorAbs 105
-  });
   afterEach(() => {
     s.h.dispose();
     s.parent.remove();
   });
 
-  it("creates a visible overlay positioned at the word", () => {
-    s.h.highlight(B(102, 6, 4)); // line 102 → screen row 2 (viewportY 100)
+  it("places the overlay at the word's CURRENT position in the buffer", () => {
+    s = setup({ lines: ["alpha beta gamma"], viewportY: 0 });
+    s.h.highlight(B(0, 11, "gamma"));
     const el = s.overlay();
     expect(el).not.toBeNull();
     expect(el!.style.display).toBe("block");
-    expect(el!.style.top).toBe("32px"); // row 2 * 16
-    expect(el!.style.left).toBe("48px"); // col 6 * 8
-    expect(el!.style.width).toBe("32px"); // 4 cells * 8
-    expect(el!.style.height).toBe("16px");
+    expect(el!.style.top).toBe("0px"); // row 0
+    expect(el!.style.left).toBe("88px"); // col 11 * 8
+    expect(el!.style.width).toBe("40px"); // 5 cells * 8
     expect(el!.style.backgroundColor).toBe("rgb(1, 2, 3)");
   });
 
-  it("anchors the marker at the word's absolute buffer line", () => {
-    s.h.highlight(B(102, 6, 4));
-    expect(s.markers).toHaveLength(1);
-    expect(s.markers[0].line).toBe(102); // cursorAbs 105 + offset(-3)
+  it("ignores a STALE snapshot column and finds the real position", () => {
+    // boundary.col=99 is where the word WAS at snapshot time; the live buffer
+    // has it at col 3. The highlight must land on the real position.
+    s = setup({ lines: ["xx gamma here"], viewportY: 0 });
+    s.h.highlight(B(0, 99, "gamma"));
+    expect(s.overlay()!.style.left).toBe("24px"); // col 3 * 8, not col 99
+  });
+
+  it("hides when the word isn't visible at all", () => {
+    s = setup({ lines: ["nothing to see"], viewportY: 0 });
+    s.h.highlight(B(0, 0, "absent"));
+    const el = s.overlay();
+    expect(el === null || el.style.display === "none").toBe(true);
   });
 });
 
-describe("XtermHighlighter — scroll / render / resize tracking", () => {
+describe("XtermHighlighter — tracking through repaint / scroll", () => {
   let s: ReturnType<typeof setup>;
-  beforeEach(() => {
-    s = setup({ baseY: 100, cursorY: 5, viewportY: 100 });
-  });
   afterEach(() => {
     s.h.dispose();
     s.parent.remove();
   });
 
-  it("moves the overlay DOWN when the viewport scrolls up", () => {
-    s.h.highlight(B(102, 6, 4));
+  it("follows the word when an in-place repaint moves it to another line", () => {
+    s = setup({ lines: ["", "", "guidance: here"], viewportY: 0 });
+    s.h.highlight(B(2, 0, "guidance:"));
     expect(s.overlay()!.style.top).toBe("32px"); // row 2
-    s.state.viewportY = 98; // scrolled up two lines
-    s.fireScroll();
-    expect(s.overlay()!.style.top).toBe("64px"); // row 4 — followed the text
-  });
-
-  it("repositions on a render event (e.g. new output) as well", () => {
-    s.h.highlight(B(102, 6, 4));
-    s.state.viewportY = 99;
+    // Claude repaints: the same word is now on line 0.
+    s.state.lines = ["guidance: here", "", ""];
     s.fireRender();
-    expect(s.overlay()!.style.top).toBe("48px"); // row 3
+    expect(s.overlay()!.style.top).toBe("0px"); // followed the text up
   });
 
-  it("realigns to new cell metrics on resize", () => {
-    s.h.highlight(B(102, 6, 4));
-    s.cell.width = 10;
-    s.cell.height = 20;
-    s.fireResize();
-    const el = s.overlay()!;
-    expect(el.style.left).toBe("60px"); // col 6 * 10
-    expect(el.style.top).toBe("40px"); // row 2 * 20
-    expect(el.style.width).toBe("40px"); // 4 cells * 10
+  it("follows a real viewport scroll (viewportY change)", () => {
+    const lines = ["L0", "L1", "L2", "L3", "L4", "needle here", "L6", "L7"];
+    s = setup({ lines, viewportY: 0, rows: 8 });
+    s.h.highlight(B(5, 0, "needle"));
+    expect(s.overlay()!.style.top).toBe(`${5 * 16}px`); // row 5
+    s.state.viewportY = 3; // scrolled down 3
+    s.fireScroll();
+    expect(s.overlay()!.style.top).toBe(`${2 * 16}px`); // row 2 now
   });
 
-  it("hides the overlay when the word scrolls off the bottom", () => {
-    s.h.highlight(B(102, 6, 4));
+  it("hides when the word scrolls out of the visible window", () => {
+    const lines = ["top needle", ...Array.from({ length: 40 }, (_, i) => `L${i}`)];
+    s = setup({ lines, viewportY: 0, rows: 8 });
+    s.h.highlight(B(0, 4, "needle"));
     expect(s.overlay()!.style.display).toBe("block");
-    s.state.viewportY = 70; // row would be 32 ≥ rows(24)
+    s.state.viewportY = 20; // line 0 no longer visible
     s.fireScroll();
     expect(s.overlay()!.style.display).toBe("none");
   });
 
-  it("hides the overlay when the word scrolls off the top", () => {
-    s.h.highlight(B(102, 6, 4));
-    s.state.viewportY = 110; // row would be -8
-    s.fireScroll();
-    expect(s.overlay()!.style.display).toBe("none");
-  });
-
-  it("re-shows the overlay when the word scrolls back into view", () => {
-    s.h.highlight(B(102, 6, 4));
-    s.state.viewportY = 110; // off-screen
-    s.fireScroll();
-    expect(s.overlay()!.style.display).toBe("none");
-    s.state.viewportY = 100; // back in view
-    s.fireScroll();
+  it("hides when the word is repainted away entirely", () => {
+    s = setup({ lines: ["guidance: here"], viewportY: 0 });
+    s.h.highlight(B(0, 0, "guidance:"));
     expect(s.overlay()!.style.display).toBe("block");
-    expect(s.overlay()!.style.top).toBe("32px");
-  });
-
-  it("hides when the underlying marker is disposed by the buffer", () => {
-    s.h.highlight(B(102, 6, 4));
-    s.markers[0].dispose(); // simulate scrollback eviction
+    s.state.lines = ["a totally different table row"];
     s.fireRender();
     expect(s.overlay()!.style.display).toBe("none");
   });
 
-  it("uses the latest theme colour on each reposition", () => {
-    s.h.highlight(B(102, 6, 4));
-    expect(s.overlay()!.style.backgroundColor).toBe("rgb(1, 2, 3)");
-    s.setTheme({ backgroundColor: "rgb(4, 5, 6)" });
-    s.fireScroll();
-    expect(s.overlay()!.style.backgroundColor).toBe("rgb(4, 5, 6)");
+  it("re-shows when the word reappears after being gone", () => {
+    s = setup({ lines: ["guidance: x"], viewportY: 0 });
+    s.h.highlight(B(0, 0, "guidance:"));
+    s.state.lines = ["something else"];
+    s.fireRender();
+    expect(s.overlay()!.style.display).toBe("none");
+    s.state.lines = ["now guidance: again"];
+    s.fireRender();
+    expect(s.overlay()!.style.display).toBe("block");
+    expect(s.overlay()!.style.left).toBe("32px"); // col 4 * 8
   });
 });
 
-describe("XtermHighlighter — lifecycle", () => {
-  it("disposes the previous marker and re-points to the new word", () => {
-    const s = setup({ baseY: 100, cursorY: 5, viewportY: 100 });
-    s.h.highlight(B(102, 0, 5));
-    s.h.highlight(B(103, 2, 3));
-    expect(s.markers[0].isDisposed).toBe(true);
-    expect(s.markers[1].isDisposed).toBe(false);
-    // Re-pointed: line 103 → row 3 → top 48; col 2 → left 16; 3 cells → 24.
-    const el = s.overlay()!;
-    expect(el.style.top).toBe("48px");
-    expect(el.style.left).toBe("16px");
-    expect(el.style.width).toBe("24px");
+describe("XtermHighlighter — repeated-word disambiguation", () => {
+  let s: ReturnType<typeof setup>;
+  afterEach(() => {
     s.h.dispose();
     s.parent.remove();
   });
 
-  it("clear() releases the overlay + marker + listeners, then stays usable", () => {
-    const s = setup();
-    s.h.highlight(B(102, 6, 4));
-    expect(s.scrollListeners()).toBe(1); // subscribed while live
+  it("advances to the NEXT occurrence for a repeated word", () => {
+    s = setup({ lines: ["the cat the dog"], viewportY: 0 });
+    s.h.highlight(B(0, 0, "the")); // first "the"
+    expect(s.overlay()!.style.left).toBe("0px");
+    s.h.highlight(B(0, 8, "the")); // second "the"
+    expect(s.overlay()!.style.left).toBe(`${8 * 8}px`); // advanced to col 8
+  });
+});
+
+describe("XtermHighlighter — resize realignment", () => {
+  it("realigns to new cell metrics on resize", () => {
+    const s = setup({ lines: ["alpha beta"], viewportY: 0 });
+    s.h.highlight(B(0, 6, "beta"));
+    expect(s.overlay()!.style.left).toBe(`${6 * 8}px`);
+    s.cell.width = 10;
+    s.cell.height = 20;
+    s.fireResize();
+    expect(s.overlay()!.style.left).toBe(`${6 * 10}px`);
+    expect(s.overlay()!.style.height).toBe("20px");
+    s.h.dispose();
+    s.parent.remove();
+  });
+});
+
+describe("XtermHighlighter — theme", () => {
+  it("uses the latest theme colour on each reposition", () => {
+    const s = setup({ lines: ["alpha"], viewportY: 0 });
+    s.h.highlight(B(0, 0, "alpha"));
+    expect(s.overlay()!.style.backgroundColor).toBe("rgb(1, 2, 3)");
+    s.setTheme({ backgroundColor: "rgb(4, 5, 6)" });
+    s.fireRender();
+    expect(s.overlay()!.style.backgroundColor).toBe("rgb(4, 5, 6)");
+    s.h.dispose();
+    s.parent.remove();
+  });
+});
+
+describe("XtermHighlighter — lifecycle / leak safety", () => {
+  it("subscribes while live and releases everything on clear()", () => {
+    const s = setup({ lines: ["alpha beta"], viewportY: 0 });
+    s.h.highlight(B(0, 6, "beta"));
+    expect(s.scrollListeners()).toBe(1);
+    expect(s.overlay()).not.toBeNull();
     s.h.clear();
-    expect(s.overlay()).toBeNull(); // overlay removed, not just hidden
-    expect(s.markers[0].isDisposed).toBe(true);
+    expect(s.overlay()).toBeNull(); // removed
     expect(s.scrollListeners()).toBe(0); // listeners released
-    // Re-highlighting after clear works (re-subscribes + repaints).
-    s.h.highlight(B(102, 0, 2));
-    expect(s.markers).toHaveLength(2);
+    // Re-highlighting after clear works.
+    s.h.highlight(B(0, 0, "alpha"));
     expect(s.scrollListeners()).toBe(1);
     expect(s.overlay()!.style.display).toBe("block");
     s.h.dispose();
@@ -282,39 +264,26 @@ describe("XtermHighlighter — lifecycle", () => {
   });
 
   it("dispose() removes the overlay, unsubscribes, and ignores later calls", () => {
-    const s = setup();
-    s.h.highlight(B(102, 6, 4));
-    expect(s.overlay()).not.toBeNull();
+    const s = setup({ lines: ["alpha"], viewportY: 0 });
+    s.h.highlight(B(0, 0, "alpha"));
     s.h.dispose();
-    expect(s.overlay()).toBeNull(); // removed from the parent
+    expect(s.overlay()).toBeNull();
     expect(s.renderListeners()).toBe(0);
     expect(s.scrollListeners()).toBe(0);
-    s.h.highlight(B(102, 6, 4)); // no-op after dispose
+    s.h.highlight(B(0, 0, "alpha")); // no-op after dispose
     expect(s.overlay()).toBeNull();
     s.parent.remove();
   });
 
-  it("no-ops without throwing when marker registration fails (off-screen)", () => {
-    const s = setup();
-    s.term.registerMarker = () => undefined;
-    expect(() => s.h.highlight(B(999, 0, 4))).not.toThrow();
-    const el = s.overlay();
-    // Either no overlay yet, or one left hidden — never shown.
-    expect(el === null || el.style.display === "none").toBe(true);
-    s.h.dispose();
-    s.parent.remove();
-  });
-
-  it("releases listeners when a re-highlight fails to anchor (degenerate path)", () => {
-    const s = setup({ baseY: 100, cursorY: 5, viewportY: 100 });
-    s.h.highlight(B(102, 6, 4)); // succeeds → subscribed
-    expect(s.scrollListeners()).toBe(1);
-    s.term.registerMarker = () => undefined; // next anchor fails
-    s.h.highlight(B(103, 0, 3));
-    // Listeners from the prior word are released — not left firing no-op
-    // reposition() on every frame for the rest of the read.
-    expect(s.scrollListeners()).toBe(0);
-    expect(s.overlay()!.style.display).toBe("none");
+  it("resets continuity between reads (clear)", () => {
+    const s = setup({ lines: ["the cat the dog"], viewportY: 0 });
+    s.h.highlight(B(0, 0, "the"));
+    s.h.highlight(B(0, 8, "the")); // advanced to col 8
+    expect(s.overlay()!.style.left).toBe("64px");
+    s.h.clear();
+    // New read starts fresh → first "the" again, not continuing from col 8.
+    s.h.highlight(B(0, 0, "the"));
+    expect(s.overlay()!.style.left).toBe("0px");
     s.h.dispose();
     s.parent.remove();
   });

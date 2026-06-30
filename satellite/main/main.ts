@@ -152,6 +152,14 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.loadURL("http://localhost:5173");
+    // TEMP: forward renderer [hl-diag] logs to the dev terminal.
+    mainWindow.webContents.on("console-message", (...args: unknown[]) => {
+      const a0 = args[0] as { message?: string } | undefined;
+      const msg = (args[2] as string) ?? a0?.message ?? "";
+      if (typeof msg === "string" && msg.includes("[hl-diag]")) {
+        console.log("[renderer]", msg);
+      }
+    });
   } else {
     mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   }

@@ -9,9 +9,7 @@ import type { TtsBoundary } from "./TtsEngine";
 // and HighlighterTerminal interfaces simultaneously (it has one buffer with
 // all the required fields). We replicate that here with a single buffer
 // object that carries every field both contracts need.
-type FakeTerm = ResolverTerminal & HighlighterTerminal & {
-  registerMarkerCalls: number;
-};
+type FakeTerm = ResolverTerminal & HighlighterTerminal;
 
 function fakeTerm(opts: {
   lines: string[];
@@ -44,19 +42,7 @@ function fakeTerm(opts: {
         },
       },
     },
-    registerMarkerCalls: 0,
-    registerMarker(offset?: number) {
-      this.registerMarkerCalls++;
-      const m = {
-        line: baseY + cursorY + (offset ?? 0),
-        isDisposed: false,
-        dispose() {
-          this.isDisposed = true;
-        },
-      };
-      return m;
-    },
-    // The overlay highlighter subscribes to these on construction.
+    // The overlay highlighter subscribes to these while a highlight is live.
     onRender: noop,
     onScroll: noop,
     onResize: noop,
@@ -173,8 +159,7 @@ describe("TerminalPaneAdapter", () => {
       line: 0, col: 0, len: 5, word: "alpha", charIndex: 0,
     };
     adapter.highlightBoundary(boundary);
-    expect(term.registerMarkerCalls).toBe(1);
-    // line 0, viewportY 0 → on screen → a visible overlay is painted.
+    // "alpha" is on the only visible line → a visible overlay is painted.
     const overlay = document.querySelector<HTMLDivElement>(".reck-tts-highlight");
     expect(overlay).not.toBeNull();
     expect(overlay!.style.display).toBe("block");
@@ -209,8 +194,7 @@ describe("TerminalPaneAdapter", () => {
     adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "alpha", charIndex: 0 });
     expect(() => adapter.dispose()).not.toThrow();
     // After dispose, further highlightBoundary calls become no-ops.
-    const before = term.registerMarkerCalls;
     adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "alpha", charIndex: 0 });
-    expect(term.registerMarkerCalls).toBe(before);
+    expect(adapter.__highlights()).toEqual([]);
   });
 });
