@@ -157,7 +157,6 @@ export class XtermHighlighter {
     }
 
     const hit = this.locate(boundary.word);
-    this.diag(boundary.word, hit);
     if (!hit) {
       this.hide();
       return;
@@ -231,17 +230,6 @@ export class XtermHighlighter {
 
   private hide(): void {
     if (this.overlay) this.overlay.style.display = "none";
-  }
-
-  // TEMP DIAGNOSTIC — confirms the live re-find lands on the spoken word.
-  // Deduped so the constant onRender stream doesn't flood. Remove before commit.
-  private lastDiag = "";
-  private diag(word: string, hit: { line: number; col: number } | null): void {
-    const key = hit ? `HIT "${word}" -> line=${hit.line} col=${hit.col}` : `MISS "${word}"`;
-    if (key === this.lastDiag) return;
-    this.lastDiag = key;
-    // eslint-disable-next-line no-console
-    console.log(`[hl-diag] ${key}`);
   }
 
   private subscribe(): void {
