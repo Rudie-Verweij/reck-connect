@@ -66,6 +66,14 @@ type SpawnRequest struct {
 	// adapter will still render a baseline from the empty ctx unless
 	// RECK_DISABLE_BASELINE_PREAMBLE is set in the test env.
 	Preamble PreambleCtx
+	// GlobalPreamble is the satellite-stored "Reck Connect prompt" —
+	// app-wide text the user configures in Satellite Settings and that
+	// the satellite includes verbatim on every CreatePane request. The
+	// claude adapter composes it as a middle layer between the daemon-
+	// emitted baseline and the per-project preamble, joined by
+	// preambleSeparator. Empty string ⇒ no global layer (no extra
+	// separator emitted). Only the claude adapter consults this field.
+	GlobalPreamble string
 }
 
 // SpawnPlan is the adapter's answer: the argv to exec, plus per-agent

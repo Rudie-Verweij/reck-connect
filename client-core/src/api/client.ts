@@ -171,12 +171,21 @@ export class ApiClient {
       resumeSessionId?: string;
       restoreSlotId?: string;
       extraArgs?: string[];
+      /**
+       * Satellite-stored "Reck Connect prompt" — app-wide system-prompt
+       * text the user configures in Settings. Forwarded verbatim as
+       * `global_preamble` and dropped when empty, so the daemon composes
+       * only baseline + project preamble in that case. Subject to the same
+       * 16 KiB combined cap the daemon enforces across all preamble layers.
+       */
+      globalPreamble?: string;
     },
   ) {
     const body: CreatePaneRequest = { kind };
     if (opts?.resumeSessionId) body.resume_session_id = opts.resumeSessionId;
     if (opts?.restoreSlotId) body.restore_slot_id = opts.restoreSlotId;
     if (opts?.extraArgs && opts.extraArgs.length > 0) body.extra_args = opts.extraArgs;
+    if (opts?.globalPreamble) body.global_preamble = opts.globalPreamble;
     return this.fetch<CreatePaneResponse>(
       `/projects/${encodeURIComponent(projectId)}/panes`,
       { method: "POST", body: JSON.stringify(body) },

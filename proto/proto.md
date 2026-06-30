@@ -121,6 +121,7 @@ interface CreatePaneRequest {
   resume_session_id?: string;  // claude-only: spawn `claude --resume <uuid>`
   restore_slot_id?: string;    // shell-only (Scope B): respawn under a stored SlotID with captured argv
   extra_args?: string[];       // optional; appended to Claude pane argv, ignored for shell panes
+  global_preamble?: string;    // claude-only: satellite "Reck Connect prompt", middle preamble layer (baseline + global + project)
 }
 interface CreatePaneResponse { pane_id: string }
 interface DeletePaneResponse { ok: boolean }

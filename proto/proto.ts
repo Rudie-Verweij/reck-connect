@@ -232,6 +232,15 @@ export interface CreatePaneRequest {
    * ignored for shell panes. Subject to a narrow daemon-side allowlist.
    */
   extra_args?: string[];
+  /**
+   * Optional. Satellite-stored "Reck Connect prompt" — app-wide text the
+   * user configures in Satellite Settings, sent on every CreatePane
+   * request and composed as a middle layer between the daemon-emitted
+   * baseline and the per-project preamble (joined by the same separator).
+   * Silently ignored for non-Claude panes. Subject to the same 16 KiB
+   * combined cap as the other preamble layers.
+   */
+  global_preamble?: string;
 }
 
 export interface CreatePaneResponse {

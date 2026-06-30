@@ -529,6 +529,45 @@ export async function saveHoverToFocus(enabled: boolean) {
   await window.reckAPI.config.set(HOVER_TO_FOCUS_KEY, enabled === true);
 }
 
+// "Reck Connect prompt" — app-wide system-prompt text auto-appended to
+// every Claude pane the satellite spawns, composed by the daemon as the
+// middle preamble layer (baseline + this + per-project). Stored as a
+// top-level config key (like hoverToFocus), not a Settings field. The
+// load function returns null when never written so callers can tell
+// "user explicitly cleared the field" (persisted "") from "fresh install"
+// (null → DEFAULT), matching the linkifier-allowlist contract.
+const RECK_CONNECT_PROMPT_KEY = "reckConnectPrompt";
+
+export const DEFAULT_RECK_CONNECT_PROMPT = `PATH CONVENTIONS:
+When you print file paths, prefer absolute paths or paths relative to
+the project root over paths relative to your current shell cwd. The
+user's Reck pane resolves Cmd+click against the project root, so a
+cwd-relative path printed from inside a subdirectory becomes ambiguous
+(and may open the wrong file or trigger a slow suffix-search fallback).
+Good: \`services/foo/main.py\`, \`<project-root>/services/foo/main.py\`.
+Ambiguous: \`main.py\` (relative to which subdir?).
+
+RENDERING:
+The Reck file viewer renders Markdown popups with Mermaid diagrams
+(\`\`\`mermaid blocks) and KaTeX math (inline \`$..$\`, display \`$$..$$\`).
+You can freely emit diagrams and math notation in any \`.md\` file the
+user might open — they'll render rather than appearing as raw source.`;
+
+export async function loadReckConnectPrompt(): Promise<string | null> {
+  const raw = await window.reckAPI.config.get<string>(RECK_CONNECT_PROMPT_KEY);
+  if (typeof raw !== "string") return null;
+  return raw;
+}
+
+export async function saveReckConnectPrompt(value: string): Promise<void> {
+  await window.reckAPI.config.set(RECK_CONNECT_PROMPT_KEY, value);
+}
+
+export async function resolveEffectiveReckConnectPrompt(): Promise<string> {
+  const persisted = await loadReckConnectPrompt();
+  return persisted ?? DEFAULT_RECK_CONNECT_PROMPT;
+}
+
 export type ProjectNameOverrides = Record<string, string>;
 
 export async function loadProjectNameOverrides(): Promise<ProjectNameOverrides> {

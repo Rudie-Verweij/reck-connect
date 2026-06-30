@@ -1678,3 +1678,42 @@ func strconvQuote(s string) string {
 	b = append(b, '\'')
 	return string(b)
 }
+
+// TestCreatePaneWith_globalPreamble_passesToArgv confirms a
+// CreatePaneOptions.GlobalPreamble surfaces in the spawned Claude argv
+// (baseline disabled so the marker is the only preamble content).
+func TestCreatePaneWith_globalPreamble_passesToArgv(t *testing.T) {
+	t.Setenv("RECK_DISABLE_BASELINE_PREAMBLE", "1")
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "projects.toml")
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sessions.NewStore(filepath.Join(dir, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManager(
+		[]config.Project{{ID: "p1", Name: "P1", Cwd: dir, Shell: []string{"/bin/sh"}}},
+		[]string{"/bin/echo"},
+		configPath,
+		store,
+	)
+	const marker = "RECK_GLOBAL_MARKER_pty_thread_test"
+	pane, err := mgr.CreatePaneWith("p1", proto.PaneKindClaude, 80, 24, CreatePaneOptions{
+		GlobalPreamble: marker,
+	})
+	if err != nil {
+		t.Fatalf("CreatePaneWith: %v", err)
+	}
+	defer mgr.DeletePane("p1", pane.ID)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		tail := string(pane.ReplayTail(2048))
+		if strings.Contains(tail, "--append-system-prompt") && strings.Contains(tail, marker) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected %s in --append-system-prompt argv; tail=%q", marker, string(pane.ReplayTail(2048)))
+}

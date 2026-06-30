@@ -1193,6 +1193,14 @@ type CreatePaneOptions struct {
 	// regular pane creates should leave this nil so pane children
 	// never see daemon-level secrets.
 	ExtraEnv []string
+	// GlobalPreamble is the satellite-stored "Reck Connect prompt" —
+	// app-wide text the user configures in Satellite Settings that the
+	// satellite sends on every CreatePane request. Threaded into
+	// SpawnRequest.GlobalPreamble; the claude adapter composes it as a
+	// middle layer between baseline and per-project preamble. Empty
+	// string ⇒ no global layer (no separator emitted). Silently ignored
+	// by non-Claude adapters.
+	GlobalPreamble string
 }
 
 // CreatePaneWith is the fuller form of CreatePane; callers that don't
@@ -1304,6 +1312,7 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 		DefaultClaudeCmd: m.claudeCmd,
 		Sessions:         m.sessions,
 		Preamble:         m.buildPreambleCtx(proj),
+		GlobalPreamble:   opts.GlobalPreamble,
 	})
 	if err != nil {
 		return nil, err
@@ -1329,7 +1338,7 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 		"agent", plan.AgentName,
 		"argv", redactArgv(plan.Argv),
 		"cwd", spawnCwd)
-	// phase 2: the sidecar-mediated spawn path 
+	// phase 2: the sidecar-mediated spawn path
 	// has been retired. The daemon now runs as a per-user LaunchAgent
 	// in both station and local mode, so claude children inherit the
 	// user's Aqua audit session directly. Pasteboard reads via

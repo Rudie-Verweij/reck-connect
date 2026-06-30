@@ -188,6 +188,34 @@ describe("ApiClient", () => {
     expect(JSON.parse(body)).toEqual({ kind: "shell", restore_slot_id: "slot-42" });
   });
 
+  it("forwards global_preamble on createPane when given", async () => {
+    const c = new ApiClient({ baseUrl: "http://x:7315" });
+    let body = "";
+    global.fetch = vi.fn(async (_u, init) => {
+      body = String(init?.body ?? "");
+      return new Response(JSON.stringify({ pane_id: "p_123" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    await c.createPane("foo", "claude", { globalPreamble: "RECK_GLOBAL_RULE" });
+    expect(JSON.parse(body)).toEqual({ kind: "claude", global_preamble: "RECK_GLOBAL_RULE" });
+  });
+
+  it("omits global_preamble on createPane when empty string (explicit opt-out)", async () => {
+    const c = new ApiClient({ baseUrl: "http://x:7315" });
+    let body = "";
+    global.fetch = vi.fn(async (_u, init) => {
+      body = String(init?.body ?? "");
+      return new Response(JSON.stringify({ pane_id: "p_123" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    await c.createPane("foo", "claude", { globalPreamble: "" });
+    expect(JSON.parse(body)).toEqual({ kind: "claude" });
+  });
+
   it("GETs /restore-candidates for restoreCandidates", async () => {
     const c = new ApiClient({ baseUrl: "http://x:7315" });
     let captured = { url: "", method: "" };
