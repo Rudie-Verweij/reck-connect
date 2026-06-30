@@ -16,6 +16,7 @@ import {
 } from "./project-push";
 import { MountHint } from "./daemon/mount-hint";
 import { ProjectRefresher } from "./daemon/project-refresh";
+import { RemountCoordinator } from "./daemon/remount-coordinator";
 import { tokenizeClaudeArgs } from "@client-core/launch-args/tokenize";
 import { promptForToken } from "./ui/update-token-dialog";
 import {
@@ -2417,6 +2418,18 @@ export async function boot(splash?: StartupSplashController) {
     },
   });
 
+  // Kicks an immediate remount on the genuine reconnecting→connected
+  // recovery edge so the sshfs mount catches up with HTTP instead of
+  // lagging the 60 s fuse-t watchdog. Station-only; debounced.
+  const remountCoordinator = new RemountCoordinator({
+    primaryHost,
+    forceRemount: async () => {
+      const res = await window.reckAPI.mount.forceRemount();
+      mountState = res.state;
+      renderStatus();
+    },
+  });
+
   initConnectionsForHost(settings, {
     pollIntervalMs: POLL_INTERVAL_MS,
     pollTimeoutMs: 5000,
@@ -2509,6 +2522,8 @@ export async function boot(splash?: StartupSplashController) {
       // host picker regardless of which host is primary.
       if (host === "station") {
         setHostReady("station", info.state === "connected");
+        // Auto-remount on the recovery edge.
+        remountCoordinator.onConn(info.state);
       } else if (host === "local") {
         if (info.state !== "connected") {
           setHostReady("local", false);
@@ -2551,6 +2566,9 @@ export async function boot(splash?: StartupSplashController) {
       primaryConnection.refresh(),
       window.reckAPI.mount.forceRemount(),
     ]);
+    // Share the cooldown so the auto-remount coordinator doesn't fire a
+    // second kickstart right after this manual one.
+    remountCoordinator.noteRemount();
     const mountResult = results[1];
     if (mountResult.status === "fulfilled") {
       mountState = mountResult.value.state;
