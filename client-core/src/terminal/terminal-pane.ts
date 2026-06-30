@@ -340,6 +340,19 @@ export class TerminalPane {
       try {
         const webgl = new WebglAddon();
         this.term.loadAddon(webgl);
+        // WebGL-renderer workaround: with some TUIs' redraw + scroll-region
+        // pattern, the GPU renderer leaves cell colours painted at their
+        // pre-scroll rows while the text scrolls — colours visibly detach
+        // from their characters. Forcing a full viewport re-render on each
+        // scroll repaints every cell at its current row and keeps colour
+        // aligned with text. refresh() only marks rows dirty (the actual
+        // paint is rAF-coalesced), so this is cheap. The DOM/canvas
+        // fallback doesn't ghost, so the handler is scoped to the WebGL
+        // path.
+        this.term.onScroll(() => {
+          if (this.disposed) return;
+          this.term.refresh(0, this.term.rows - 1);
+        });
       } catch {
         /* fallback to canvas */
       }
