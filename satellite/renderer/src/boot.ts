@@ -15,6 +15,7 @@ import {
   type PushState,
 } from "./project-push";
 import { MountHint } from "./daemon/mount-hint";
+import { ProjectRefresher } from "./daemon/project-refresh";
 import { tokenizeClaudeArgs } from "@client-core/launch-args/tokenize";
 import { promptForToken } from "./ui/update-token-dialog";
 import {
@@ -2224,6 +2225,11 @@ export async function boot(splash?: StartupSplashController) {
   let localMountPoint: string | null = null;
   const pushState: PushState = makePushState();
   let localPushError: string | null = null;
+  // When CONN is `connected` but the `/projects` fetch fails, the project
+  // refresher records the reason here instead of throwing back into the
+  // poll loop and demoting CONN. Dedup-guarded so a repeating failure
+  // doesn't re-render the status row every poll.
+  let projectsError: string | null = null;
 
   // Re-evaluate an earlier release soft hint from the current (CONN, mount) tuple
   // and return the decorated mount state. Call this whenever CONN or
@@ -2388,6 +2394,29 @@ export async function boot(splash?: StartupSplashController) {
   // here.
   const splashSafetyTimer = window.setTimeout(markBootReady, 5000);
 
+  // Decouples rail population from the health-probe gate: `refreshProjects`
+  // runs fire-and-forget so a slow/failing `/projects` can never throw out
+  // of `onPollSuccess` and bounce CONN back to `reconnecting`. Auto-select,
+  // splash advancement, and boot-ready all run in the success continuation.
+  const projectRefresher = new ProjectRefresher<Project>({
+    refresh: refreshProjects,
+    onError: (msg) => {
+      if (projectsError === msg) return;
+      projectsError = msg;
+      renderStatus();
+    },
+    onResult: async (projects, { firstSuccess, firstNonEmpty }) => {
+      if (!currentProjectId && !missionControlActive && projects.length > 0) {
+        if (firstNonEmpty) splash?.step("layout");
+        await selectProject(projects[0].id);
+      }
+      if (firstSuccess) {
+        window.clearTimeout(splashSafetyTimer);
+        markBootReady();
+      }
+    },
+  });
+
   initConnectionsForHost(settings, {
     pollIntervalMs: POLL_INTERVAL_MS,
     pollTimeoutMs: 5000,
@@ -2427,21 +2456,13 @@ export async function boot(splash?: StartupSplashController) {
       const firstSuccess = lastUptimeSec < 0;
       lastUptimeSec = health.uptime_sec;
       if (firstSuccess) splash?.step("projects");
-      const withOverrides = await refreshProjects();
-      if (!currentProjectId && !missionControlActive && withOverrides.length > 0) {
-        if (firstSuccess) splash?.step("layout");
-        await selectProject(withOverrides[0].id);
-      }
-      if (firstSuccess) {
-        window.clearTimeout(splashSafetyTimer);
-        markBootReady();
-        // Issue #228 (option B respawn-hardening): the daemon now
-        // auto-restores orphan WasLive=true sessions at startup
-        // before the HTTP listener is up, so the satellite never
-        // sees orphan candidates. The /restore-candidates endpoint
-        // is retained server-side as a diagnostic surface but no
-        // longer drives a UI prompt.
-      }
+      // Fire-and-forget: must NOT be awaited here. Awaiting the heavy
+      // `/projects` fetch inside this gated handler is what made a
+      // half-open Tailscale recovery bounce CONN back to "reconnecting".
+      // The refresher is single-flight and never throws; rail repaint,
+      // auto-select, splash dismissal, and the station→local push all
+      // happen in its success continuation / inside refreshProjects.
+      void projectRefresher.run();
     },
     onPollFailure: (host, _reason, e) => {
       // Phase 4: 401 → host-aware re-auth prompt, but only for the
