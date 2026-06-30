@@ -270,6 +270,14 @@ type CreatePaneRequest struct {
 	// ignored for shell panes. Subject to the daemon's allowlist — see
 	// pty.ValidateClaudeExtraArgs.
 	ExtraArgs []string `json:"extra_args,omitempty"`
+	// GlobalPreamble is the satellite-stored "Reck Connect prompt" —
+	// app-wide text the user configures in Satellite Settings, sent on
+	// every CreatePane request. The claude adapter composes it as a
+	// middle layer between the daemon-emitted baseline and the per-
+	// project preamble (joined by the same separator). Silently ignored
+	// for non-Claude panes. Subject to the same 16 KiB combined cap as
+	// the other preamble layers.
+	GlobalPreamble string `json:"global_preamble,omitempty"`
 }
 
 type CreatePaneResponse struct {

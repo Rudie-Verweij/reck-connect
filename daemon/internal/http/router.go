@@ -523,6 +523,7 @@ func (s *Server) handleCreatePane(w nethttp.ResponseWriter, r *nethttp.Request) 
 		ResumeSessionID: req.ResumeSessionID,
 		RestoreSlotID:   req.RestoreSlotID,
 		ExtraArgs:       req.ExtraArgs,
+		GlobalPreamble:  req.GlobalPreamble,
 	})
 	if err != nil {
 		// ErrSlotAlreadyLive is the "concurrent restore / stale retry

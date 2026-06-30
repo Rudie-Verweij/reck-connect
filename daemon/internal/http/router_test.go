@@ -22,7 +22,7 @@ import (
 )
 
 // testDaemonToken is the DAEMON_TOKEN value newServer installs into the
-// process environment when no test has set its own. Audit fix F3 
+// process environment when no test has set its own. Audit fix F3
 // made the auth middleware fail closed on empty DAEMON_TOKEN; without a
 // default, every test exercising the router would return 503.
 //
@@ -1625,3 +1625,49 @@ func TestRenamePane_shellPane(t *testing.T) {
 	}
 }
 
+// TestCreatePane_globalPreamble_flowsThroughHandler confirms a
+// global_preamble in the createPane request body reaches the spawned
+// Claude argv (baseline disabled so the marker is the only preamble).
+func TestCreatePane_globalPreamble_flowsThroughHandler(t *testing.T) {
+	t.Setenv("RECK_DISABLE_BASELINE_PREAMBLE", "1")
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	const marker = "RECK_GLOBAL_MARKER_http_handler_test"
+	body, _ := json.Marshal(proto.CreatePaneRequest{
+		Kind:           proto.PaneKindClaude,
+		GlobalPreamble: marker,
+	})
+	r, err := nethttp.Post(srv.URL+"/projects/p1/panes", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.StatusCode != 200 {
+		buf, _ := io.ReadAll(r.Body)
+		t.Fatalf("createPane status = %d, body=%q", r.StatusCode, string(buf))
+	}
+	var cr proto.CreatePaneResponse
+	if err := json.NewDecoder(r.Body).Decode(&cr); err != nil {
+		t.Fatal(err)
+	}
+	if cr.PaneID == "" {
+		t.Fatal("no pane_id returned")
+	}
+
+	pane, ok := s.Manager.PaneByID(cr.PaneID)
+	if !ok {
+		t.Fatalf("PaneByID(%q) not found", cr.PaneID)
+	}
+	defer s.Manager.DeletePane("p1", cr.PaneID)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		tail := string(pane.ReplayTail(2048))
+		if strings.Contains(tail, "--append-system-prompt") && strings.Contains(tail, marker) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected %s in --append-system-prompt argv; tail=%q", marker, string(pane.ReplayTail(2048)))
+}
