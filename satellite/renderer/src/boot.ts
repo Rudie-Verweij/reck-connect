@@ -102,6 +102,7 @@ import {
   loadTheme,
   resolveActiveUrl,
   resolveClaudeLaunchArgs,
+  resolveEffectiveReckConnectPrompt,
   saveClaudeLaunchArgs,
   saveClaudeLaunchArgsForProject,
   saveLayout,
@@ -1598,6 +1599,12 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude" && !choice.resumeSessionId
         ? await resolveClaudeExtras(currentProjectId)
         : null;
+    // Reck Connect prompt — sent for every Claude pane (including resumes)
+    // so the global hints reach every session; undefined for shell panes.
+    const globalPreamble =
+      choice.kind === "claude"
+        ? await resolveEffectiveReckConnectPrompt()
+        : undefined;
     // Hybrid mode (rev 3.1, phase 10): route pane-create to the host
     // the user picked. The local daemon resolves `projectId → cwd`
     // from its in-memory map populated by Phase 9's PUT /projects, so
@@ -1609,6 +1616,7 @@ export async function boot(splash?: StartupSplashController) {
       {
         resumeSessionId: choice.resumeSessionId,
         extraArgs: extras?.tokens,
+        globalPreamble,
       },
     );
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
@@ -1644,12 +1652,19 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude" && !choice.resumeSessionId
         ? await resolveClaudeExtras(currentProjectId)
         : null;
+    // Reck Connect prompt — sent for every Claude pane (including resumes)
+    // so the global hints reach every session; undefined for shell panes.
+    const globalPreamble =
+      choice.kind === "claude"
+        ? await resolveEffectiveReckConnectPrompt()
+        : undefined;
     const { pane_id } = await apiForHost(choice.host).createPane(
       currentProjectId,
       choice.kind,
       {
         resumeSessionId: choice.resumeSessionId,
         extraArgs: extras?.tokens,
+        globalPreamble,
       },
     );
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
@@ -1677,12 +1692,19 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude" && !choice.resumeSessionId
         ? await resolveClaudeExtras(currentProjectId)
         : null;
+    // Reck Connect prompt — sent for every Claude pane (including resumes)
+    // so the global hints reach every session; undefined for shell panes.
+    const globalPreamble =
+      choice.kind === "claude"
+        ? await resolveEffectiveReckConnectPrompt()
+        : undefined;
     const { pane_id } = await apiForHost(choice.host).createPane(
       currentProjectId,
       choice.kind,
       {
         resumeSessionId: choice.resumeSessionId,
         extraArgs: extras?.tokens,
+        globalPreamble,
       },
     );
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
@@ -2214,13 +2236,16 @@ export async function boot(splash?: StartupSplashController) {
     // users open one manually via the new-pane dialog.
     const kind: PaneKind = "claude";
     const extras = await resolveClaudeExtras(projectId);
+    // Starter panes are always Claude, so they carry the Reck Connect
+    // prompt too — auto-started sessions get the same global hints.
+    const globalPreamble = await resolveEffectiveReckConnectPrompt();
     if (currentProjectId !== projectId) return;
     let paneId: string | null = null;
     try {
       const created = await apiForHost(primaryHost).createPane(
         projectId,
         kind,
-        { extraArgs: extras.tokens },
+        { extraArgs: extras.tokens, globalPreamble },
       );
       paneId = created.pane_id;
       // Project switched while createPane was in flight. The pane

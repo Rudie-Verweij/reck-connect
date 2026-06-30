@@ -13,6 +13,10 @@ import {
   saveClaudeLaunchArgs,
   saveClaudeLaunchArgsForProject,
   stampLegacyHost,
+  loadReckConnectPrompt,
+  saveReckConnectPrompt,
+  resolveEffectiveReckConnectPrompt,
+  DEFAULT_RECK_CONNECT_PROMPT,
   type Settings,
 } from "./config";
 import type { Project } from "@proto/proto";
@@ -453,5 +457,58 @@ describe("loadSettings / saveSettings round-trip (Phase 2 shape)", () => {
     });
     const out = await loadSettings();
     expect(out?.station?.token).toBeUndefined();
+  });
+});
+
+describe("Reck Connect prompt (load/save/resolve)", () => {
+  const store = new Map<string, unknown>();
+  beforeEach(() => {
+    store.clear();
+    (window as unknown as { reckAPI: unknown }).reckAPI = {
+      config: {
+        get: async <T>(k: string) => (store.has(k) ? (store.get(k) as T) : null),
+        set: async (k: string, v: unknown) => {
+          store.set(k, v);
+          return true;
+        },
+      },
+    };
+  });
+
+  it("loadReckConnectPrompt returns null on fresh install", async () => {
+    expect(await loadReckConnectPrompt()).toBeNull();
+  });
+
+  it("round-trips a saved prompt string", async () => {
+    await saveReckConnectPrompt("RECK_GLOBAL_RULE\nAlways verbose.");
+    expect(await loadReckConnectPrompt()).toBe("RECK_GLOBAL_RULE\nAlways verbose.");
+  });
+
+  it("preserves an explicit empty string (user cleared the textarea)", async () => {
+    // Distinguishing "" from null is the whole point of the typed
+    // return — boot wraps null with the default but treats "" as
+    // "the user explicitly wants no global layer".
+    await saveReckConnectPrompt("");
+    expect(await loadReckConnectPrompt()).toBe("");
+  });
+
+  it("loadReckConnectPrompt coerces non-string persisted values to null", async () => {
+    // An older malformed write (e.g. a hand-edited config with a number
+    // in the slot) should not crash the loader; falling back to null lets
+    // resolveEffective seed the defaults next time around.
+    store.set("reckConnectPrompt", 42);
+    expect(await loadReckConnectPrompt()).toBeNull();
+  });
+
+  it("resolveEffectiveReckConnectPrompt returns DEFAULT on fresh install", async () => {
+    expect(await resolveEffectiveReckConnectPrompt()).toBe(DEFAULT_RECK_CONNECT_PROMPT);
+  });
+
+  it("resolveEffectiveReckConnectPrompt returns the persisted value (even when empty)", async () => {
+    await saveReckConnectPrompt("");
+    expect(await resolveEffectiveReckConnectPrompt()).toBe("");
+
+    await saveReckConnectPrompt("custom rules");
+    expect(await resolveEffectiveReckConnectPrompt()).toBe("custom rules");
   });
 });

@@ -1,11 +1,14 @@
 import {
+  DEFAULT_RECK_CONNECT_PROMPT,
   loadFileViewerExtraRoots,
   loadHoverToFocus,
   loadLinkifierAllowlist,
+  loadReckConnectPrompt,
   loadSettings,
   saveFileViewerExtraRoots,
   saveHoverToFocus,
   saveLinkifierAllowlist,
+  saveReckConnectPrompt,
   saveSettings,
 } from "../config";
 import {
@@ -95,6 +98,8 @@ export async function renderSettings(
   // preserve whatever they had.
   const savedLocalAutoStart = existing?.local?.autoStart ?? true;
   const savedHoverToFocus = await loadHoverToFocus();
+  const savedReckPrompt =
+    (await loadReckConnectPrompt()) ?? DEFAULT_RECK_CONNECT_PROMPT;
   const ttsSettings = await loadTtsSettings();
   root.innerHTML = `
     <div class="settings-shell">
@@ -160,6 +165,15 @@ export async function renderSettings(
           <input id="s-tts-color-dark" type="color" value="${escapeAttr(ttsSettings.highlightColorDark)}" />
         </div>
         <div class="divider" style="margin-top:1.5rem;"></div>
+        <h3>Reck Connect prompt</h3>
+        <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
+          Auto-appended to every Claude Code session spawned by Reck, regardless of project. Use it for global hints — path conventions, rendering capabilities, anything you want Claude to know on Day 1 of any project. Clear the field to opt out entirely.
+        </p>
+        <textarea id="s-reck-prompt" class="form-input" rows="14" spellcheck="false" style="margin-top:0.5rem;resize:vertical;font-family:var(--font-mono);line-height:1.5;">${escapeAttr(savedReckPrompt)}</textarea>
+        <div class="actions" style="margin-top:0.5rem;">
+          <button id="s-reck-prompt-reset" class="secondary" type="button">Reset to defaults</button>
+        </div>
+        <div class="divider" style="margin-top:1.5rem;"></div>
         <h3>File viewer allowed paths</h3>
         <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
           Cmd+click on a file path in a pane opens a popup viewer. Paths are only
@@ -199,6 +213,11 @@ export async function renderSettings(
   `;
   await renderFileViewerRootsSection(root);
   await renderLinkifierAllowlistSection(root);
+  const reckPromptEl = root.querySelector("#s-reck-prompt") as HTMLTextAreaElement;
+  const reckResetBtn = root.querySelector("#s-reck-prompt-reset") as HTMLButtonElement;
+  reckResetBtn.onclick = () => {
+    reckPromptEl.value = DEFAULT_RECK_CONNECT_PROMPT;
+  };
   const btn = root.querySelector("#s-save") as HTMLButtonElement;
   const err = root.querySelector("#s-err") as HTMLDivElement;
   btn.onclick = async () => {
@@ -254,6 +273,8 @@ export async function renderSettings(
       },
     });
     await saveHoverToFocus(hoverToFocus);
+    // No .trim() — whitespace is user intent; "" is the explicit opt-out.
+    await saveReckConnectPrompt(reckPromptEl.value);
 
     // Persist the TTS highlight colours. Reload first so a voice/rate the
     // control bar may have changed since this panel opened isn't clobbered
