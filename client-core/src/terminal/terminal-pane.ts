@@ -340,6 +340,23 @@ export class TerminalPane {
       try {
         const webgl = new WebglAddon();
         this.term.loadAddon(webgl);
+        // WebGL context loss leaves the canvas permanently blank/white —
+        // xterm's WebGL renderer does not recover on its own. Chromium
+        // drops the GPU context on display sleep/wake, GPU switching
+        // (dual-GPU Macs), driver resets, and memory pressure. Dispose
+        // the addon so xterm falls back to its DOM renderer, then force a
+        // full repaint so the fallback paints immediately instead of
+        // waiting for the next PTY write. Without this the pane stays
+        // white until the user nudges it (resize handle / Enter). See #30.
+        webgl.onContextLoss(() => {
+          if (this.disposed) return;
+          try {
+            webgl.dispose();
+          } catch {
+            /* addon already torn down */
+          }
+          this.forceRepaint();
+        });
         // WebGL-renderer workaround: with some TUIs' redraw + scroll-region
         // pattern, the GPU renderer leaves cell colours painted at their
         // pre-scroll rows while the text scrolls — colours visibly detach
@@ -580,6 +597,7 @@ export class TerminalPane {
       this.lastSentCols = -1;
       this.lastSentRows = -1;
       this.sendResizeIfChanged();
+      this.forceRepaint();
       this.scrollDebug("refit:exit");
     } catch (err) {
       this.scrollDebug("refit:error", { err: String(err) });
@@ -657,6 +675,22 @@ export class TerminalPane {
   }
 
 
+  // Force a full-viewport repaint. fit()/resize() only repaint when the
+  // grid dimensions actually change, so a layout settle, window refocus,
+  // or tab show at an unchanged size leaves the WebGL canvas showing a
+  // stale frame — the "bottom not rendering / misaligned" symptom that a
+  // manual resize or Enter keystroke clears. refresh() marks every row
+  // dirty (the paint is rAF-coalesced, so this is cheap) and works on the
+  // DOM/canvas fallback too. Guarded against a disposed terminal. See #30.
+  private forceRepaint() {
+    if (this.disposed) return;
+    try {
+      this.term.refresh(0, this.term.rows - 1);
+    } catch {
+      /* terminal torn down between schedule and call */
+    }
+  }
+
   private onResize() {
     this.scrollDebug("onResize:enter", {
       laidOut: this.isLaidOut(),
@@ -677,6 +711,7 @@ export class TerminalPane {
         return;
       }
       this.sendResizeIfChanged();
+      this.forceRepaint();
       this.scrollDebug("onResize:exit");
     } catch (err) {
       this.scrollDebug("onResize:error", { err: String(err) });

@@ -38,7 +38,12 @@ const {
       public cols = 80;
       public rows = 24;
       public options: { theme?: unknown } = {};
+      // Records each refresh(start, end) so tests can assert that a
+      // forced full-viewport repaint happened (issue #30). xterm's real
+      // refresh marks rows dirty; the mock just logs the range.
+      public refreshCalls: Array<[number, number]> = [];
       private writtenData: string[] = [];
+      private scrollCb: (() => void) | null = null;
       private addons: unknown[] = [];
       public parser = {
         registerOscHandler: () => ({ dispose: () => {} }),
@@ -68,6 +73,19 @@ const {
           throw new Error("write on disposed terminal");
         }
         this.writtenData.push(typeof data === "string" ? data : "<bytes>");
+      }
+      // Real xterm throws when refresh runs on a disposed terminal — mirror
+      // that so the production guard (forceRepaint short-circuits on
+      // `disposed`) is actually exercised by the teardown tests.
+      refresh(start: number, end: number) {
+        if (this.disposed) {
+          throw new Error("refresh on disposed terminal");
+        }
+        this.refreshCalls.push([start, end]);
+      }
+      onScroll(cb: () => void) {
+        this.scrollCb = cb;
+        return { dispose: () => { this.scrollCb = null; } };
       }
       dispose() {
         this.disposed = true;
@@ -111,11 +129,27 @@ const {
     }
 
     class MockWebglAddon {
+      static instances: MockWebglAddon[] = [];
       public disposed = false;
+      private contextLossCb: (() => void) | null = null;
+      constructor() {
+        MockWebglAddon.instances.push(this);
+      }
       dispose() {
         this.disposed = true;
       }
       activate(_term: unknown) {}
+      // xterm's WebglAddon fires this when the GPU drops the WebGL
+      // context. The production code must register a handler that
+      // disposes the addon + forces a repaint (issue #30).
+      onContextLoss(cb: () => void) {
+        this.contextLossCb = cb;
+        return { dispose: () => { this.contextLossCb = null; } };
+      }
+      // Test helper — simulate a GPU-process restart.
+      _fireContextLoss() {
+        this.contextLossCb?.();
+      }
     }
 
     class TrackedResizeObserver {
@@ -264,6 +298,7 @@ describe("TerminalPane teardown races", () => {
 
   beforeEach(() => {
     MockTerminal.instances = [];
+    MockWebglAddon.instances = [];
     TrackedResizeObserver.instances = [];
     TrackedMutationObserver.instances = [];
     // Clear any debug-window state from a prior test.
@@ -501,6 +536,83 @@ describe("TerminalPane teardown races", () => {
     // Second dispose must not throw even though observers / ws /
     // terminal are already torn down.
     expect(() => pane.dispose()).not.toThrow();
+  });
+
+  // Issue #30 — WebGL stale/white/misaligned frames. The renderer holds
+  // stale pixels after a state change (GPU context loss, focus, tab
+  // show) and only a forced repaint clears them. These tests pin the two
+  // fixes: (A) recover from context loss, (B) always repaint on refit.
+
+  it("registers a WebGL context-loss handler that disposes the addon and forces a repaint (issue #30)", () => {
+    const wrapper = setupDom();
+    mountPane(wrapper);
+    const webgl = MockWebglAddon.instances[0];
+    expect(webgl).toBeDefined();
+    expect(webgl.disposed).toBe(false);
+    const term = MockTerminal.instances[0];
+    term.refreshCalls = [];
+
+    // Simulate Chromium's GPU process restarting (display sleep/wake,
+    // GPU switch, driver reset). xterm's WebGL renderer would otherwise
+    // stay blank/white forever.
+    webgl._fireContextLoss();
+
+    // Addon disposed → xterm reverts to its DOM renderer...
+    expect(webgl.disposed).toBe(true);
+    // ...and a full-viewport repaint is forced so the fallback paints
+    // immediately rather than waiting for the next PTY write.
+    expect(term.refreshCalls).toContainEqual([0, term.rows - 1]);
+  });
+
+  it("WebGL context loss after dispose is a safe no-op (issue #30)", () => {
+    const wrapper = setupDom();
+    const pane = mountPane(wrapper);
+    const webgl = MockWebglAddon.instances[0];
+    pane.dispose();
+    // A late context-loss event must not touch the disposed xterm
+    // (refresh on a disposed terminal throws).
+    expect(() => webgl._fireContextLoss()).not.toThrow();
+  });
+
+  it("refit() forces a full-viewport repaint even when fit() leaves dimensions unchanged (issue #30)", () => {
+    const wrapper = setupDom();
+    const pane = mountPane(wrapper);
+    const term = MockTerminal.instances[0];
+    // jsdom reports 0×0 for detached nodes; fake a laid-out container so
+    // refit() runs fit()+repaint instead of short-circuiting isLaidOut().
+    Object.defineProperty(pane.container, "clientWidth", { value: 800, configurable: true });
+    Object.defineProperty(pane.container, "clientHeight", { value: 600, configurable: true });
+    term.refreshCalls = [];
+
+    // fit() is a no-op (MockFitAddon doesn't change cols/rows), so the
+    // only way a repaint happens is the forced refresh.
+    pane.refit();
+
+    expect(term.refreshCalls).toContainEqual([0, term.rows - 1]);
+  });
+
+  it("onResize() forces a full-viewport repaint when laid out (issue #30)", () => {
+    const wrapper = setupDom();
+    const pane = mountPane(wrapper);
+    const term = MockTerminal.instances[0];
+    Object.defineProperty(pane.container, "clientWidth", { value: 800, configurable: true });
+    Object.defineProperty(pane.container, "clientHeight", { value: 600, configurable: true });
+    term.refreshCalls = [];
+
+    // Fire the container ResizeObserver as the browser would.
+    TrackedResizeObserver.instances[0]._fire();
+
+    expect(term.refreshCalls).toContainEqual([0, term.rows - 1]);
+  });
+
+  it("refit() while not laid out does not repaint (issue #30)", () => {
+    const wrapper = setupDom();
+    const pane = mountPane(wrapper);
+    const term = MockTerminal.instances[0];
+    // Detached/0×0 container: nothing visible, so no repaint should fire.
+    term.refreshCalls = [];
+    pane.refit();
+    expect(term.refreshCalls).toEqual([]);
   });
 
   it("isAtBottom() reflects viewportY/baseY equality ", () => {
