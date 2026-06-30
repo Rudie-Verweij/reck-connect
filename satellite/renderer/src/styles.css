@@ -3149,3 +3149,150 @@ textarea.file-viewer-merge-pane {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ── Reusable in-view search bar (VSCode-style find widget) ─────────
+   Surface-agnostic overlay shared by the terminal, markdown and
+   CodeMirror views (see renderer/src/search/SearchBar.ts). Pinned
+   top-right, just below where the TTS control bar sits, so the two
+   stack instead of colliding. */
+.reck-search-bar {
+  position: absolute;
+  top: 48px; /* terminal pane: 8px TTS top + ~32px bar + 8px gutter */
+  right: 8px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(460px, calc(100% - 16px));
+  padding: 4px 6px;
+  border-radius: var(--radius, 6px);
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border-strong);
+  color: var(--app-text);
+  font-family: var(--font-body);
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.reck-search-bar[hidden] { display: none !important; }
+
+.reck-search-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 150px;
+}
+
+.reck-search-input {
+  flex: 1 1 auto;
+  width: 100%;
+  box-sizing: border-box;
+  /* room for the toggles tucked into the input's right edge */
+  padding: 4px 78px 4px 8px;
+  background: var(--app-input-bg);
+  border: 1px solid var(--app-border);
+  border-radius: 4px;
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+.reck-search-input::placeholder { color: var(--app-text-muted); }
+.reck-search-input:focus {
+  border-color: var(--claude-orange);
+  box-shadow: 0 0 0 1px var(--claude-orange);
+}
+
+.reck-search-toggles {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.reck-search-toggle {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--app-text-muted);
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  font-family: var(--font-mono);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.reck-search-toggle:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+.reck-search-toggle.active {
+  background: var(--app-active-bg);
+  border-color: var(--claude-orange);
+  color: var(--claude-orange);
+}
+.reck-search-toggle:focus-visible {
+  outline: 1px solid var(--claude-orange);
+  outline-offset: 1px;
+}
+/* whole-word glyph rendered as 'ab' underlined, à la VSCode */
+.reck-search-toggle-word { text-decoration: underline; }
+
+.reck-search-count {
+  flex: 0 0 auto;
+  min-width: 56px;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--app-text-dim);
+  font-variant-numeric: tabular-nums;
+  padding: 0 2px 0 4px;
+}
+.reck-search-count-empty,
+.reck-search-count-error { color: var(--wes-rose); }
+
+.reck-search-nav,
+.reck-search-close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--app-text-dim);
+  cursor: pointer;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  flex: 0 0 auto;
+}
+.reck-search-nav:hover:not(:disabled),
+.reck-search-close:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+.reck-search-nav:disabled { opacity: 0.35; cursor: default; }
+.reck-search-nav:focus-visible,
+.reck-search-close:focus-visible {
+  outline: 1px solid var(--claude-orange);
+  outline-offset: 1px;
+}
+
+/* Inside the file-viewer popup: drop below the viewer's TTS bar
+   (which sits at top:46px) and match its right gutter. */
+.file-viewer-root > .reck-search-bar {
+  top: 88px;
+  right: 16px;
+}
