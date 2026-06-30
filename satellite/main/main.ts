@@ -670,6 +670,7 @@ import {
   stationHostFromUrl,
   type TailscaleVerdict,
 } from "./tailscale-status";
+import { performRemount } from "./mount-remount";
 
 const MOUNT_POINT = path.join(homedir(), "reck", "projects");
 const SENTINEL = path.join(MOUNT_POINT, ".reck-mount-sentinel");
@@ -782,24 +783,20 @@ function runLaunchctlKickstart(label: string): Promise<void> {
   });
 }
 
-function waitForSentinel(deadlineMs: number, pollMs = 250): Promise<boolean> {
-  return new Promise((resolve) => {
-    const deadline = Date.now() + deadlineMs;
-    const tick = () => {
-      try {
-        statSync(SENTINEL);
-        resolve(true);
-        return;
-      } catch {
-        // fall through
-      }
-      if (Date.now() >= deadline) {
-        resolve(false);
-        return;
-      }
-      setTimeout(tick, pollMs);
-    };
-    tick();
+function runDiskutilUnmountForce(target: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "/usr/sbin/diskutil",
+      ["unmount", "force", target],
+      { timeout: 10_000 },
+      (err, _stdout, stderr) => {
+        if (err) {
+          reject(new Error(stderr.trim() || err.message));
+          return;
+        }
+        resolve();
+      },
+    );
   });
 }
 
@@ -812,20 +809,24 @@ function waitForSentinel(deadlineMs: number, pollMs = 250): Promise<boolean> {
 ipcMain.handle(
   "mount:forceRemount",
   async (): Promise<{ ok: boolean; state: MountState; error?: string }> => {
-    try {
-      await runLaunchctlKickstart(MOUNT_AGENT_LABEL);
-    } catch (e) {
-      // Agent not loaded, kickstart failed, etc. Still re-check so the
-      // dot reflects reality.
-      await tickMount();
-      return { ok: false, state: mountState, error: (e as Error).message };
-    }
-    const ok = await waitForSentinel(3000);
+    const result = await performRemount({
+      kickstart: () => runLaunchctlKickstart(MOUNT_AGENT_LABEL),
+      unmountForce: () => runDiskutilUnmountForce(MOUNT_POINT),
+      sentinelPresent: () => {
+        try {
+          statSync(SENTINEL);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    });
     // Seed lastMountOk so checkMount() returns green next time even if
     // Finder hasn't probed the mount yet.
-    if (ok) lastMountOk = Date.now();
+    if (result.ok) lastMountOk = Date.now();
     await tickMount();
-    return { ok, state: mountState, error: ok ? undefined : "Remount timed out" };
+    return { ok: result.ok, state: mountState, error: result.error };
   },
 );
 

@@ -181,10 +181,12 @@ export class StatusBar {
   }
 
   private mountTitle(m: MountState): string {
+    const manual =
+      "\nManual restart: launchctl kickstart -k gui/$(id -u)/eu.verwey.reck-mount";
     switch (m) {
       case "green": return "Mount healthy";
-      case "yellow": return "Mount not responding — reconnecting";
-      default: return "Mount not configured";
+      case "yellow": return `Mount not responding — reconnecting${manual}`;
+      default: return `Mount not configured${manual}`;
     }
   }
 }
