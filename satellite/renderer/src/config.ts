@@ -244,6 +244,15 @@ declare global {
         }>;
         onStatus(cb: (s: "green" | "yellow" | "gray") => void): void;
       };
+      tailscale: {
+        status(stationUrl: string | null): Promise<{
+          ok: boolean;
+          selfOnline: boolean | null;
+          stationOnline: boolean | null;
+          stationLastSeen: string | null;
+          backendState: string | null;
+        }>;
+      };
       rsync: {
         // an audit finding — `checkCollision` removed. Slug collision
         // is now reported atomically by `toStation` via `code: "slug-in-use"`.

@@ -15,6 +15,8 @@ import {
   type PushState,
 } from "./project-push";
 import { MountHint } from "./daemon/mount-hint";
+import { ProjectRefresher } from "./daemon/project-refresh";
+import { RemountCoordinator } from "./daemon/remount-coordinator";
 import { tokenizeClaudeArgs } from "@client-core/launch-args/tokenize";
 import { promptForToken } from "./ui/update-token-dialog";
 import {
@@ -37,6 +39,7 @@ import {
 } from "./viewer/LinkDetector";
 import { HoverFocusController } from "./ui/hover-focus-controller";
 import { StatusBar } from "./ui/status-bar";
+import { deriveConnectionReason, type TailscaleVerdict } from "./ui/connection-reason";
 import { MissionControl } from "./ui/mission-control";
 import {
   askPaneKind,
@@ -2264,6 +2267,25 @@ export async function boot(splash?: StartupSplashController) {
   }
 
   let connInfo: ConnectionInfo = { state: "connecting", lastError: null, uptimeSec: null };
+  // Tailscale verdict for the inline connection reason. Probed lazily when
+  // the station goes unreachable (not on a token error), cleared on
+  // recovery. Single-flight so a flapping link can't stack `tailscale`
+  // CLI calls.
+  let tailscaleVerdict: TailscaleVerdict | null = null;
+  let tailscaleProbeInFlight = false;
+  async function refreshTailscaleVerdict(): Promise<void> {
+    if (tailscaleProbeInFlight) return;
+    tailscaleProbeInFlight = true;
+    try {
+      const v = await window.reckAPI.tailscale.status(activeUrl);
+      tailscaleVerdict = v.ok ? v : null;
+      renderStatus();
+    } catch {
+      tailscaleVerdict = null;
+    } finally {
+      tailscaleProbeInFlight = false;
+    }
+  }
 
   // --- Phase 9 push state (declared before renderStatus so the status
   // bar can read localPushError on its very first paint) --------------
@@ -2277,6 +2299,11 @@ export async function boot(splash?: StartupSplashController) {
   let localMountPoint: string | null = null;
   const pushState: PushState = makePushState();
   let localPushError: string | null = null;
+  // When CONN is `connected` but the `/projects` fetch fails, the project
+  // refresher records the reason here instead of throwing back into the
+  // poll loop and demoting CONN. Dedup-guarded so a repeating failure
+  // doesn't re-render the status row every poll.
+  let projectsError: string | null = null;
 
   // Re-evaluate an earlier release soft hint from the current (CONN, mount) tuple
   // and return the decorated mount state. Call this whenever CONN or
@@ -2299,6 +2326,7 @@ export async function boot(splash?: StartupSplashController) {
       host: new URL(activeUrl).host,
       conn: connInfo.state,
       connError: connInfo.lastError,
+      connDetail: deriveConnectionReason(connInfo.lastError, tailscaleVerdict),
       mount: displayedMount,
       localPushError,
     });
@@ -2441,6 +2469,41 @@ export async function boot(splash?: StartupSplashController) {
   // here.
   const splashSafetyTimer = window.setTimeout(markBootReady, 5000);
 
+  // Decouples rail population from the health-probe gate: `refreshProjects`
+  // runs fire-and-forget so a slow/failing `/projects` can never throw out
+  // of `onPollSuccess` and bounce CONN back to `reconnecting`. Auto-select,
+  // splash advancement, and boot-ready all run in the success continuation.
+  const projectRefresher = new ProjectRefresher<Project>({
+    refresh: refreshProjects,
+    onError: (msg) => {
+      if (projectsError === msg) return;
+      projectsError = msg;
+      renderStatus();
+    },
+    onResult: async (projects, { firstSuccess, firstNonEmpty }) => {
+      if (!currentProjectId && !missionControlActive && projects.length > 0) {
+        if (firstNonEmpty) splash?.step("layout");
+        await selectProject(projects[0].id);
+      }
+      if (firstSuccess) {
+        window.clearTimeout(splashSafetyTimer);
+        markBootReady();
+      }
+    },
+  });
+
+  // Kicks an immediate remount on the genuine reconnecting→connected
+  // recovery edge so the sshfs mount catches up with HTTP instead of
+  // lagging the 60 s fuse-t watchdog. Station-only; debounced.
+  const remountCoordinator = new RemountCoordinator({
+    primaryHost,
+    forceRemount: async () => {
+      const res = await window.reckAPI.mount.forceRemount();
+      mountState = res.state;
+      renderStatus();
+    },
+  });
+
   initConnectionsForHost(settings, {
     pollIntervalMs: POLL_INTERVAL_MS,
     pollTimeoutMs: 5000,
@@ -2480,21 +2543,13 @@ export async function boot(splash?: StartupSplashController) {
       const firstSuccess = lastUptimeSec < 0;
       lastUptimeSec = health.uptime_sec;
       if (firstSuccess) splash?.step("projects");
-      const withOverrides = await refreshProjects();
-      if (!currentProjectId && !missionControlActive && withOverrides.length > 0) {
-        if (firstSuccess) splash?.step("layout");
-        await selectProject(withOverrides[0].id);
-      }
-      if (firstSuccess) {
-        window.clearTimeout(splashSafetyTimer);
-        markBootReady();
-        // Issue #228 (option B respawn-hardening): the daemon now
-        // auto-restores orphan WasLive=true sessions at startup
-        // before the HTTP listener is up, so the satellite never
-        // sees orphan candidates. The /restore-candidates endpoint
-        // is retained server-side as a diagnostic surface but no
-        // longer drives a UI prompt.
-      }
+      // Fire-and-forget: must NOT be awaited here. Awaiting the heavy
+      // `/projects` fetch inside this gated handler is what made a
+      // half-open Tailscale recovery bounce CONN back to "reconnecting".
+      // The refresher is single-flight and never throws; rail repaint,
+      // auto-select, splash dismissal, and the station→local push all
+      // happen in its success continuation / inside refreshProjects.
+      void projectRefresher.run();
     },
     onPollFailure: (host, _reason, e) => {
       // Phase 4: 401 → host-aware re-auth prompt, but only for the
@@ -2541,6 +2596,8 @@ export async function boot(splash?: StartupSplashController) {
       // host picker regardless of which host is primary.
       if (host === "station") {
         setHostReady("station", info.state === "connected");
+        // Auto-remount on the recovery edge.
+        remountCoordinator.onConn(info.state);
       } else if (host === "local") {
         if (info.state !== "connected") {
           setHostReady("local", false);
@@ -2556,6 +2613,16 @@ export async function boot(splash?: StartupSplashController) {
       // local's info is consumed by the registry but not surfaced.
       if (host !== primaryHost) return;
       connInfo = info;
+      // When the station goes unreachable (not a token problem), probe
+      // Tailscale so the inline reason can say whether to fix this Mac or
+      // the station; clear the verdict once we recover.
+      if (primaryHost === "station") {
+        if (info.state === "connected") {
+          tailscaleVerdict = null;
+        } else if (info.lastError !== "Unauthorized") {
+          void refreshTailscaleVerdict();
+        }
+      }
       renderStatus();
     },
   });
@@ -2583,6 +2650,9 @@ export async function boot(splash?: StartupSplashController) {
       primaryConnection.refresh(),
       window.reckAPI.mount.forceRemount(),
     ]);
+    // Share the cooldown so the auto-remount coordinator doesn't fire a
+    // second kickstart right after this manual one.
+    remountCoordinator.noteRemount();
     const mountResult = results[1];
     if (mountResult.status === "fulfilled") {
       mountState = mountResult.value.state;

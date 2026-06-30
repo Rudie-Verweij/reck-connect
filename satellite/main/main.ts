@@ -665,6 +665,12 @@ import { homedir } from "node:os";
 import { statSync, readFileSync, unlinkSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import {
+  parseTailscaleStatus,
+  stationHostFromUrl,
+  type TailscaleVerdict,
+} from "./tailscale-status";
+import { performRemount } from "./mount-remount";
 
 const MOUNT_POINT = path.join(homedir(), "reck", "projects");
 const SENTINEL = path.join(MOUNT_POINT, ".reck-mount-sentinel");
@@ -777,24 +783,20 @@ function runLaunchctlKickstart(label: string): Promise<void> {
   });
 }
 
-function waitForSentinel(deadlineMs: number, pollMs = 250): Promise<boolean> {
-  return new Promise((resolve) => {
-    const deadline = Date.now() + deadlineMs;
-    const tick = () => {
-      try {
-        statSync(SENTINEL);
-        resolve(true);
-        return;
-      } catch {
-        // fall through
-      }
-      if (Date.now() >= deadline) {
-        resolve(false);
-        return;
-      }
-      setTimeout(tick, pollMs);
-    };
-    tick();
+function runDiskutilUnmountForce(target: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "/usr/sbin/diskutil",
+      ["unmount", "force", target],
+      { timeout: 10_000 },
+      (err, _stdout, stderr) => {
+        if (err) {
+          reject(new Error(stderr.trim() || err.message));
+          return;
+        }
+        resolve();
+      },
+    );
   });
 }
 
@@ -807,20 +809,82 @@ function waitForSentinel(deadlineMs: number, pollMs = 250): Promise<boolean> {
 ipcMain.handle(
   "mount:forceRemount",
   async (): Promise<{ ok: boolean; state: MountState; error?: string }> => {
-    try {
-      await runLaunchctlKickstart(MOUNT_AGENT_LABEL);
-    } catch (e) {
-      // Agent not loaded, kickstart failed, etc. Still re-check so the
-      // dot reflects reality.
-      await tickMount();
-      return { ok: false, state: mountState, error: (e as Error).message };
-    }
-    const ok = await waitForSentinel(3000);
+    const result = await performRemount({
+      kickstart: () => runLaunchctlKickstart(MOUNT_AGENT_LABEL),
+      unmountForce: () => runDiskutilUnmountForce(MOUNT_POINT),
+      sentinelPresent: () => {
+        try {
+          statSync(SENTINEL);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    });
     // Seed lastMountOk so checkMount() returns green next time even if
     // Finder hasn't probed the mount yet.
-    if (ok) lastMountOk = Date.now();
+    if (result.ok) lastMountOk = Date.now();
     await tickMount();
-    return { ok, state: mountState, error: ok ? undefined : "Remount timed out" };
+    return { ok: result.ok, state: mountState, error: result.error };
+  },
+);
+
+// Tailscale-layer diagnosis: run `tailscale status --json` and map it to a
+// verdict so the renderer can tell the user whether THIS Mac is off the
+// tailnet or the station peer is offline. Degrades to ok:false when the
+// CLI is absent or slow; never throws into the renderer.
+const TAILSCALE_BINARIES = [
+  "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+  "/usr/local/bin/tailscale",
+  "/opt/homebrew/bin/tailscale",
+];
+function findTailscaleBinary(): string | null {
+  for (const candidate of TAILSCALE_BINARIES) {
+    try {
+      statSync(candidate);
+      return candidate;
+    } catch {
+      // next candidate
+    }
+  }
+  return null;
+}
+
+const TAILSCALE_UNKNOWN: TailscaleVerdict = {
+  ok: false,
+  selfOnline: null,
+  stationOnline: null,
+  stationLastSeen: null,
+  backendState: null,
+};
+
+ipcMain.handle(
+  "tailscale:status",
+  async (_e, stationUrl: unknown): Promise<TailscaleVerdict> => {
+    const bin = findTailscaleBinary();
+    if (!bin) return { ...TAILSCALE_UNKNOWN };
+    const stationHost = stationHostFromUrl(
+      typeof stationUrl === "string" ? stationUrl : null,
+    );
+    return new Promise<TailscaleVerdict>((resolve) => {
+      execFile(
+        bin,
+        ["status", "--json"],
+        { timeout: 1500, maxBuffer: 8 * 1024 * 1024 },
+        (err, stdout) => {
+          if (err) {
+            resolve({ ...TAILSCALE_UNKNOWN });
+            return;
+          }
+          try {
+            resolve(parseTailscaleStatus(JSON.parse(stdout), stationHost));
+          } catch {
+            resolve({ ...TAILSCALE_UNKNOWN });
+          }
+        },
+      );
+    });
   },
 );
 

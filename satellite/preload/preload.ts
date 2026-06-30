@@ -379,6 +379,19 @@ contextBridge.exposeInMainWorld("reckAPI", {
       ipcRenderer.on("mount:status", (_e, s) => cb(s));
     },
   },
+  tailscale: {
+    // Ask main to run `tailscale status --json` so the connection reason can
+    // distinguish "this Mac is off Tailscale" from "the station peer is
+    // offline". Pass the station URL so main can match the peer by IP/name.
+    status: (stationUrl: string | null) =>
+      ipcRenderer.invoke("tailscale:status", stationUrl) as Promise<{
+        ok: boolean;
+        selfOnline: boolean | null;
+        stationOnline: boolean | null;
+        stationLastSeen: string | null;
+        backendState: string | null;
+      }>,
+  },
   rsync: {
     // an audit finding — `checkCollision` removed. Slug collision is
     // now detected atomically by `toStation` itself (via `mkdir` on the
