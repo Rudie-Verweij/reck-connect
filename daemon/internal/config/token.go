@@ -133,6 +133,18 @@ func ResolveToken(path string) (token, source string, err error) {
 	return "", "", nil
 }
 
+// PreferEnvToken reports whether an env-provided DAEMON_TOKEN must take
+// precedence over the token-file chain. True only for local mode with a
+// non-empty env token: the supervising Satellite mints a fresh token per
+// spawn (satellite/main/daemon-spawn.ts) and its renderer authenticates
+// with exactly that value — letting a stale ~/.config/reck/token win the
+// chain instead 401s every renderer request. Station mode keeps
+// file-first so the plist->file migration rationale documented on
+// ResolveToken still holds.
+func PreferEnvToken(mode string, envToken string) bool {
+	return mode == "local" && strings.TrimSpace(envToken) != ""
+}
+
 // ResolveTokenChain walks `paths` in order and returns the first
 // non-empty file-loaded token. If no file produced a value, falls
 // back to $DAEMON_TOKEN. Returns ("", "", nil) iff nothing found.

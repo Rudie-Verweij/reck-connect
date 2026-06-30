@@ -209,3 +209,31 @@ func TestDefaultTokenCandidates_orderingAndOverride(t *testing.T) {
 		t.Fatalf("last = %q, want %s", cands[len(cands)-1], DefaultTokenFile)
 	}
 }
+
+func TestPreferEnvToken(t *testing.T) {
+	// The satellite mints a fresh DAEMON_TOKEN per local spawn
+	// (satellite/main/daemon-spawn.ts) and the renderer authenticates
+	// with exactly that value. A stale ~/.config/reck/token would
+	// otherwise clobber it via the file chain and 401 every renderer
+	// request. Station mode keeps file-first (plist->file migration
+	// rationale in ResolveToken).
+	cases := []struct {
+		name string
+		mode string
+		env  string
+		want bool
+	}{
+		{"local with env token", "local", "abc123", true},
+		{"local with whitespace-only env", "local", "   ", false},
+		{"local without env", "local", "", false},
+		{"station with env token", "station", "abc123", false},
+		{"station without env", "station", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PreferEnvToken(tc.mode, tc.env); got != tc.want {
+				t.Fatalf("PreferEnvToken(%q, %q) = %v, want %v", tc.mode, tc.env, got, tc.want)
+			}
+		})
+	}
+}

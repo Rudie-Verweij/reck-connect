@@ -119,11 +119,19 @@ func main() {
 			err      error
 		)
 		if *tokenFile != "" {
+			// Explicit flag is the operator's most explicit intent —
+			// it beats both the env var and the default chain.
 			tok, src, err = config.ResolveToken(*tokenFile)
 			if err != nil {
 				logger.Error("token load failed", "err", err, "path", *tokenFile)
 				os.Exit(1)
 			}
+		} else if config.PreferEnvToken(string(mode), os.Getenv("DAEMON_TOKEN")) {
+			// Local mode under a supervising Satellite: the per-spawn
+			// env token is authoritative (a stale ~/.config/reck/token
+			// winning the chain 401'd every renderer request).
+			// DAEMON_TOKEN is already in the env; nothing to publish.
+			logger.Info("daemon token loaded", "source", "env:DAEMON_TOKEN (local supervisor)")
 		} else {
 			cands := config.DefaultTokenCandidates()
 			tok, src, err = config.ResolveTokenChain(cands)
@@ -683,4 +691,3 @@ func resolveProcComm(pid int) string {
 var _ = mcCtrlSentinel
 
 func mcCtrlSentinel() *supervisor.Controller { return nil }
-
