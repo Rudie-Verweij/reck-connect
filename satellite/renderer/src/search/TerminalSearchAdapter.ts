@@ -1,5 +1,9 @@
-// `TerminalSearchAdapter` — search over an xterm.js terminal, including the
-// full scrollback. Matches are painted as a DOM overlay over `.xterm-screen`
+// `TerminalSearchAdapter` — search over an xterm.js terminal. It reads the
+// whole `buffer.active`, so a plain shell's full scrollback is searchable; a
+// full-screen mouse-tracking TUI (Claude Code, less, vim) keeps NO scrollback
+// (it repaints the visible screen in place), so there only what's on screen
+// is searchable — there is no off-screen text to find anywhere.
+// Matches are painted as a DOM overlay over `.xterm-screen`
 // whose position is RE-DERIVED from the live viewport on every render —
 // exactly like the TTS `XtermHighlighter` (and reusing its pure
 // `computeHighlightRect`). This is what makes the highlight stay wrapped
