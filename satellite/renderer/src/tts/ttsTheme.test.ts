@@ -1,0 +1,141 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  resolveTtsTheme,
+  createThemeWatcher,
+  TTS_THEME_LIGHT,
+  TTS_THEME_DARK,
+} from "./ttsTheme";
+
+describe("TTS theme tokens", () => {
+  // Per-mode highlight tuned for the typical terminal foreground:
+  //   light mode → dark text on a LIGHT amber  (#fde68a)
+  //   dark  mode → light text on a DARKER amber (#696241)
+  // Both are SOLID hex (no rgba) so the rendered colour is exactly
+  // what's specified — no alpha-blending against the cell background.
+
+  it("light-mode palette uses the light amber highlight", () => {
+    expect(TTS_THEME_LIGHT.backgroundColor).toBe("#fde68a");
+    expect(TTS_THEME_LIGHT.controlAccent).toBeDefined();
+  });
+
+  it("dark-mode palette uses the dark amber highlight", () => {
+    expect(TTS_THEME_DARK.backgroundColor).toBe("#696241");
+    expect(TTS_THEME_DARK.controlAccent).toBeDefined();
+  });
+
+  it("light and dark highlights are different (so dark text in light mode and light text in dark mode both stay readable)", () => {
+    expect(TTS_THEME_LIGHT.backgroundColor).not.toBe(
+      TTS_THEME_DARK.backgroundColor,
+    );
+  });
+
+  it("control-bar styling also differs between modes", () => {
+    expect(TTS_THEME_LIGHT.controlBg).not.toBe(TTS_THEME_DARK.controlBg);
+    expect(TTS_THEME_LIGHT.controlText).not.toBe(TTS_THEME_DARK.controlText);
+  });
+});
+
+describe("resolveTtsTheme", () => {
+  it("returns the dark palette when isDark=true", () => {
+    expect(resolveTtsTheme(true)).toBe(TTS_THEME_DARK);
+  });
+
+  it("returns the light palette when isDark=false", () => {
+    expect(resolveTtsTheme(false)).toBe(TTS_THEME_LIGHT);
+  });
+});
+
+describe("createThemeWatcher (data-theme attribute on <html>)", () => {
+  function setDataTheme(value: "light" | "dark" | null) {
+    if (value === null) {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", value);
+    }
+  }
+
+  // MutationObserver callbacks fire as microtasks; flush by awaiting
+  // a couple of resolved promises (one for the observer queue, one to
+  // settle handler side-effects).
+  async function flushMutations() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  beforeEach(() => {
+    setDataTheme(null);
+  });
+
+  afterEach(() => {
+    setDataTheme(null);
+  });
+
+  it("returns the dark palette when data-theme='dark'", () => {
+    setDataTheme("dark");
+    const watcher = createThemeWatcher();
+    expect(watcher.current()).toBe(TTS_THEME_DARK);
+    watcher.dispose();
+  });
+
+  it("returns the light palette when data-theme='light'", () => {
+    setDataTheme("light");
+    const watcher = createThemeWatcher();
+    expect(watcher.current()).toBe(TTS_THEME_LIGHT);
+    watcher.dispose();
+  });
+
+  it("defaults to the dark palette when data-theme is absent (matches loadTheme()'s default)", () => {
+    setDataTheme(null);
+    const watcher = createThemeWatcher();
+    expect(watcher.current()).toBe(TTS_THEME_DARK);
+    watcher.dispose();
+  });
+
+  it("invokes onChange when the app flips data-theme from dark to light", async () => {
+    setDataTheme("dark");
+    const watcher = createThemeWatcher();
+    const onChange = vi.fn();
+    watcher.onChange(onChange);
+
+    setDataTheme("light");
+    await flushMutations();
+    expect(onChange).toHaveBeenCalledWith(TTS_THEME_LIGHT);
+    watcher.dispose();
+  });
+
+  it("invokes onChange when the app flips data-theme from light to dark", async () => {
+    setDataTheme("light");
+    const watcher = createThemeWatcher();
+    const onChange = vi.fn();
+    watcher.onChange(onChange);
+
+    setDataTheme("dark");
+    await flushMutations();
+    expect(onChange).toHaveBeenCalledWith(TTS_THEME_DARK);
+    watcher.dispose();
+  });
+
+  it("does NOT invoke onChange for unrelated attribute mutations on <html>", async () => {
+    setDataTheme("dark");
+    const watcher = createThemeWatcher();
+    const onChange = vi.fn();
+    watcher.onChange(onChange);
+
+    document.documentElement.setAttribute("lang", "en");
+    await flushMutations();
+    expect(onChange).not.toHaveBeenCalled();
+    watcher.dispose();
+  });
+
+  it("dispose() stops further onChange calls", async () => {
+    setDataTheme("dark");
+    const watcher = createThemeWatcher();
+    const onChange = vi.fn();
+    watcher.onChange(onChange);
+    watcher.dispose();
+
+    setDataTheme("light");
+    await flushMutations();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
