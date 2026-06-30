@@ -25,6 +25,10 @@ import type { HostRef } from "./host";
 import { loadSettings, loadTheme } from "./config";
 import { initTts } from "./tts/initTts";
 import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
+import { initSearch } from "./search/initSearch";
+import { TerminalSearchAdapter } from "./search/TerminalSearchAdapter";
+import { createOverlayScrollbar } from "./search/OverlayScrollbar";
+import { terminalScrollSurface } from "./search/scrollSurfaces";
 
 const DEFAULT_LOCAL_PORT = 7315;
 
@@ -198,6 +202,28 @@ async function bootPopout(): Promise<void> {
       console.warn("[popout] TTS disabled:", e);
     }
   })();
+
+  // In-view search (⌘/Ctrl+F) + overlay scrollbar for the detached pane.
+  try {
+    const scrollbar = createOverlayScrollbar({
+      host: body,
+      surface: terminalScrollSurface(
+        term.getXterm() as unknown as Parameters<typeof terminalScrollSurface>[0],
+      ),
+    });
+    initSearch({
+      getActiveSearchSurface: () =>
+        new TerminalSearchAdapter({
+          container: body,
+          term: term.getXterm() as unknown as ConstructorParameters<
+            typeof TerminalSearchAdapter
+          >[0]["term"],
+        }),
+      onMatchesChanged: (fractions) => scrollbar.setMatches(fractions),
+    });
+  } catch (e) {
+    console.warn("[popout] search disabled:", e);
+  }
   // First-paint guard: even though TerminalPane installs a
   // ResizeObserver, it skips fitting when the container measures 0×0
   // (FitAddon would otherwise clamp to 2×1 and ship that to the PTY).

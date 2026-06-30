@@ -18,6 +18,10 @@ import { initTts, type TtsHandle } from "../tts/initTts";
 import { MarkdownSurfaceAdapter } from "../tts/MarkdownSurfaceAdapter";
 import { CodeMirrorSurfaceAdapter } from "../tts/CodeMirrorSurfaceAdapter";
 import type { SpeakSurfaceAdapter } from "../tts/SpeakSurfaceAdapter";
+import {
+  attachViewerSearch,
+  type ViewerSearchHandle,
+} from "../search/attachViewerSearch";
 import { mountSpinner, type SpinnerHandle } from "./Spinner";
 import { showToast } from "./Toast";
 import { createAutoSave, type AutoSaveHandle } from "./AutoSave";
@@ -843,6 +847,8 @@ async function renderStationRemote(
 ): Promise<void> {
   speakHandles.get(root)?.dispose();
   speakHandles.delete(root);
+  searchHandles.get(root)?.dispose();
+  searchHandles.delete(root);
   disposeSession(root);
   // Round 3 follow-up — the mode toggle re-enters this function after
   // writing the new mode. Without clearing the body here, the previous
@@ -1145,6 +1151,13 @@ async function renderStationRemote(
       surface.dispose();
     },
   });
+
+  // Search bar + auto-hiding overlay scrollbar for this viewer. CodeMirror
+  // source mode searches the editor; rendered markdown searches the body.
+  searchHandles.set(
+    root,
+    attachViewerSearch({ root, body: shell.body, view: codeEditor?.view ?? null }),
+  );
 }
 
 // Per-host state for the active Speak handle so re-renders (auto-reload,
@@ -1157,6 +1170,10 @@ interface SpeakHandle {
 }
 const speakHandles = new WeakMap<HTMLElement, SpeakHandle>();
 
+// Per-host search handle (bar + overlay scrollbar), torn down on re-render
+// alongside the speak handle.
+const searchHandles = new WeakMap<HTMLElement, ViewerSearchHandle>();
+
 async function renderForPath(
   root: HTMLElement,
   shell: ViewerShell,
@@ -1167,6 +1184,8 @@ async function renderForPath(
   // re-rendering.
   speakHandles.get(root)?.dispose();
   speakHandles.delete(root);
+  searchHandles.get(root)?.dispose();
+  searchHandles.delete(root);
   disposeSession(root);
 
   const spinner = mountSpinner(shell.spinnerSlot);
@@ -1466,6 +1485,13 @@ async function renderForPath(
       surface.dispose();
     },
   });
+
+  // Search bar + auto-hiding overlay scrollbar for this viewer. CodeMirror
+  // source mode searches the editor; rendered markdown searches the body.
+  searchHandles.set(
+    root,
+    attachViewerSearch({ root, body: shell.body, view: codeEditor?.view ?? null }),
+  );
 
   // P4: watch the file on disk. When the viewer is clean we silently
   // reload; when it's dirty (CodeMirror content has diverged from

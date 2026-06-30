@@ -50,6 +50,14 @@ import { addProjectFlow } from "./ui/add-project-dialog";
 import { confirmDeleteProject } from "./ui/delete-project-dialog";
 import { initTts } from "./tts/initTts";
 import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
+import { initSearch } from "./search/initSearch";
+import { TerminalSearchAdapter } from "./search/TerminalSearchAdapter";
+import {
+  createOverlayScrollbar,
+  type OverlayScrollbar,
+} from "./search/OverlayScrollbar";
+import { terminalScrollSurface } from "./search/scrollSurfaces";
+import type { TerminalPane } from "@client-core/terminal/terminal-pane";
 import {
   addTab,
   allLeaves,
@@ -971,6 +979,10 @@ export async function boot(splash?: StartupSplashController) {
   // the cleanup as a free side-effect. See an earlier release 3e.
   window.addEventListener("beforeunload", () => hoverFocus.detach(), { once: true });
 
+  // Per-pane overlay scrollbars, keyed by the TerminalPane so each entry is
+  // GC'd with its pane (the pane drops its scroll listener on dispose).
+  const terminalScrollbars = new WeakMap<TerminalPane, OverlayScrollbar>();
+
   const layout: PaneLayout = new PaneLayout({
     root: layoutRoot,
     // Phase 10: route each tab's WS through its own host's ApiClient.
@@ -997,6 +1009,22 @@ export async function boot(splash?: StartupSplashController) {
     // hovers a line. The resolve batch and openInViewer route through
     // main's allowlist.
     onPaneCreated: (paneId, pane) => {
+      // Per-pane auto-hiding overlay scrollbar (xterm's native scrollbar is
+      // hidden via CSS). Fire-and-forget like the linkifier below: tied to
+      // the pane's lifetime and GC'd with it via the WeakMap.
+      try {
+        const host = pane.container.parentElement ?? pane.container;
+        const sb = createOverlayScrollbar({
+          host,
+          surface: terminalScrollSurface(
+            pane.getXterm() as unknown as Parameters<typeof terminalScrollSurface>[0],
+          ),
+        });
+        terminalScrollbars.set(pane, sb);
+      } catch (e) {
+        console.warn("[scrollbar] disabled for pane:", e);
+      }
+
       installPathLinkProvider(pane.getXterm(), {
         resolveBatch: (paths) => window.reckAPI.files.resolve(paths),
         onActivate: (filePath) => {
@@ -1849,6 +1877,31 @@ export async function boot(splash?: StartupSplashController) {
       console.warn("[tts] disabled:", e);
     }
   })();
+
+  // In-view search (⌘/Ctrl+F). Resolves the active terminal pane as a
+  // TerminalSearchAdapter (same pattern as the TTS surface above) and
+  // routes match-position ticks to that pane's overlay scrollbar.
+  try {
+    initSearch({
+      getActiveSearchSurface: () => {
+        const rec = layout.getActiveTerminalRecord();
+        if (!rec) return null;
+        const term = rec.term.getXterm();
+        return new TerminalSearchAdapter({
+          container: rec.wrapper,
+          term: term as unknown as ConstructorParameters<
+            typeof TerminalSearchAdapter
+          >[0]["term"],
+        });
+      },
+      onMatchesChanged: (fractions) => {
+        const rec = layout.getActiveTerminalRecord();
+        if (rec) terminalScrollbars.get(rec.term)?.setMatches(fractions);
+      },
+    });
+  } catch (e) {
+    console.warn("[search] disabled:", e);
+  }
 
   async function selectProject(projectId: string) {
     if (missionControlActive) hideMissionControl();

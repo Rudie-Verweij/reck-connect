@@ -3376,3 +3376,25 @@ textarea.file-viewer-merge-pane {
   background: var(--claude-orange, #d4683a);
   transform: translateY(-1px);
 }
+
+/* In the file-viewer popup the overlay scrollbar starts below the 38px
+   header so it doesn't ride up over the title/toggles. */
+.file-viewer-root > .reck-scrollbar {
+  top: 40px;
+}
+
+/* Hide the native scrollbars on the viewer surfaces — the overlay
+   scrollbar is the single, consistent affordance across all three views
+   (the terminal's native bar is already hidden elsewhere). */
+.file-viewer-body {
+  scrollbar-width: none;
+}
+.file-viewer-body::-webkit-scrollbar {
+  display: none;
+}
+.file-viewer-root .cm-scroller {
+  scrollbar-width: none;
+}
+.file-viewer-root .cm-scroller::-webkit-scrollbar {
+  display: none;
+}
