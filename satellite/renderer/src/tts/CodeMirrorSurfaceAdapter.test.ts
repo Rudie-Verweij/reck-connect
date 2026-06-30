@@ -34,6 +34,16 @@ describe("CodeMirrorSurfaceAdapter", () => {
     expect(adapter.getContainerEl()).toBe(container);
   });
 
+  it("setTheme sets the --cm-tts-highlight-bg variable on the editor root", () => {
+    const { container, view } = mountCm("hello world");
+    const adapter = new CodeMirrorSurfaceAdapter({ container, view });
+    adapter.setTheme({ backgroundColor: "#abcdef" });
+    expect(view.dom.style.getPropertyValue("--cm-tts-highlight-bg")).toBe(
+      "#abcdef",
+    );
+    adapter.dispose();
+  });
+
   it("resolveSpokenChunk extracts the editor's document text", () => {
     const { container, view } = mountCm("alpha beta\ngamma delta");
     const adapter = new CodeMirrorSurfaceAdapter({ container, view });

@@ -40,8 +40,11 @@ export interface TtsHandle {
  * file-viewer popups all hit this entry point.
  */
 export async function initTts(opts: InitTtsOptions): Promise<TtsHandle> {
-  const themeWatcher = createThemeWatcher();
   const settings = await loadTtsSettings();
+  const themeWatcher = createThemeWatcher({
+    light: settings.highlightColorLight,
+    dark: settings.highlightColorDark,
+  });
 
   let lastMousePoint: { pixelX: number; pixelY: number } | null = null;
   const onMouse = (ev: MouseEvent) => {

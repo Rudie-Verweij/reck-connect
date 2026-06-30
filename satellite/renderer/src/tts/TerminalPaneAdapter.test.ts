@@ -9,11 +9,7 @@ import type { TtsBoundary } from "./TtsEngine";
 // and HighlighterTerminal interfaces simultaneously (it has one buffer with
 // all the required fields). We replicate that here with a single buffer
 // object that carries every field both contracts need.
-type FakeTerm = ResolverTerminal & HighlighterTerminal & {
-  registerMarkerCalls: number;
-  registerDecorationCalls: number;
-  lastDecorationOpts: unknown;
-};
+type FakeTerm = ResolverTerminal & HighlighterTerminal;
 
 function fakeTerm(opts: {
   lines: string[];
@@ -24,6 +20,7 @@ function fakeTerm(opts: {
 }): FakeTerm {
   const baseY = opts.baseY ?? 0;
   const cursorY = opts.cursorY ?? 0;
+  const noop = () => ({ dispose() {} });
   const term: FakeTerm = {
     cols: 80,
     rows: 24,
@@ -45,20 +42,10 @@ function fakeTerm(opts: {
         },
       },
     },
-    registerMarkerCalls: 0,
-    registerDecorationCalls: 0,
-    lastDecorationOpts: null,
-    registerMarker(_offset?: number) {
-      this.registerMarkerCalls++;
-      const m = { disposed: false, dispose() { this.disposed = true; } };
-      return m;
-    },
-    registerDecoration(o) {
-      this.registerDecorationCalls++;
-      this.lastDecorationOpts = o;
-      const d = { disposed: false, dispose() { this.disposed = true; } };
-      return d;
-    },
+    // The overlay highlighter subscribes to these while a highlight is live.
+    onRender: noop,
+    onScroll: noop,
+    onResize: noop,
   };
   return term;
 }
@@ -158,7 +145,7 @@ describe("TerminalPaneAdapter", () => {
     expect(chunk.rangeMap).toEqual([]);
   });
 
-  it("highlightBoundary delegates to XtermHighlighter (registers marker + decoration)", () => {
+  it("highlightBoundary delegates to XtermHighlighter (anchors a marker + paints an overlay)", () => {
     const term = fakeTerm({ lines: ["alpha"] });
     const adapter = new TerminalPaneAdapter({
       term,
@@ -172,8 +159,14 @@ describe("TerminalPaneAdapter", () => {
       line: 0, col: 0, len: 5, word: "alpha", charIndex: 0,
     };
     adapter.highlightBoundary(boundary);
-    expect(term.registerMarkerCalls).toBe(1);
-    expect(term.registerDecorationCalls).toBe(1);
+    // "alpha" is on the only visible line → a visible overlay is painted.
+    const overlay = document.querySelector<HTMLDivElement>(".reck-tts-highlight");
+    expect(overlay).not.toBeNull();
+    expect(overlay!.style.display).toBe("block");
+    // Introspection reflects the live boundary (not a silent empty array).
+    expect(adapter.__highlights()).toEqual([boundary]);
+    adapter.clearHighlight();
+    expect(adapter.__highlights()).toEqual([]);
   });
 
   it("clearHighlight disposes the active decoration", () => {
@@ -201,8 +194,23 @@ describe("TerminalPaneAdapter", () => {
     adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "alpha", charIndex: 0 });
     expect(() => adapter.dispose()).not.toThrow();
     // After dispose, further highlightBoundary calls become no-ops.
-    const before = term.registerMarkerCalls;
     adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "alpha", charIndex: 0 });
-    expect(term.registerMarkerCalls).toBe(before);
+    expect(adapter.__highlights()).toEqual([]);
+  });
+
+  it("setTheme recolours the highlight overlay (configured colour)", () => {
+    const term = fakeTerm({ lines: ["alpha"] });
+    const adapter = new TerminalPaneAdapter({
+      term,
+      xtermEl: fakeXtermEl(),
+      containerEl: fakeContainer(),
+      cellWidth: 8,
+      cellHeight: 16,
+    });
+    adapter.setTheme({ backgroundColor: "rgb(9, 8, 7)" });
+    adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "alpha", charIndex: 0 });
+    const overlay = document.querySelector<HTMLDivElement>(".reck-tts-highlight");
+    expect(overlay).not.toBeNull();
+    expect(overlay!.style.backgroundColor).toBe("rgb(9, 8, 7)");
   });
 });

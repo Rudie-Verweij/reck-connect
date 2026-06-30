@@ -7,19 +7,17 @@ import {
 } from "./ttsTheme";
 
 describe("TTS theme tokens", () => {
-  // Per-mode highlight tuned for the typical terminal foreground:
-  //   light mode → dark text on a LIGHT amber  (#fde68a)
-  //   dark  mode → light text on a DARKER amber (#696241)
-  // Both are SOLID hex (no rgba) so the rendered colour is exactly
-  // what's specified — no alpha-blending against the cell background.
+  // Per-mode highlight DEFAULTS (solid hex):
+  //   light mode → warm amber  rgb(255, 201, 107) = #ffc96b
+  //   dark  mode → pale yellow rgb(255, 241, 168) = #fff1a8
 
-  it("light-mode palette uses the light amber highlight", () => {
-    expect(TTS_THEME_LIGHT.backgroundColor).toBe("#fde68a");
+  it("light-mode palette uses the warm-amber highlight default", () => {
+    expect(TTS_THEME_LIGHT.backgroundColor).toBe("#ffc96b");
     expect(TTS_THEME_LIGHT.controlAccent).toBeDefined();
   });
 
-  it("dark-mode palette uses the dark amber highlight", () => {
-    expect(TTS_THEME_DARK.backgroundColor).toBe("#696241");
+  it("dark-mode palette uses the pale-yellow highlight default", () => {
+    expect(TTS_THEME_DARK.backgroundColor).toBe("#fff1a8");
     expect(TTS_THEME_DARK.controlAccent).toBeDefined();
   });
 
@@ -42,6 +40,21 @@ describe("resolveTtsTheme", () => {
 
   it("returns the light palette when isDark=false", () => {
     expect(resolveTtsTheme(false)).toBe(TTS_THEME_LIGHT);
+  });
+
+  it("overrides backgroundColor with the chosen colour per mode", () => {
+    const dark = resolveTtsTheme(true, { light: "#aaa111", dark: "#bbb222" });
+    expect(dark.backgroundColor).toBe("#bbb222");
+    const light = resolveTtsTheme(false, { light: "#aaa111", dark: "#bbb222" });
+    expect(light.backgroundColor).toBe("#aaa111");
+    // Control-bar chrome is untouched by the override.
+    expect(dark.controlAccent).toBe(TTS_THEME_DARK.controlAccent);
+  });
+
+  it("falls back to the default palette when the override for the mode is absent", () => {
+    expect(resolveTtsTheme(true, { light: "#aaa111" }).backgroundColor).toBe(
+      TTS_THEME_DARK.backgroundColor,
+    );
   });
 });
 

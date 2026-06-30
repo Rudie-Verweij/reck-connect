@@ -55,7 +55,38 @@ export class TerminalPaneAdapter implements SpeakSurfaceAdapter {
     this.cellWidth = opts.cellWidth;
     this.cellHeight = opts.cellHeight;
     this.theme = opts.theme ?? { backgroundColor: "rgba(255,255,0,0.6)" };
-    this.highlighter = new XtermHighlighter(this.term, () => this.theme);
+    // Anchor the highlight overlay to the xterm screen grid so (0,0) maps to
+    // the top-left cell. Measure cell metrics LIVE on each reposition (off
+    // xterm's render service, which updates on resize) so the highlight
+    // stays aligned when the window changes size; fall back to the metrics
+    // captured at construction.
+    const overlayParent =
+      (this.xtermEl.querySelector?.(".xterm-screen") as HTMLElement | null) ??
+      this.xtermEl;
+    this.highlighter = new XtermHighlighter(this.term, () => this.theme, {
+      overlayParent,
+      measureCell: () => this.measureCell(),
+    });
+  }
+
+  private measureCell(): { width: number; height: number } {
+    const dims = (
+      this.term as unknown as {
+        _core?: {
+          _renderService?: {
+            dimensions?: {
+              css?: { cell?: { width?: number; height?: number } };
+              actualCellWidth?: number;
+              actualCellHeight?: number;
+            };
+          };
+        };
+      }
+    )._core?._renderService?.dimensions;
+    const width = dims?.css?.cell?.width ?? dims?.actualCellWidth ?? this.cellWidth;
+    const height =
+      dims?.css?.cell?.height ?? dims?.actualCellHeight ?? this.cellHeight;
+    return { width, height };
   }
 
   getContainerEl(): HTMLElement {
@@ -105,11 +136,14 @@ export class TerminalPaneAdapter implements SpeakSurfaceAdapter {
     this.highlighter = null;
   }
 
-  // Test introspection — TtsController.test.ts expects to see the
-  // boundaries that were forwarded to highlighting. Kept on this class
-  // (rather than the controller) so the controller stays surface-agnostic.
+  // Test introspection — surfaces the live highlighted boundary so tests can
+  // assert boundary→highlight forwarding through the real adapter. The
+  // overlay highlighter tracks a single active highlight (not a history), so
+  // this returns the one live boundary or nothing.
   __highlights(): TtsBoundary[] {
-    const internal = this.highlighter as unknown as { __highlights?: TtsBoundary[] };
-    return internal?.__highlights ?? [];
+    const b = (
+      this.highlighter as unknown as { activeBoundary?: TtsBoundary | null }
+    )?.activeBoundary;
+    return b ? [b] : [];
   }
 }

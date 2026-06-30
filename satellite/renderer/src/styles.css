@@ -1479,6 +1479,27 @@ html, body, #app {
   transition: border-color 0.2s var(--ease-smooth);
 }
 
+/* TTS highlight colour pickers — a label + a small colour swatch per row,
+   instead of the full-width text-input treatment the generic rule applies. */
+.tts-color-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+}
+.tts-color-row label {
+  display: inline;
+  margin: 0;
+}
+.settings-card .tts-color-row input[type="color"] {
+  width: 52px;
+  height: 30px;
+  flex: 0 0 auto;
+  padding: 2px;
+  cursor: pointer;
+}
+
 .settings-card input::placeholder,
 .form-input::placeholder {
   color: var(--claude-mid);
@@ -2799,7 +2820,15 @@ html, body, #app {
    highlighter (rgba(255, 255, 0, 0.6) — the terminal-pane theme
    default). Slight rounding to match the markdown overlay style. */
 .cm-tts-highlight {
-  background: rgba(255, 235, 59, 0.6);
+  /* Colour is the user-configured highlight, pushed as --cm-tts-highlight-bg
+     by CodeMirrorSurfaceAdapter.setTheme(); mixed with transparent so the
+     text reads through the tint (matching the other surfaces' opacity).
+     Falls back to the neutral yellow when no theme has been pushed yet. */
+  background: color-mix(
+    in srgb,
+    var(--cm-tts-highlight-bg, #ffeb3b) 55%,
+    transparent
+  );
   border-radius: 2px;
 }
 

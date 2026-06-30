@@ -7,16 +7,21 @@ export interface TtsTheme {
   controlText: string;
 }
 
-// Per-mode highlight tuned for the typical terminal foreground colour:
-//   light mode → dark text on a LIGHT amber  (#fde68a)
-//   dark  mode → light text on a DARKER amber (#696241,
-//                  the pre-blended result of
-//                  rgba(253, 230, 138, 0.45) over black)
-// Both are SOLID hex — no alpha-blending against the cell background,
-// so the rendered colour is exactly what's specified. With
-// XtermHighlighter's layer:"bottom" the cell text reads on top.
-const TTS_HIGHLIGHT_BG_LIGHT = "#fde68a";
-const TTS_HIGHLIGHT_BG_DARK = "#696241";
+// Per-mode highlight DEFAULTS (solid hex):
+//   light mode → warm amber  rgb(255, 201, 107)
+//   dark  mode → pale yellow rgb(255, 241, 168)
+// The surfaces paint them as a translucent overlay so the word reads
+// through the tint in both themes. The user can override each via the
+// settings colour pickers (see ttsSettings.ts), which thread the chosen
+// colours into resolveTtsTheme() below.
+export const TTS_HIGHLIGHT_BG_LIGHT = "#ffc96b"; // rgb(255, 201, 107)
+export const TTS_HIGHLIGHT_BG_DARK = "#fff1a8"; // rgb(255, 241, 168)
+
+/** User-chosen highlight colours per mode; either may be absent (→ default). */
+export interface HighlightColorOverrides {
+  light?: string;
+  dark?: string;
+}
 
 export const TTS_THEME_LIGHT: TtsTheme = {
   backgroundColor: TTS_HIGHLIGHT_BG_LIGHT,
@@ -34,8 +39,15 @@ export const TTS_THEME_DARK: TtsTheme = {
   controlText: "#f3f4f6",
 };
 
-export function resolveTtsTheme(isDark: boolean): TtsTheme {
-  return isDark ? TTS_THEME_DARK : TTS_THEME_LIGHT;
+export function resolveTtsTheme(
+  isDark: boolean,
+  highlightColors?: HighlightColorOverrides,
+): TtsTheme {
+  const base = isDark ? TTS_THEME_DARK : TTS_THEME_LIGHT;
+  const override = isDark ? highlightColors?.dark : highlightColors?.light;
+  // Only the highlight backgroundColor is user-configurable; the control-bar
+  // chrome stays themed. An absent/empty override falls back to the default.
+  return override ? { ...base, backgroundColor: override } : base;
 }
 
 export interface TtsThemeWatcher {
@@ -57,7 +69,9 @@ function readAppTheme(): "light" | "dark" {
   return v === "light" ? "light" : "dark";
 }
 
-export function createThemeWatcher(): TtsThemeWatcher {
+export function createThemeWatcher(
+  highlightColors?: HighlightColorOverrides,
+): TtsThemeWatcher {
   const listeners = new Set<(theme: TtsTheme) => void>();
   let lastTheme: "light" | "dark" = readAppTheme();
 
@@ -65,7 +79,7 @@ export function createThemeWatcher(): TtsThemeWatcher {
     const next = readAppTheme();
     if (next === lastTheme) return; // attribute changed but value didn't
     lastTheme = next;
-    const theme = resolveTtsTheme(next === "dark");
+    const theme = resolveTtsTheme(next === "dark", highlightColors);
     for (const cb of listeners) cb(theme);
   });
 
@@ -75,7 +89,7 @@ export function createThemeWatcher(): TtsThemeWatcher {
   });
 
   return {
-    current: () => resolveTtsTheme(readAppTheme() === "dark"),
+    current: () => resolveTtsTheme(readAppTheme() === "dark", highlightColors),
     onChange(cb) {
       listeners.add(cb);
       return () => listeners.delete(cb);

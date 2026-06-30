@@ -99,6 +99,7 @@ class StubSurfaceAdapter implements SpeakSurfaceAdapter {
   readonly kind: SurfaceKind = "terminal";
   highlights: TtsBoundary[] = [];
   clearCalls = 0;
+  themeColors: string[] = [];
 
   constructor(
     private readonly term: ResolverTerminal,
@@ -137,6 +138,10 @@ class StubSurfaceAdapter implements SpeakSurfaceAdapter {
 
   clearHighlight(): void {
     this.clearCalls++;
+  }
+
+  setTheme(theme: { backgroundColor: string }): void {
+    this.themeColors.push(theme.backgroundColor);
   }
 
   dispose(): void {}
@@ -275,7 +280,11 @@ function fakePane(opts: {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
-const DEFAULT_SETTINGS: TtsSettings = { voice: null, rate: 1.0 };
+const COLORS = {
+  highlightColorLight: "#fde68a",
+  highlightColorDark: "#696241",
+};
+const DEFAULT_SETTINGS: TtsSettings = { voice: null, rate: 1.0, ...COLORS };
 
 interface MakeOpts {
   pane?: SpeakSurfaceAdapter | null;
@@ -370,7 +379,7 @@ describe("TtsController.start — text resolution", () => {
     const pane = fakePane({
       bufferLines: ["alpha"],
     });
-    const settings = { voice: "Daniel", rate: 1.25 };
+    const settings = { voice: "Daniel", rate: 1.25, ...COLORS };
     const { engine, ctl } = makeController({
       pane,
       point: { pixelX: 0, pixelY: 0 },
@@ -472,7 +481,7 @@ describe("TtsController.bumpRate", () => {
     const { engine, ctl } = makeController({
       pane,
       point: { pixelX: 0, pixelY: 0 },
-      settings: { voice: null, rate: 1.0 },
+      settings: { voice: null, rate: 1.0, ...COLORS },
     });
     ctl.start();
     ctl.bumpRate(0.05);
@@ -485,7 +494,7 @@ describe("TtsController.bumpRate", () => {
     const { engine, ctl } = makeController({
       pane,
       point: { pixelX: 0, pixelY: 0 },
-      settings: { voice: null, rate: 6.0 },
+      settings: { voice: null, rate: 6.0, ...COLORS },
     });
     ctl.start();
     ctl.bumpRate(0.05);
@@ -501,7 +510,7 @@ describe("TtsController.bumpRate", () => {
       const { ctl } = makeController({
         pane,
         point: { pixelX: 0, pixelY: 0 },
-        settings: { voice: null, rate: 1.0 },
+        settings: { voice: null, rate: 1.0, ...COLORS },
         saveSettings: async (s) => {
           saved.push(s);
         },
@@ -526,7 +535,7 @@ describe("TtsController.bumpRate", () => {
       const { ctl } = makeController({
         pane,
         point: { pixelX: 0, pixelY: 0 },
-        settings: { voice: null, rate: 1.0 },
+        settings: { voice: null, rate: 1.0, ...COLORS },
         saveSettings: async (s) => {
           saved.push(s);
         },
@@ -681,6 +690,29 @@ describe("TtsController degenerate-boundary wiring", () => {
     expect(stub.clearCalls).toBe(0);
     engine.fireDegenerate();
     expect(stub.clearCalls).toBe(1);
+    ctl.dispose();
+  });
+});
+
+describe("TtsController — highlight theme push to surface", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("pushes the configured theme colour to the surface on start()", () => {
+    const pane = fakePane({ bufferLines: ["alpha beta"] }) as unknown as StubSurfaceAdapter;
+    const { ctl } = makeController({ pane, point: { pixelX: 0, pixelY: 0 } });
+    ctl.start();
+    expect(pane.themeColors).toContain(TTS_THEME_LIGHT.backgroundColor);
+    ctl.dispose();
+  });
+
+  it("pushes a new colour to the live surface on setTheme()", () => {
+    const pane = fakePane({ bufferLines: ["alpha beta"] }) as unknown as StubSurfaceAdapter;
+    const { ctl } = makeController({ pane, point: { pixelX: 0, pixelY: 0 } });
+    ctl.start();
+    ctl.setTheme({ ...TTS_THEME_LIGHT, backgroundColor: "#123456" });
+    expect(pane.themeColors).toContain("#123456");
     ctl.dispose();
   });
 });

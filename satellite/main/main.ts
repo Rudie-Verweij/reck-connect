@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, dialog, shell, clipboard } from "electron";
 import path from "node:path";
 import { readConfig, writeConfig, hasConfigKey, isAllowedConfigKey } from "./storage";
 import {
@@ -589,6 +589,15 @@ ipcMain.handle("config:set", (_e, key: unknown, value: unknown) => {
   // IPC contract (renderer treats falsy as "didn't save").
   writeConfig(key, value);
   return true;
+});
+
+// --- IPC: clipboard write ---
+// OSC 52 copy-on-select routes through here so the write goes via Electron's
+// main-process clipboard rather than the renderer's navigator.clipboard,
+// which Electron only permits while the window has focus / a recent user
+// gesture — making PTY-driven OSC 52 writes flaky.
+ipcMain.handle("clipboard:write", (_e, text: unknown) => {
+  clipboard.writeText(typeof text === "string" ? text : String(text ?? ""));
 });
 
 // --- IPC: daemon control ---

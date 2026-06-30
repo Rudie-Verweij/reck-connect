@@ -26,6 +26,13 @@ export interface SurfacePoint {
   pixelY: number;
 }
 
+/** The user-configurable highlight colour pushed to a surface. Only the
+ *  background is configurable; `foregroundColor` is reserved/optional. */
+export interface SurfaceHighlightTheme {
+  backgroundColor: string;
+  foregroundColor?: string;
+}
+
 export interface SpeakSurfaceAdapter {
   readonly kind: SurfaceKind;
 
@@ -51,6 +58,11 @@ export interface SpeakSurfaceAdapter {
 
   /** Drop any active highlight. Called on stop / end / error. */
   clearHighlight(): void;
+
+  /** Apply the user-chosen highlight colour. The controller pushes this on
+   *  `start()` and whenever the theme changes, so every surface honours the
+   *  same configured colour. Optional for forward-compatibility. */
+  setTheme?(theme: SurfaceHighlightTheme): void;
 
   /** Tear down resources (overlays, decorations, listeners). */
   dispose(): void;

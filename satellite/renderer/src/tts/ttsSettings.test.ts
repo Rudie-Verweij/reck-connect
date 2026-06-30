@@ -43,11 +43,16 @@ describe("loadTtsSettings", () => {
     expect(s.voice).toBe(null);
   });
 
-  it("returns the persisted value when present", async () => {
+  it("returns the persisted value when present (colours default in)", async () => {
     const { api } = installFakeAPI();
     await api.config.set(TTS_CONFIG_KEY, { voice: "Samantha", rate: 1.25 });
     const s = await loadTtsSettings();
-    expect(s).toEqual({ voice: "Samantha", rate: 1.25 });
+    expect(s).toEqual({
+      voice: "Samantha",
+      rate: 1.25,
+      highlightColorLight: DEFAULT_TTS_SETTINGS.highlightColorLight,
+      highlightColorDark: DEFAULT_TTS_SETTINGS.highlightColorDark,
+    });
   });
 
   it("snaps an out-of-range persisted rate at load time", async () => {
@@ -84,18 +89,93 @@ describe("saveTtsSettings", () => {
     installFakeAPI();
   });
 
-  it("writes the snapped rate", async () => {
+  it("writes the snapped rate and the colours", async () => {
     const { store } = installFakeAPI();
-    await saveTtsSettings({ voice: "Daniel", rate: 1.27 });
+    await saveTtsSettings({
+      voice: "Daniel",
+      rate: 1.27,
+      highlightColorLight: "#aabbcc",
+      highlightColorDark: "#112233",
+    });
     expect(store.get(TTS_CONFIG_KEY)).toEqual({
       voice: "Daniel",
       rate: 1.25,
+      highlightColorLight: "#aabbcc",
+      highlightColorDark: "#112233",
     });
   });
 
   it("writes a null voice as null (not omitted)", async () => {
     const { store } = installFakeAPI();
-    await saveTtsSettings({ voice: null, rate: 1.0 });
-    expect(store.get(TTS_CONFIG_KEY)).toEqual({ voice: null, rate: 1.0 });
+    await saveTtsSettings({
+      voice: null,
+      rate: 1.0,
+      highlightColorLight: "#fde68a",
+      highlightColorDark: "#696241",
+    });
+    expect(store.get(TTS_CONFIG_KEY)).toEqual({
+      voice: null,
+      rate: 1.0,
+      highlightColorLight: "#fde68a",
+      highlightColorDark: "#696241",
+    });
+  });
+});
+
+describe("highlight colour validation", () => {
+  beforeEach(() => {
+    installFakeAPI();
+  });
+
+  it("keeps valid persisted hex colours (#rrggbb and #rgb)", async () => {
+    const { api } = installFakeAPI();
+    await api.config.set(TTS_CONFIG_KEY, {
+      voice: null,
+      rate: 1.0,
+      highlightColorLight: "#ff8800",
+      highlightColorDark: "#0af",
+    });
+    const s = await loadTtsSettings();
+    expect(s.highlightColorLight).toBe("#ff8800");
+    expect(s.highlightColorDark).toBe("#0af");
+  });
+
+  it("falls back to defaults for malformed colours", async () => {
+    const { api } = installFakeAPI();
+    await api.config.set(TTS_CONFIG_KEY, {
+      voice: null,
+      rate: 1.0,
+      highlightColorLight: "rgb(1,2,3)", // not hex
+      highlightColorDark: 42, // not a string
+    });
+    const s = await loadTtsSettings();
+    expect(s.highlightColorLight).toBe(DEFAULT_TTS_SETTINGS.highlightColorLight);
+    expect(s.highlightColorDark).toBe(DEFAULT_TTS_SETTINGS.highlightColorDark);
+  });
+
+  it("normalises an invalid colour to the default on save", async () => {
+    const { store } = installFakeAPI();
+    await saveTtsSettings({
+      voice: null,
+      rate: 1.0,
+      highlightColorLight: "not-a-color",
+      highlightColorDark: "#123456",
+    });
+    const saved = store.get(TTS_CONFIG_KEY) as { highlightColorLight: string };
+    expect(saved.highlightColorLight).toBe(
+      DEFAULT_TTS_SETTINGS.highlightColorLight,
+    );
+  });
+});
+
+describe("isHexColor", () => {
+  it("validates hex shapes", async () => {
+    const { isHexColor } = await import("./ttsSettings");
+    expect(isHexColor("#fde68a")).toBe(true);
+    expect(isHexColor("#abc")).toBe(true);
+    expect(isHexColor("#GGGGGG")).toBe(false);
+    expect(isHexColor("fde68a")).toBe(false);
+    expect(isHexColor("rgb(0,0,0)")).toBe(false);
+    expect(isHexColor(123)).toBe(false);
   });
 });

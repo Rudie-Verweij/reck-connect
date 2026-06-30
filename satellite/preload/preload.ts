@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld("reckAPI", {
     get: (key: string) => ipcRenderer.invoke("config:get", key),
     set: (key: string, value: unknown) => ipcRenderer.invoke("config:set", key, value),
   },
+  clipboard: {
+    // OSC 52 copy-on-select writes here so the clipboard write goes through
+    // Electron's main-process clipboard (always permitted) instead of the
+    // focus-gated renderer navigator.clipboard.
+    write: (text: string) => ipcRenderer.invoke("clipboard:write", text),
+  },
   daemon: {
     status: (host: HostRef) => ipcRenderer.invoke("daemon:status", host),
     start: (host: HostRef) => ipcRenderer.invoke("daemon:start", host),

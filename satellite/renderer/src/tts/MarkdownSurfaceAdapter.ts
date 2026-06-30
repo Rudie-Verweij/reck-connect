@@ -28,9 +28,14 @@
 import type { SpokenChunk, TtsBoundary, RangeMapEntry } from "./TtsEngine";
 import type {
   SpeakSurfaceAdapter,
+  SurfaceHighlightTheme,
   SurfaceKind,
   SurfacePoint,
 } from "./SpeakSurfaceAdapter";
+
+// Translucency applied to the (solid) configured highlight colour so the
+// prose reads through the tint — matching the terminal overlay's opacity.
+const OVERLAY_OPACITY = "0.5";
 
 export interface MarkdownSurfaceAdapterOptions {
   /** Where to mount the SpeakControlBar (and the highlight overlay).
@@ -58,6 +63,9 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
   private readonly container: HTMLElement;
   private readonly body: HTMLElement;
   private overlayEl: HTMLElement | null = null;
+  // Configured highlight colour (solid hex). Defaults to a neutral yellow
+  // until the controller pushes the user's theme via setTheme().
+  private highlightColor = "#ffeb3b";
   // charStart → DOM range anchor map, populated by resolveSpokenChunk.
   // Used by highlightBoundary to find where to paint.
   private charToRange = new Map<number, RangeAnchor>();
@@ -183,7 +191,8 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
       this.overlayEl.className = "tts-highlight-overlay";
       this.overlayEl.style.position = "absolute";
       this.overlayEl.style.pointerEvents = "none";
-      this.overlayEl.style.background = "rgba(255, 235, 59, 0.5)";
+      this.overlayEl.style.background = this.highlightColor;
+      this.overlayEl.style.opacity = OVERLAY_OPACITY;
       this.overlayEl.style.borderRadius = "2px";
       // Append into the scroll container (body) so
       // scrolling the body translates the overlay with the content.
@@ -259,6 +268,12 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
       this.body.removeEventListener("scroll", this.onBodyScroll);
       this.onBodyScroll = null;
     }
+  }
+
+  setTheme(theme: SurfaceHighlightTheme): void {
+    if (this.disposed) return;
+    this.highlightColor = theme.backgroundColor;
+    if (this.overlayEl) this.overlayEl.style.background = this.highlightColor;
   }
 
   dispose(): void {

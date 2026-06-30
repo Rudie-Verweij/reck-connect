@@ -340,11 +340,43 @@ export class TerminalPane {
       try {
         const webgl = new WebglAddon();
         this.term.loadAddon(webgl);
+        // WebGL-renderer workaround: with some TUIs' redraw + scroll-region
+        // pattern, the GPU renderer leaves cell colours painted at their
+        // pre-scroll rows while the text scrolls — colours visibly detach
+        // from their characters. Forcing a full viewport re-render on each
+        // scroll repaints every cell at its current row and keeps colour
+        // aligned with text. refresh() only marks rows dirty (the actual
+        // paint is rAF-coalesced), so this is cheap. The DOM/canvas
+        // fallback doesn't ghost, so the handler is scoped to the WebGL
+        // path.
+        this.term.onScroll(() => {
+          if (this.disposed) return;
+          this.term.refresh(0, this.term.rows - 1);
+        });
       } catch {
         /* fallback to canvas */
       }
     }
-    installOscFilter(this.term.parser);
+    installOscFilter(this.term.parser, {
+      // Route OSC 52 copy-on-select through Electron's main-process clipboard
+      // (via the preload bridge) when available — it isn't focus-gated like
+      // the renderer's navigator.clipboard. Falls back to navigator.clipboard
+      // outside Electron (web/PWA client).
+      writeClipboard: (text) => {
+        const bridge = (
+          globalThis as {
+            reckAPI?: { clipboard?: { write?: (t: string) => unknown } };
+          }
+        ).reckAPI?.clipboard?.write;
+        if (bridge) {
+          void bridge(text);
+          return;
+        }
+        if (typeof navigator !== "undefined" && navigator.clipboard) {
+          void navigator.clipboard.writeText(text).catch(() => {});
+        }
+      },
+    });
 
     // Shift+Enter → ESC + CR (0x1B 0x0D). Same byte sequence Claude
     // Code's `/terminal-setup` programs into VS Code/iTerm2 (verified
