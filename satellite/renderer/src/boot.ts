@@ -1659,9 +1659,10 @@ export async function boot(splash?: StartupSplashController) {
         ? await resolveClaudeExtras(currentProjectId)
         : null;
     // Reck Connect prompt — sent for every Claude pane (including resumes)
-    // so the global hints reach every session; undefined for shell panes.
+    // AND for codex panes (the codex adapter injects it via
+    // `-c developer_instructions=`); undefined for shell panes.
     const globalPreamble =
-      choice.kind === "claude"
+      choice.kind === "claude" || choice.kind === "codex"
         ? await resolveEffectiveReckConnectPrompt()
         : undefined;
     // Hybrid mode (rev 3.1, phase 10): route pane-create to the host
@@ -1714,9 +1715,10 @@ export async function boot(splash?: StartupSplashController) {
         ? await resolveClaudeExtras(currentProjectId)
         : null;
     // Reck Connect prompt — sent for every Claude pane (including resumes)
-    // so the global hints reach every session; undefined for shell panes.
+    // AND for codex panes (the codex adapter injects it via
+    // `-c developer_instructions=`); undefined for shell panes.
     const globalPreamble =
-      choice.kind === "claude"
+      choice.kind === "claude" || choice.kind === "codex"
         ? await resolveEffectiveReckConnectPrompt()
         : undefined;
     const pane_id = await createPaneOrToast(
@@ -1756,9 +1758,10 @@ export async function boot(splash?: StartupSplashController) {
         ? await resolveClaudeExtras(currentProjectId)
         : null;
     // Reck Connect prompt — sent for every Claude pane (including resumes)
-    // so the global hints reach every session; undefined for shell panes.
+    // AND for codex panes (the codex adapter injects it via
+    // `-c developer_instructions=`); undefined for shell panes.
     const globalPreamble =
-      choice.kind === "claude"
+      choice.kind === "claude" || choice.kind === "codex"
         ? await resolveEffectiveReckConnectPrompt()
         : undefined;
     const pane_id = await createPaneOrToast(

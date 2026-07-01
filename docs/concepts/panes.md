@@ -22,9 +22,9 @@ const (
 |------|----------------|--------------------|--------------------|
 | `claude` | `claude` binary (resolved at daemon startup) | Yes — `SessionID` (RFC 4122 UUID), stored in sessions index | Yes — baseline + project preamble via `--append-system-prompt` |
 | `shell` | Project's configured shell (default: `$SHELL -l`) | Yes — `SlotID` (RFC 4122 UUID), stored argv+cwd | No |
-| `codex` | `codex` binary (resolved at daemon startup; optional) | Yes — `SlotID` (reuses the shell slot mechanism), stored argv+cwd | No |
+| `codex` | `codex` binary (resolved at daemon startup; optional) | Yes — `SlotID` (reuses the shell slot mechanism), stored argv+cwd | Yes — global + project via `-c developer_instructions` (no Claude-shaped baseline) |
 
-Codex is a first-class pane kind: creatable from the New-pane dialog (the button is shown only when `/health` reports `codex_available`, i.e. a `codex` binary was resolved on that station), labelled **"Codex"** in the tab bar, and — like shell — restart-durable via a persisted `SlotID`. Still deferred (no evidence the `codex` CLI supports them): preamble injection, `--resume`, and lifecycle-hook–driven agent state. If `codex` is not on `PATH` at daemon startup, codex panes return `ErrCodexNotAvailable` at spawn time (HTTP 400) rather than executing a bare name.
+Codex is a first-class pane kind: creatable from the New-pane dialog (the Codex button is always shown; if the selected host reports no `codex` binary via `/health` `codex_available`, clicking it shows a toast explaining what to install), labelled **"Codex"** in the tab bar, and — like shell — restart-durable via a persisted `SlotID`. It receives the app-wide "Reck Connect prompt" and the per-project preamble, injected as a codex `developer` role message via `-c developer_instructions=` (the closest analog to Claude's `--append-system-prompt`; the Claude-shaped baseline is deliberately excluded). Still deferred (no evidence the `codex` CLI supports them): `--resume` and lifecycle-hook–driven agent state. If `codex` is not on `PATH` at daemon startup, codex panes return `ErrCodexNotAvailable` at spawn time (HTTP 400) rather than executing a bare name.
 
 ## Pane State
 
@@ -118,11 +118,13 @@ Everything else, including `--dangerously-skip-permissions`, is allowed.
 
 ## Codex Pane Specifics
 
-The codex adapter (`daemon/internal/agent/codex.go`) prepends the resolved `codexCmd` path and appends any `ExtraArgs`. On a **restore** it instead replays the argv+cwd captured at the original spawn (mirroring the shell adapter), so a codex pane comes back running the same command in the same directory after a daemon restart — slot-identity continuity is what lets the Satellite rebind the saved tab. If `codex` was unavailable at daemon startup, `BuildSpawn` returns `ErrCodexNotAvailable` and the HTTP handler returns 400.
+The codex adapter (`daemon/internal/agent/codex.go`) prepends the resolved `codexCmd` path, injects the preamble (below), and appends any `ExtraArgs`. On a **restore** it instead replays the argv+cwd captured at the original spawn (mirroring the shell adapter), so a codex pane comes back running the same command in the same directory after a daemon restart — slot-identity continuity is what lets the Satellite rebind the saved tab. If `codex` was unavailable at daemon startup, `BuildSpawn` returns `ErrCodexNotAvailable` and the HTTP handler returns 400.
 
-**Availability signal.** `GET /health` reports `codex_available` (`len(codexCmd) > 0`); the Satellite records it per-host and shows the "Codex" new-pane button only where a codex binary exists. Absent on older daemons ⇒ treated as false (button hidden).
+**Preamble.** codex has no `--append-system-prompt` flag, but its `-c`/`--config` override sets `developer_instructions`, documented in `codex-rs/config/src/config_toml.rs` as *"inserted as a `developer` role message"*. The adapter composes the app-wide "Reck Connect prompt" (`GlobalPreamble`) and the per-project preamble (`Project.Preamble`) — joined by the same `preambleSeparator` and capped at `MaxPreambleBytes` as claude — and appends `-c developer_instructions=<combined>`. It deliberately **excludes** the daemon baseline (`BaseStationPreamble`), which is Claude-shaped. Per-launch and non-invasive: nothing is written to the repo and no `AGENTS.md` is touched. The value is masked in logs via `argv_redact.go` (`developer_instructions=<redacted>`).
 
-**Still deferred** (no repo evidence the `codex` CLI supports these): `--resume` (`BuildSpawn` returns `ErrResumeUnsupported`), preamble injection (Claude's `--append-system-prompt` has no known codex equivalent; codex's convention is a filesystem `AGENTS.md`), and lifecycle-hook–driven agent state (the daemon hook channel is already wired for every pane, but a codex-side `reck-codex-hook.sh` shim awaits confirmation that the codex CLI exposes hooks). See issue #33.
+**Availability signal.** `GET /health` reports `codex_available` (`len(codexCmd) > 0`); the Satellite records it per-host. The "Codex" new-pane button is always shown; on a host without a codex binary, clicking it surfaces an install-guidance toast instead of silently failing.
+
+**Still deferred** (no repo evidence the `codex` CLI supports these): `--resume` (`BuildSpawn` returns `ErrResumeUnsupported`) and lifecycle-hook–driven agent state (the daemon hook channel is already wired for every pane, but a codex-side `reck-codex-hook.sh` shim awaits confirmation that the codex CLI exposes hooks). See issue #33.
 
 ## Agent State (hook-driven)
 

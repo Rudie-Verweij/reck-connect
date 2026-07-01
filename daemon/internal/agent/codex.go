@@ -1,6 +1,10 @@
 package agent
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // codexAdapter is a minimal stub for OpenAI's Codex CLI. Session
 // persistence and per-agent state-hook wiring are future work — keep
@@ -52,6 +56,34 @@ func (a *codexAdapter) BuildSpawn(req SpawnRequest) (SpawnPlan, error) {
 		return SpawnPlan{}, ErrCodexNotAvailable
 	}
 	argv := append([]string(nil), a.codexCmd...)
+
+	// Inject Reck's preamble as a codex `developer` role message via the
+	// `-c developer_instructions=` config override — the closest analog to
+	// Claude's --append-system-prompt (codex has no such flag; verified
+	// against codex-rs/config/src/config_toml.rs). Per-launch and
+	// non-invasive: nothing is written to the repo and no AGENTS.md is
+	// touched. We compose only the two AGENT-AGNOSTIC layers — the global
+	// "Reck Connect prompt" and the per-project preamble — and deliberately
+	// SKIP the daemon baseline, which is Claude-shaped (it names "Claude
+	// Code" and Claude's lifecycle hooks) and would be inaccurate here.
+	// codex parses the value as TOML with a literal-string fallback, so a
+	// prose preamble (which fails TOML parse) passes through verbatim,
+	// separators and newlines intact.
+	layers := make([]string, 0, 2)
+	if req.GlobalPreamble != "" {
+		layers = append(layers, req.GlobalPreamble)
+	}
+	if req.Project.Preamble != "" {
+		layers = append(layers, req.Project.Preamble)
+	}
+	if len(layers) > 0 {
+		combined := strings.Join(layers, preambleSeparator)
+		if len(combined) > MaxPreambleBytes {
+			return SpawnPlan{}, fmt.Errorf("codex preamble too large: %d bytes > %d", len(combined), MaxPreambleBytes)
+		}
+		argv = append(argv, "-c", "developer_instructions="+combined)
+	}
+
 	argv = append(argv, req.ExtraArgs...)
 	return SpawnPlan{
 		Argv:      argv,
