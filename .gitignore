@@ -30,3 +30,13 @@ mini-satellite/
 
 # Microsoft Office lock files (created while a doc is open)
 **/~$*
+
+# Go build artefacts. The standard build (`make build`) only warms the
+# build-cache and installs to ~/.local/bin; these appear only if a dev
+# runs `go build ./cmd/...` from the repo root. (Satellite build outputs —
+# release/, coverage/, etc. — are already ignored in satellite/.gitignore.)
+/reck-stationd
+/reck-pane-launcher
+*.test
+*.out
+*.prof

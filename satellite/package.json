@@ -49,8 +49,5 @@
     "vite": "^5.2.0",
     "vitest": "^1.5.0",
     "wait-on": "^7.2.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": ["electron", "esbuild"]
   }
 }

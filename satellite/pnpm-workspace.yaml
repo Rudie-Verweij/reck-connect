@@ -1,3 +1,13 @@
+# Native dependencies allowed to run their install/build scripts on a
+# fresh `pnpm install`. `allowBuilds` is pnpm's own approval format
+# (pnpm 11 reads it here; `pnpm approve-builds` writes to it) and is the
+# single source of truth for build approvals in this project — keep the
+# full list here rather than duplicating it in package.json (pnpm 11 does
+# not honour package.json's `pnpm.onlyBuiltDependencies`, which is what
+# left sharp unapproved before this reconciliation). sharp is used by
+# scripts/make-icon.mjs; electron and esbuild are toolchain natives.
+# Omitting any of these makes `pnpm install` skip its native build
+# (ERR_PNPM_IGNORED_BUILDS).
 allowBuilds:
   electron: true
   esbuild: true
