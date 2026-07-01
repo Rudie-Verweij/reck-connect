@@ -1412,7 +1412,7 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 			restoreEntry.LastPaneID = pane.ID
 			restoreEntry.WasLive = true
 			if err := m.sessions.Upsert(projectID, *restoreEntry); err != nil {
-				slog.Warn("sessions: upsert on shell restore failed", "err", err, "project", projectID, "slot", shortSessionID(restoreEntry.SlotID))
+				slog.Warn("sessions: upsert on slot restore failed", "kind", kind, "err", err, "project", projectID, "slot", shortSessionID(restoreEntry.SlotID))
 			}
 		default:
 			pane.SlotID = sessions.NewUUID()
@@ -1433,14 +1433,14 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 				LastPaneID:   pane.ID,
 				WasLive:      true,
 			}); err != nil {
-				slog.Warn("sessions: upsert on shell spawn failed", "err", err, "project", projectID, "slot", shortSessionID(pane.SlotID))
+				slog.Warn("sessions: upsert on slot spawn failed", "kind", kind, "err", err, "project", projectID, "slot", shortSessionID(pane.SlotID))
 			}
 		}
 		slot := pane.SlotID
 		pid := pane.ID
 		pane.OnExit(func(string) {
 			if err := m.sessions.Touch(projectID, slot, pid, time.Now().UTC()); err != nil {
-				slog.Warn("sessions: shell touch on exit failed", "err", err, "project", projectID, "slot", shortSessionID(slot))
+				slog.Warn("sessions: slot touch on exit failed", "kind", kind, "err", err, "project", projectID, "slot", shortSessionID(slot))
 			}
 		})
 	}

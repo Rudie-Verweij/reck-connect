@@ -49,6 +49,8 @@ import {
   pickSession,
   showAddProjectInfo,
 } from "./ui/new-pane-dialog";
+import { codexUnavailableMessage } from "./ui/codex-availability";
+import { showToast } from "./viewer/Toast";
 import { installShortcuts } from "./ui/shortcuts";
 import { renderSettings } from "./ui/settings-view";
 import { addProjectFlow } from "./ui/add-project-dialog";
@@ -1564,9 +1566,18 @@ export async function boot(splash?: StartupSplashController) {
       },
       isHostReady: (h) => isHostReady(h),
       subscribeReady: (cb) => subscribeHostReady(cb),
-      codexAvailable: (h) => isHostCodexAvailable(h),
     });
     if (!choice) return null;
+    // Codex is a first-class kind but needs a `codex` binary on the chosen
+    // host's daemon PATH. If /health reported none, don't silently fail the
+    // create — tell the user exactly what's missing and how to fix it.
+    if (choice.kind === "codex" && !isHostCodexAvailable(choice.host)) {
+      showToast(document.body, codexUnavailableMessage(choice.host), {
+        kind: "info",
+        durationMs: 9000,
+      });
+      return null;
+    }
     if (
       choice.kind === "claude" ||
       choice.kind === "shell" ||
@@ -1601,6 +1612,44 @@ export async function boot(splash?: StartupSplashController) {
     }
   }
 
+  /**
+   * Spawn a pane on `host` and return its id, or `null` after surfacing an
+   * error toast when the daemon rejects it. Pane-create failures used to be
+   * swallowed to the console (see the comment above); routing them through
+   * a toast means the user actually learns why nothing appeared — e.g. a
+   * codex create that slips past the availability gate returns the daemon's
+   * `ErrCodexNotAvailable` here.
+   */
+  async function createPaneOrToast(
+    host: HostRef,
+    projectId: string,
+    kind: PaneKind,
+    opts: {
+      resumeSessionId?: string;
+      extraArgs?: string[];
+      globalPreamble?: string;
+    },
+  ): Promise<string | null> {
+    try {
+      const { pane_id } = await apiForHost(host).createPane(
+        projectId,
+        kind,
+        opts,
+      );
+      return pane_id;
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      const label =
+        kind === "claude" ? "Claude" : kind === "codex" ? "Codex" : "Shell";
+      showToast(document.body, `Couldn't start the ${label} pane: ${detail}`, {
+        kind: "error",
+        durationMs: 8000,
+      });
+      console.error("createPane failed", { host, projectId, kind, error: e });
+      return null;
+    }
+  }
+
   async function newTabInLeaf(leafId: string) {
     if (!currentProjectId) return;
     const choice = await pickNewPane();
@@ -1620,7 +1669,8 @@ export async function boot(splash?: StartupSplashController) {
     // from its in-memory map populated by Phase 9's PUT /projects, so
     // no cwd override is needed here — the daemon handles the sshfs
     // mount-path translation transparently.
-    const { pane_id } = await apiForHost(choice.host).createPane(
+    const pane_id = await createPaneOrToast(
+      choice.host,
       currentProjectId,
       choice.kind,
       {
@@ -1629,6 +1679,7 @@ export async function boot(splash?: StartupSplashController) {
         globalPreamble,
       },
     );
+    if (!pane_id) return;
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
     const tree = layout.getTree();
     if (!tree) {
@@ -1668,7 +1719,8 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude"
         ? await resolveEffectiveReckConnectPrompt()
         : undefined;
-    const { pane_id } = await apiForHost(choice.host).createPane(
+    const pane_id = await createPaneOrToast(
+      choice.host,
       currentProjectId,
       choice.kind,
       {
@@ -1677,6 +1729,7 @@ export async function boot(splash?: StartupSplashController) {
         globalPreamble,
       },
     );
+    if (!pane_id) return;
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
     const r = splitLeaf(
       tree,
@@ -1708,7 +1761,8 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude"
         ? await resolveEffectiveReckConnectPrompt()
         : undefined;
-    const { pane_id } = await apiForHost(choice.host).createPane(
+    const pane_id = await createPaneOrToast(
+      choice.host,
       currentProjectId,
       choice.kind,
       {
@@ -1717,6 +1771,7 @@ export async function boot(splash?: StartupSplashController) {
         globalPreamble,
       },
     );
+    if (!pane_id) return;
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
     const newLeaf = leafWithTab(
       tab(pane_id, choice.kind, choice.host, undefined, undefined, tooltip),

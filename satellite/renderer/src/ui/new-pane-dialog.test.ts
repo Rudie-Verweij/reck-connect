@@ -88,67 +88,60 @@ describe("pickSession", () => {
   });
 });
 
-describe("askPaneKind — Codex button (per-host availability gate)", () => {
+describe("askPaneKind — Codex button", () => {
   function mount() {
     const root = document.createElement("div");
     document.body.appendChild(root);
     return root;
   }
 
-  it("renders the Codex button hidden when the host has no codex binary", () => {
+  it("always renders a visible Codex button (availability is surfaced later via a toast)", () => {
     const root = mount();
     void askPaneKind(root, {
       enabledHosts: { station: true, local: false },
       isHostReady: () => true,
-      codexAvailable: () => false,
     });
     const codexBtn = root.querySelector<HTMLButtonElement>(
       "button[data-kind='codex']",
     );
-    // Present in the DOM (so it can light up live) but hidden.
     expect(codexBtn).not.toBeNull();
-    expect(codexBtn?.hidden).toBe(true);
+    expect(codexBtn?.hidden).toBe(false);
+    // Enabled when the host is ready, like the other kind buttons.
+    expect(codexBtn?.disabled).toBe(false);
     root.querySelector<HTMLButtonElement>("button[data-kind='claude']")?.click();
     root.remove();
   });
 
-  it("hides the Codex button when codexAvailable is omitted (older callers)", () => {
+  it("disables the Codex button when the selected host isn't ready (like the others)", () => {
     const root = mount();
     void askPaneKind(root, {
       enabledHosts: { station: true, local: false },
-      isHostReady: () => true,
-    });
-    const codexBtn = root.querySelector<HTMLButtonElement>(
-      "button[data-kind='codex']",
-    );
-    expect(codexBtn?.hidden).toBe(true);
-    root.querySelector<HTMLButtonElement>("button[data-kind='claude']")?.click();
-    root.remove();
-  });
-
-  it("shows the Codex button and resolves {kind:'codex'} when the host has codex", async () => {
-    const root = mount();
-    const p = askPaneKind(root, {
-      enabledHosts: { station: true, local: false },
-      isHostReady: () => true,
-      codexAvailable: (h) => h === "station",
+      isHostReady: () => false,
     });
     const codexBtn = root.querySelector<HTMLButtonElement>(
       "button[data-kind='codex']",
     );
     expect(codexBtn?.hidden).toBe(false);
-    expect(codexBtn?.disabled).toBe(false);
-    codexBtn?.click();
-    await expect(p).resolves.toEqual({ kind: "codex", host: "station" });
+    expect(codexBtn?.disabled).toBe(true);
     root.remove();
   });
 
-  it("keyboard 'x' resolves codex when available on the selected host", async () => {
+  it("resolves {kind:'codex'} when the button is clicked", async () => {
     const root = mount();
     const p = askPaneKind(root, {
       enabledHosts: { station: true, local: false },
       isHostReady: () => true,
-      codexAvailable: () => true,
+    });
+    root.querySelector<HTMLButtonElement>("button[data-kind='codex']")?.click();
+    await expect(p).resolves.toEqual({ kind: "codex", host: "station" });
+    root.remove();
+  });
+
+  it("keyboard 'x' resolves codex when the host is ready", async () => {
+    const root = mount();
+    const p = askPaneKind(root, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
     });
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "x" }));
     await expect(p).resolves.toEqual({ kind: "codex", host: "station" });
