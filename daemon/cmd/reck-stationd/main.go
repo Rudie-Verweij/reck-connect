@@ -352,10 +352,11 @@ func main() {
 	})
 	wsH := &ws.Handler{Manager: mgr, Logger: logger}
 	srv := &httpsrv.Server{
-		Manager:   mgr,
-		WS:        wsH,
-		StartedAt: time.Now(),
-		Version:   Version,
+		Manager:        mgr,
+		WS:             wsH,
+		StartedAt:      time.Now(),
+		Version:        Version,
+		CodexAvailable: len(codexCmd) > 0,
 	}
 
 	// Mission Control supervisor — owns a hidden meta-project + an

@@ -986,6 +986,123 @@ func TestCreatePaneWith_restoreSlotID_reusesSlotAndArgv(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
+// A fresh codex pane must get a persisted slot entry (Kind=codex + a new
+// SlotID), mirroring shell — that entry is what makes the pane restorable
+// after a daemon restart. Codex needs a resolved binary for the fresh
+// spawn, so build the manager with a CodexCmd.
+func TestCreatePaneWith_codexFreshSpawnPersistsSlotEntry(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "projects.toml")
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sessions.NewStore(filepath.Join(dir, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManagerFromConfig(ManagerConfig{
+		Projects:   []config.Project{{ID: "p1", Name: "P1", Cwd: dir, Shell: []string{"/bin/sh"}}},
+		ClaudeCmd:  []string{"/bin/echo"},
+		CodexCmd:   []string{"/bin/echo", "codex"},
+		ConfigPath: configPath,
+		Sessions:   store,
+	})
+	pane, err := mgr.CreatePaneWith("p1", proto.PaneKindCodex, 80, 24, CreatePaneOptions{})
+	if err != nil {
+		t.Fatalf("CreatePaneWith codex: %v", err)
+	}
+	if pane.SlotID == "" {
+		t.Fatal("fresh codex pane got no SlotID — nothing to restore after a restart")
+	}
+	e, ok, err := store.Get("p1", pane.SlotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("no session entry persisted for a fresh codex pane")
+	}
+	if e.Kind != proto.PaneKindCodex {
+		t.Errorf("entry kind = %q, want codex", e.Kind)
+	}
+	if e.SlotID != pane.SlotID {
+		t.Errorf("entry SlotID = %q, want %q", e.SlotID, pane.SlotID)
+	}
+	if !e.WasLive {
+		t.Errorf("fresh codex entry should be WasLive=true")
+	}
+	_ = mgr.DeletePane("p1", pane.ID)
+	time.Sleep(50 * time.Millisecond)
+}
+
+// A codex pane must survive a daemon restart the same way a shell pane
+// does: given a seeded codex entry with a stored argv, a respawn under
+// RestoreSlotID reuses the SlotID and replays the stored argv. Slot
+// continuity is what lets the Satellite rebind the saved codex tab.
+func TestCreatePaneWith_restoreSlotID_codexReusesSlotAndArgv(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "projects.toml")
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sessions.NewStore(filepath.Join(dir, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := sessions.NewUUID()
+	now := time.Now().UTC()
+	if err := store.Upsert("p1", sessions.Entry{
+		Kind:         proto.PaneKindCodex,
+		SlotID:       slot,
+		Cwd:          dir,
+		ShellArgv:    []string{"/bin/echo", "restored-codex-marker"},
+		CreatedAt:    now,
+		LastActiveAt: now,
+		LastPaneID:   "p_gone",
+		WasLive:      true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Restore replays the captured argv, so no CodexCmd is needed here
+	// (same as the shell restore path).
+	mgr := NewManager(
+		[]config.Project{{ID: "p1", Name: "P1", Cwd: dir, Shell: []string{"/bin/sh"}}},
+		[]string{"/bin/echo"},
+		configPath,
+		store,
+	)
+	pane, err := mgr.CreatePaneWith("p1", proto.PaneKindCodex, 80, 24, CreatePaneOptions{
+		RestoreSlotID: slot,
+	})
+	if err != nil {
+		t.Fatalf("CreatePaneWith codex restore: %v", err)
+	}
+	if pane.SlotID != slot {
+		t.Errorf("SlotID drift on codex restore: got %q, want %q", pane.SlotID, slot)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(string(pane.ReplayTail(256)), "restored-codex-marker") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(string(pane.ReplayTail(256)), "restored-codex-marker") {
+		t.Fatalf("codex restore didn't replay stored argv; tail=%q", string(pane.ReplayTail(256)))
+	}
+	e, ok, _ := store.Get("p1", slot)
+	if !ok {
+		t.Fatal("entry missing after codex restore")
+	}
+	if e.LastPaneID != pane.ID {
+		t.Errorf("LastPaneID = %q, want %q", e.LastPaneID, pane.ID)
+	}
+	if !e.WasLive {
+		t.Errorf("WasLive should stay true after codex restore")
+	}
+	_ = mgr.DeletePane("p1", pane.ID)
+	time.Sleep(50 * time.Millisecond)
+}
+
 // TestCreatePaneWith_restoreSlotID_usesStoredCwdNotCurrentProjectCwd
 // locks in the "restore uses Entry.Cwd, not Project.Cwd" invariant.
 // Without this, a shell restore after a project-cwd change would land

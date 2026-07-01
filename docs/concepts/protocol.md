@@ -12,7 +12,7 @@ Base URL: `http://<station-host>:7315`
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/health` | Daemon liveness + version + uptime | Optional |
+| GET | `/health` | Daemon liveness + version + uptime + `codex_available` | Optional |
 | GET | `/projects` | List all projects with aggregate stoplight | Optional |
 | POST | `/projects` | Register a new project | Required |
 | DELETE | `/projects/:id` | Unregister a project | Required |

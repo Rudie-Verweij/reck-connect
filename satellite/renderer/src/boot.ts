@@ -8,6 +8,8 @@ import {
   isHostReady,
   setHostReady,
   subscribeHostReady,
+  setHostCodexAvailable,
+  isHostCodexAvailable,
 } from "./daemon/connection-for-host";
 import {
   makePushState,
@@ -47,6 +49,8 @@ import {
   pickSession,
   showAddProjectInfo,
 } from "./ui/new-pane-dialog";
+import { codexUnavailableMessage } from "./ui/codex-availability";
+import { showToast } from "./viewer/Toast";
 import { installShortcuts } from "./ui/shortcuts";
 import { renderSettings } from "./ui/settings-view";
 import { addProjectFlow } from "./ui/add-project-dialog";
@@ -1564,7 +1568,24 @@ export async function boot(splash?: StartupSplashController) {
       subscribeReady: (cb) => subscribeHostReady(cb),
     });
     if (!choice) return null;
-    if (choice.kind === "claude" || choice.kind === "shell") {
+    // Codex is a first-class kind but needs a `codex` binary on the chosen
+    // host's daemon PATH. If /health reported none, don't silently fail the
+    // create — tell the user exactly what's missing and how to fix it.
+    if (choice.kind === "codex" && !isHostCodexAvailable(choice.host)) {
+      showToast(document.body, codexUnavailableMessage(choice.host), {
+        kind: "info",
+        durationMs: 9000,
+      });
+      return null;
+    }
+    if (
+      choice.kind === "claude" ||
+      choice.kind === "shell" ||
+      choice.kind === "codex"
+    ) {
+      // Codex, like shell, is a direct create (no preamble, no resume) —
+      // the three newTab callers below already gate extras/globalPreamble
+      // on kind==="claude", so codex correctly sends neither.
       return { kind: choice.kind, host: choice.host };
     }
     // "resume": surface the session list. The picker is Claude-only —
@@ -1591,6 +1612,44 @@ export async function boot(splash?: StartupSplashController) {
     }
   }
 
+  /**
+   * Spawn a pane on `host` and return its id, or `null` after surfacing an
+   * error toast when the daemon rejects it. Pane-create failures used to be
+   * swallowed to the console (see the comment above); routing them through
+   * a toast means the user actually learns why nothing appeared — e.g. a
+   * codex create that slips past the availability gate returns the daemon's
+   * `ErrCodexNotAvailable` here.
+   */
+  async function createPaneOrToast(
+    host: HostRef,
+    projectId: string,
+    kind: PaneKind,
+    opts: {
+      resumeSessionId?: string;
+      extraArgs?: string[];
+      globalPreamble?: string;
+    },
+  ): Promise<string | null> {
+    try {
+      const { pane_id } = await apiForHost(host).createPane(
+        projectId,
+        kind,
+        opts,
+      );
+      return pane_id;
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      const label =
+        kind === "claude" ? "Claude" : kind === "codex" ? "Codex" : "Shell";
+      showToast(document.body, `Couldn't start the ${label} pane: ${detail}`, {
+        kind: "error",
+        durationMs: 8000,
+      });
+      console.error("createPane failed", { host, projectId, kind, error: e });
+      return null;
+    }
+  }
+
   async function newTabInLeaf(leafId: string) {
     if (!currentProjectId) return;
     const choice = await pickNewPane();
@@ -1610,7 +1669,8 @@ export async function boot(splash?: StartupSplashController) {
     // from its in-memory map populated by Phase 9's PUT /projects, so
     // no cwd override is needed here — the daemon handles the sshfs
     // mount-path translation transparently.
-    const { pane_id } = await apiForHost(choice.host).createPane(
+    const pane_id = await createPaneOrToast(
+      choice.host,
       currentProjectId,
       choice.kind,
       {
@@ -1619,6 +1679,7 @@ export async function boot(splash?: StartupSplashController) {
         globalPreamble,
       },
     );
+    if (!pane_id) return;
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
     const tree = layout.getTree();
     if (!tree) {
@@ -1658,7 +1719,8 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude"
         ? await resolveEffectiveReckConnectPrompt()
         : undefined;
-    const { pane_id } = await apiForHost(choice.host).createPane(
+    const pane_id = await createPaneOrToast(
+      choice.host,
       currentProjectId,
       choice.kind,
       {
@@ -1667,6 +1729,7 @@ export async function boot(splash?: StartupSplashController) {
         globalPreamble,
       },
     );
+    if (!pane_id) return;
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
     const r = splitLeaf(
       tree,
@@ -1698,7 +1761,8 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude"
         ? await resolveEffectiveReckConnectPrompt()
         : undefined;
-    const { pane_id } = await apiForHost(choice.host).createPane(
+    const pane_id = await createPaneOrToast(
+      choice.host,
       currentProjectId,
       choice.kind,
       {
@@ -1707,6 +1771,7 @@ export async function boot(splash?: StartupSplashController) {
         globalPreamble,
       },
     );
+    if (!pane_id) return;
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
     const newLeaf = leafWithTab(
       tab(pane_id, choice.kind, choice.host, undefined, undefined, tooltip),
@@ -1723,7 +1788,7 @@ export async function boot(splash?: StartupSplashController) {
     if (!found) return;
     const ok = await confirmDialog(document.body, {
       title: `Close ${found.tab.title}?`,
-      body: `This will end the ${found.tab.kind === "claude" ? "Claude" : "shell"} process running in this tab. Unsaved terminal state will be lost.`,
+      body: `This will end the ${found.tab.kind === "claude" ? "Claude" : found.tab.kind === "codex" ? "Codex" : "shell"} process running in this tab. Unsaved terminal state will be lost.`,
       confirmLabel: "Close tab",
       cancelLabel: "Keep",
     });
@@ -1748,7 +1813,7 @@ export async function boot(splash?: StartupSplashController) {
       title: paneCount === 1 ? `Close ${l.tabs[0].title}?` : `Close pane-box?`,
       body:
         paneCount === 1
-          ? `This will end the ${l.tabs[0].kind === "claude" ? "Claude" : "shell"} process.`
+          ? `This will end the ${l.tabs[0].kind === "claude" ? "Claude" : l.tabs[0].kind === "codex" ? "Codex" : "shell"} process.`
           : `This will close all ${paneCount} tabs and end their processes.`,
       confirmLabel: paneCount === 1 ? "Close tab" : `Close ${paneCount} tabs`,
       cancelLabel: "Keep",
@@ -2560,6 +2625,11 @@ export async function boot(splash?: StartupSplashController) {
         // because there's no station catalog to mirror.
         void pushStationProjectsToLocal();
       }
+      // Record codex availability for EVERY host (before the primary-host
+      // early-return) so the New-pane dialog can show the Codex button on
+      // whichever host the user targets. `codex_available` is absent on
+      // older daemons → coerced to false (button stays hidden).
+      setHostCodexAvailable(host, health.codex_available === true);
       if (host !== primaryHost) return;
       if (lastUptimeSec >= 0 && health.uptime_sec < lastUptimeSec) {
         window.location.reload();

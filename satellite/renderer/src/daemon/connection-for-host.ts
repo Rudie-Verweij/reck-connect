@@ -102,6 +102,13 @@ const readyFlags = new Map<HostRef, boolean>();
 type ReadyListener = (host: HostRef, ready: boolean) => void;
 const readyListeners = new Set<ReadyListener>();
 
+// Per-host "does this station have a codex binary" flag, fed from each
+// host's /health `codex_available`. Read synchronously by the New-pane
+// dialog to show the Codex button only where a codex pane can spawn.
+// Defaults to false for every host until a poll reports otherwise, so a
+// codex-less station (or an older daemon that omits the field) hides it.
+const codexAvailableFlags = new Map<HostRef, boolean>();
+
 /**
  * Initialise the per-host connection registry. Call once during boot
  * with the loaded `Settings` and the boot-side callbacks; the registry
@@ -189,6 +196,7 @@ export function disposeConnections(): void {
   failureLogged.clear();
   readyFlags.clear();
   readyListeners.clear();
+  codexAvailableFlags.clear();
   cachedSettings = null;
   cachedOptions = null;
 }
@@ -241,6 +249,25 @@ export function subscribeHostReady(cb: ReadyListener): () => void {
   return () => {
     readyListeners.delete(cb);
   };
+}
+
+/**
+ * Report whether `host` last advertised a codex binary on /health. The
+ * New-pane dialog gates its "Codex" button on this. Defaults to false
+ * for every host until a successful poll sets it (see boot's
+ * `onPollSuccess`), so the button stays hidden on codex-less stations and
+ * on daemons too old to send the field.
+ */
+export function isHostCodexAvailable(host: HostRef): boolean {
+  return codexAvailableFlags.get(host) === true;
+}
+
+/**
+ * Record `host`'s codex availability from its latest /health poll.
+ * Per-host: a codex binary on the station does not imply one on local.
+ */
+export function setHostCodexAvailable(host: HostRef, available: boolean): void {
+  codexAvailableFlags.set(host, available);
 }
 
 /**

@@ -81,6 +81,10 @@ type Server struct {
 	MC        MissionControlHandler // optional; nil-safe — MC endpoints omitted when unset
 	StartedAt time.Time
 	Version   string
+	// CodexAvailable mirrors whether the daemon resolved a codex binary at
+	// startup; surfaced on /health so the Satellite can gate the "Codex"
+	// new-pane button. Set from len(codexCmd) > 0 in main.
+	CodexAvailable bool
 	// SupervisorAuth, when non-nil, enables a second bearer token that
 	// identifies the Mission Control supervisor pane. The supervisor
 	// token lets a pane child authenticate to the daemon without the
@@ -449,9 +453,10 @@ func isLoopbackAddr(remoteAddr string) bool {
 
 func (s *Server) handleHealth(w nethttp.ResponseWriter, r *nethttp.Request) {
 	writeJSON(w, proto.HealthResponse{
-		Status:    "ok",
-		Version:   s.Version,
-		UptimeSec: int64(time.Since(s.StartedAt).Seconds()),
+		Status:         "ok",
+		Version:        s.Version,
+		UptimeSec:      int64(time.Since(s.StartedAt).Seconds()),
+		CodexAvailable: s.CodexAvailable,
 	})
 }
 
@@ -515,10 +520,15 @@ func (s *Server) handleCreatePane(w nethttp.ResponseWriter, r *nethttp.Request) 
 	if err := decodeJSONBody(w, r, maxJSONBody, &req); err != nil {
 		return
 	}
-	if req.Kind != proto.PaneKindClaude && req.Kind != proto.PaneKindShell {
+	if req.Kind != proto.PaneKindClaude && req.Kind != proto.PaneKindShell && req.Kind != proto.PaneKindCodex {
 		nethttp.Error(w, "invalid kind", nethttp.StatusBadRequest)
 		return
 	}
+	// A codex create on a station without a resolved codex binary falls
+	// through to CreatePaneWith, where the codex adapter returns
+	// ErrCodexNotAvailable → 400 below. The Satellite hides the Codex
+	// button unless /health reports codex_available, so this is the
+	// raw-client / stale-UI safety net, not the normal path.
 	pane, err := s.Manager.CreatePaneWith(id, req.Kind, 120, 40, pty.CreatePaneOptions{
 		ResumeSessionID: req.ResumeSessionID,
 		RestoreSlotID:   req.RestoreSlotID,

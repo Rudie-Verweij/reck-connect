@@ -77,6 +77,9 @@ export interface HealthResponse {
   status: string;
   version: string;
   uptime_sec: number;
+  /** True when the station resolved a codex binary at startup; gates the
+   *  "Codex" new-pane button. Absent on older daemons ⇒ treat as false. */
+  codex_available?: boolean;
 }
 
 export interface Project {

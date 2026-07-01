@@ -18,11 +18,20 @@ import {
   reorderTab,
   moveTab,
   isValidTreeNode,
+  defaultTabTitle,
 } from "./split-tree";
 
 function leaf1(paneId: string) {
   return leafWithTab(tab(paneId, "claude", "station"));
 }
+
+describe("defaultTabTitle", () => {
+  it("labels each pane kind, including codex (not the shell fallback)", () => {
+    expect(defaultTabTitle("claude")).toBe("Claude");
+    expect(defaultTabTitle("shell")).toBe("Shell");
+    expect(defaultTabTitle("codex")).toBe("Codex");
+  });
+});
 
 describe("split-tree", () => {
   it("starts as a single leaf with one tab", () => {

@@ -32,6 +32,8 @@ import {
   isHostReady,
   setHostReady,
   subscribeHostReady,
+  isHostCodexAvailable,
+  setHostCodexAvailable,
 } from "./connection-for-host";
 
 const HYBRID: Settings = {
@@ -390,6 +392,22 @@ describe("DaemonConnection split (Phase 4)", () => {
     expect(stubs.callbacks.failures[0].host).toBe("station");
     expect(stubs.callbacks.failures[0].reason).toBe("Unauthorized");
     expect(stubs.callbacks.failures[0].error).toBeInstanceOf(HttpError);
+  });
+});
+
+describe("codex availability flag (per-host new-pane-button gate)", () => {
+  it("defaults to false until a health poll reports it", () => {
+    expect(isHostCodexAvailable("station")).toBe(false);
+    expect(isHostCodexAvailable("local")).toBe(false);
+  });
+
+  it("setHostCodexAvailable / isHostCodexAvailable round-trip, per host", () => {
+    setHostCodexAvailable("station", true);
+    expect(isHostCodexAvailable("station")).toBe(true);
+    // A codex binary on the station must NOT imply one on local.
+    expect(isHostCodexAvailable("local")).toBe(false);
+    setHostCodexAvailable("station", false);
+    expect(isHostCodexAvailable("station")).toBe(false);
   });
 });
 

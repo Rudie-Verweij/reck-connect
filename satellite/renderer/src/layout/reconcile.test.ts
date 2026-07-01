@@ -38,6 +38,10 @@ function mkShell(id: string, slotId?: string, displayName?: string): Pane {
   return mkPane({ id, kind: "shell", slot_id: slotId, display_name: displayName });
 }
 
+function mkCodex(id: string, slotId?: string, displayName?: string): Pane {
+  return mkPane({ id, kind: "codex", slot_id: slotId, display_name: displayName });
+}
+
 describe("reconcile", () => {
   it("returns null when both saved and live are empty", () => {
     expect(reconcile(null, [], "station")).toBeNull();
@@ -394,6 +398,47 @@ describe("reconcile", () => {
     expect(tabs[0].sessionId).toBeUndefined();
   });
 
+  // --- Codex panes reuse the shell slot_id identity, so reconcile
+  // rekeys and restart-survives them exactly like shell. ---
+
+  it("rekeys a saved codex tab via slotId across a daemon restart", () => {
+    const saved = leafWithTab(
+      tab("p_old", "codex", "station", "my-codex", "t_1", undefined, undefined, "slot-c"),
+    );
+    const out = reconcile(saved, [mkCodex("p_new", "slot-c", "my-codex")], "station");
+    const tabs = allTabs(out!);
+    expect(tabs.length).toBe(1);
+    expect(tabs[0].paneId).toBe("p_new");
+    expect(tabs[0].slotId).toBe("slot-c");
+    expect(tabs[0].id).toBe("t_1");
+  });
+
+  it("captures slotId onto a codex tab bound by paneId only (fresh-create race)", () => {
+    const saved = leafWithTab(tab("p_live", "codex", "station", "Fresh", "t_f"));
+    const out = reconcile(saved, [mkCodex("p_live", "slot-fresh")], "station");
+    const tabs = allTabs(out!);
+    expect(tabs.length).toBe(1);
+    expect(tabs[0].id).toBe("t_f");
+    expect(tabs[0].slotId).toBe("slot-fresh");
+  });
+
+  it("seeds a new tab with slotId from a fresh codex live pane", () => {
+    const out = reconcile(null, [mkCodex("p_1", "slot-c")], "station");
+    const tabs = allTabs(out!);
+    expect(tabs[0].slotId).toBe("slot-c");
+    expect(tabs[0].sessionId).toBeUndefined();
+  });
+
+  it("countMatchingIdentities counts a codex slot match", () => {
+    const saved = leafWithTab(
+      tab("p_old", "codex", "station", "c", "t_1", undefined, undefined, "slot-c"),
+    );
+    const n = countMatchingIdentities(saved, {
+      station: [mkCodex("p_new", "slot-c")],
+    });
+    expect(n).toBe(1);
+  });
+
   it("preserves mixed Claude + shell layout across a daemon restart", () => {
     // One Claude tab and one shell tab in the same leaf. After a
     // restart the Claude session_id AND the shell slot_id should
@@ -551,6 +596,7 @@ describe("titleFor", () => {
   it("returns the kind default when both names are absent", () => {
     expect(titleFor(mkPane({ id: "p_1", kind: "claude" }))).toBe("Claude");
     expect(titleFor(mkPane({ id: "p_2", kind: "shell" }))).toBe("Shell");
+    expect(titleFor(mkPane({ id: "p_3", kind: "codex" }))).toBe("Codex");
   });
 
   it("auto_name on a shell pane still wins over the default (future-proofs the wire)", () => {

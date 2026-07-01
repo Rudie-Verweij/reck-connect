@@ -87,6 +87,7 @@ export function askPaneKind(
         <div class="dialog-buttons">
           <button class="primary" data-kind="claude">Claude Code</button>
           <button data-kind="shell">Shell</button>
+          <button data-kind="codex">Codex</button>
           <button data-kind="resume">Resume session…</button>
         </div>
       </div>
@@ -170,6 +171,13 @@ export function askPaneKind(
         e.preventDefault();
         e.stopPropagation();
         close({ kind: "shell", host: selectedHost });
+      } else if (e.key.toLowerCase() === "x") {
+        // "x" for codeX (c/s/r are taken). Availability is handled by the
+        // create flow (a toast explains if the host has no codex binary),
+        // so the shortcut always resolves like the other kinds.
+        e.preventDefault();
+        e.stopPropagation();
+        close({ kind: "codex", host: selectedHost });
       } else if (e.key.toLowerCase() === "r") {
         e.preventDefault();
         e.stopPropagation();

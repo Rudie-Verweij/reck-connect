@@ -1173,9 +1173,9 @@ type CreatePaneOptions struct {
 	// CreatePaneWith returns an error.
 	ResumeSessionID string
 
-	// RestoreSlotID, when non-empty and Kind is Shell, asks the daemon
-	// to respawn a shell pane under a previously recorded slot id
-	// (Scope B). The slot id must match a shell entry in the
+	// RestoreSlotID, when non-empty and Kind is Shell or Codex, asks the
+	// daemon to respawn the pane under a previously recorded slot id
+	// (Scope B). The slot id must match a shell/codex entry in the
 	// project's session index and carry a stored argv; otherwise the
 	// request is rejected. Mutually exclusive with ResumeSessionID.
 	RestoreSlotID string
@@ -1254,14 +1254,15 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 		resumeEntry = &e
 	}
 
-	// Shell restore: look up the shell entry by SlotID and hand it to
-	// the adapter. The adapter will exec Entry.ShellArgv verbatim so
-	// the user gets back the shell they actually had running, not what
-	// today's project default would produce.
+	// Shell/codex restore: look up the slot entry by SlotID and hand it
+	// to the adapter, which execs Entry.ShellArgv verbatim so the user
+	// gets back the process they actually had running, not what today's
+	// project default would produce. Codex mirrors shell — both are
+	// slot-identified and neither resumes a Claude session.
 	var restoreEntry *sessions.Entry
 	if opts.RestoreSlotID != "" {
-		if kind != proto.PaneKindShell {
-			return nil, errors.New("restore_slot_id is only valid for shell panes")
+		if kind != proto.PaneKindShell && kind != proto.PaneKindCodex {
+			return nil, errors.New("restore_slot_id is only valid for shell or codex panes")
 		}
 		if m.sessions == nil {
 			return nil, errors.New("session index unavailable")
@@ -1273,8 +1274,11 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 		if !ok {
 			return nil, errors.New("unknown restore_slot_id for this project")
 		}
-		if e.Kind != proto.PaneKindShell {
-			return nil, errors.New("restore_slot_id refers to a non-shell entry")
+		// The stored entry's kind must match the requested kind — mixing a
+		// shell slot into a codex request (or vice-versa) would replay the
+		// wrong argv.
+		if e.Kind != kind {
+			return nil, fmt.Errorf("restore_slot_id refers to a %s entry, not %s", e.Kind, kind)
 		}
 		restoreEntry = &e
 	}
@@ -1390,13 +1394,16 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 		})
 	}
 
-	// Shell-pane session bookkeeping (Scope B). Fresh spawns
-	// get a new SlotID and a new Entry with the resolved argv captured
-	// for later restore. Restore path reuses the same SlotID and bumps
+	// Shell- and codex-pane session bookkeeping (Scope B). Both are
+	// slot-identified (no Claude session): fresh spawns get a new SlotID
+	// and a new Entry with the resolved argv captured for later restore;
+	// the restore path reuses the same SlotID and bumps
 	// LastActiveAt/LastPaneID/WasLive on the existing entry. The exit
 	// callback touches last_active_at same as the Claude flow so the
-	// restore-candidate heuristic has a fresh timestamp to report.
-	if kind == proto.PaneKindShell && m.sessions != nil {
+	// restore-candidate heuristic has a fresh timestamp to report. Codex
+	// mirrors shell here — it has no session to resume, so slot continuity
+	// is what lets a codex tab survive a daemon restart.
+	if (kind == proto.PaneKindShell || kind == proto.PaneKindCodex) && m.sessions != nil {
 		now := time.Now().UTC()
 		switch {
 		case restoreEntry != nil:
@@ -1405,7 +1412,7 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 			restoreEntry.LastPaneID = pane.ID
 			restoreEntry.WasLive = true
 			if err := m.sessions.Upsert(projectID, *restoreEntry); err != nil {
-				slog.Warn("sessions: upsert on shell restore failed", "err", err, "project", projectID, "slot", shortSessionID(restoreEntry.SlotID))
+				slog.Warn("sessions: upsert on slot restore failed", "kind", kind, "err", err, "project", projectID, "slot", shortSessionID(restoreEntry.SlotID))
 			}
 		default:
 			pane.SlotID = sessions.NewUUID()
@@ -1417,7 +1424,7 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 			// child actually ran in, so it's the honest record.
 			argv := append([]string(nil), plan.Argv...)
 			if err := m.sessions.Upsert(projectID, sessions.Entry{
-				Kind:         proto.PaneKindShell,
+				Kind:         kind,
 				SlotID:       pane.SlotID,
 				Cwd:          spawnCwd,
 				ShellArgv:    argv,
@@ -1426,14 +1433,14 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 				LastPaneID:   pane.ID,
 				WasLive:      true,
 			}); err != nil {
-				slog.Warn("sessions: upsert on shell spawn failed", "err", err, "project", projectID, "slot", shortSessionID(pane.SlotID))
+				slog.Warn("sessions: upsert on slot spawn failed", "kind", kind, "err", err, "project", projectID, "slot", shortSessionID(pane.SlotID))
 			}
 		}
 		slot := pane.SlotID
 		pid := pane.ID
 		pane.OnExit(func(string) {
 			if err := m.sessions.Touch(projectID, slot, pid, time.Now().UTC()); err != nil {
-				slog.Warn("sessions: shell touch on exit failed", "err", err, "project", projectID, "slot", shortSessionID(slot))
+				slog.Warn("sessions: slot touch on exit failed", "kind", kind, "err", err, "project", projectID, "slot", shortSessionID(slot))
 			}
 		})
 	}
@@ -1701,7 +1708,7 @@ func (m *Manager) restoreProjectOrphans(projectID, projectCwd string, cols, rows
 		switch e.Kind {
 		case proto.PaneKindClaude:
 			opts.ResumeSessionID = e.SessionID
-		case proto.PaneKindShell:
+		case proto.PaneKindShell, proto.PaneKindCodex:
 			opts.RestoreSlotID = e.SlotID
 		default:
 			// Unknown kind — leave alone.

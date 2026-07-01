@@ -111,6 +111,12 @@ type HealthResponse struct {
 	Status    string `json:"status"`
 	Version   string `json:"version"`
 	UptimeSec int64  `json:"uptime_sec"`
+	// CodexAvailable is true when the station resolved a codex binary on
+	// PATH at startup (len(codexCmd) > 0). The Satellite reads it to show
+	// the "Codex" new-pane button only where a codex pane can actually
+	// spawn. Omitted/false ⇒ hide it (older daemons that don't send the
+	// field decode to false, which is the safe default).
+	CodexAvailable bool `json:"codex_available"`
 }
 
 type Project struct {
@@ -258,12 +264,11 @@ type CreatePaneRequest struct {
 	// match an entry in the project's session index; otherwise the
 	// request is rejected. Ignored for shell panes.
 	ResumeSessionID string `json:"resume_session_id,omitempty"`
-	// RestoreSlotID, when non-empty and Kind is "shell", asks the daemon
-	// to respawn a shell pane under a previously recorded slot id,
-	// reusing the argv and cwd captured at the original create. The
-	// slot id must match an entry in the project's session index
-	// (Kind="shell") or the request is rejected. Ignored for Claude
-	// panes.
+	// RestoreSlotID, when non-empty and Kind is "shell" or "codex", asks
+	// the daemon to respawn the pane under a previously recorded slot id,
+	// reusing the argv and cwd captured at the original create. The slot
+	// id must match an entry in the project's session index of the same
+	// kind or the request is rejected. Ignored for Claude panes.
 	RestoreSlotID string `json:"restore_slot_id,omitempty"`
 	// ExtraArgs, if non-empty, is appended to the argv of a Claude pane
 	// at spawn time. Pre-split client-side (no shell quoting). Silently

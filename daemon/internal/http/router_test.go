@@ -115,6 +115,30 @@ func TestHealth(t *testing.T) {
 	if h.Status != "ok" {
 		t.Fatalf("status: %s", h.Status)
 	}
+	// newServer builds a manager with no codex binary, so /health must
+	// report codex unavailable.
+	if h.CodexAvailable {
+		t.Fatalf("expected codex_available=false on a codex-less server")
+	}
+}
+
+// /health must surface whether the daemon has a codex binary so the
+// Satellite can gate the "Codex" new-pane button on it.
+func TestHealth_reportsCodexAvailable(t *testing.T) {
+	s := newServer(t)
+	s.CodexAvailable = true
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	r, err := nethttp.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h proto.HealthResponse
+	json.NewDecoder(r.Body).Decode(&h)
+	if !h.CodexAvailable {
+		t.Fatalf("expected codex_available=true when Server.CodexAvailable is set")
+	}
 }
 
 func TestProjectsList(t *testing.T) {
@@ -350,6 +374,51 @@ func TestCreateAndDeletePane(t *testing.T) {
 	}
 	if r.StatusCode != 200 {
 		t.Fatalf("delete status %d", r.StatusCode)
+	}
+}
+
+// A codex pane must be creatable through the normal create-pane endpoint
+// when the station has a codex binary configured — same path as claude/shell.
+// The manager is built with a CodexCmd so the adapter resolves (an empty
+// CodexCmd would 400 with ErrCodexNotAvailable, which is a different case).
+func TestCreatePane_codex_accepted(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "projects.toml")
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mgr := pty.NewManagerFromConfig(pty.ManagerConfig{
+		Projects:   []config.Project{{ID: "p1", Name: "P1", Cwd: dir, DefaultPane: "shell", Shell: []string{"/bin/sh"}, Available: true}},
+		ClaudeCmd:  []string{"/bin/echo", "placeholder"},
+		CodexCmd:   []string{"/bin/echo", "codex-placeholder"},
+		ConfigPath: configPath,
+	})
+	s := &Server{
+		Manager:   mgr,
+		WS:        &ws.Handler{Manager: mgr, Logger: slog.New(slog.NewTextHandler(os.Stderr, nil))},
+		StartedAt: time.Now(),
+		Version:   "test",
+	}
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	body, _ := json.Marshal(proto.CreatePaneRequest{Kind: proto.PaneKindCodex})
+	r, err := nethttp.Post(srv.URL+"/projects/p1/panes", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.StatusCode != 200 {
+		b, _ := io.ReadAll(r.Body)
+		t.Fatalf("create codex pane: status %d, body %q", r.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var cr proto.CreatePaneResponse
+	json.NewDecoder(r.Body).Decode(&cr)
+	if cr.PaneID == "" {
+		t.Fatal("no pane_id returned for codex pane")
+	}
+	panes := s.Manager.PanesInProject("p1")
+	if len(panes) != 1 || panes[0].Kind != proto.PaneKindCodex {
+		t.Fatalf("expected exactly one codex pane, got %+v", panes)
 	}
 }
 

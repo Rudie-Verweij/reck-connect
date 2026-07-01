@@ -22,9 +22,9 @@ const (
 |------|----------------|--------------------|--------------------|
 | `claude` | `claude` binary (resolved at daemon startup) | Yes — `SessionID` (RFC 4122 UUID), stored in sessions index | Yes — baseline + project preamble via `--append-system-prompt` |
 | `shell` | Project's configured shell (default: `$SHELL -l`) | Yes — `SlotID` (RFC 4122 UUID), stored argv+cwd | No |
-| `codex` | `codex` binary (resolved at daemon startup; optional) | No | No |
+| `codex` | `codex` binary (resolved at daemon startup; optional) | Yes — `SlotID` (reuses the shell slot mechanism), stored argv+cwd | No |
 
-The codex adapter is a minimal stub. Session persistence and lifecycle hook wiring for codex are future work. If `codex` is not on `PATH` at daemon startup, codex panes return `ErrCodexNotAvailable` at spawn time rather than executing a bare name.
+Codex is a first-class pane kind: creatable from the New-pane dialog (the button is shown only when `/health` reports `codex_available`, i.e. a `codex` binary was resolved on that station), labelled **"Codex"** in the tab bar, and — like shell — restart-durable via a persisted `SlotID`. Still deferred (no evidence the `codex` CLI supports them): preamble injection, `--resume`, and lifecycle-hook–driven agent state. If `codex` is not on `PATH` at daemon startup, codex panes return `ErrCodexNotAvailable` at spawn time (HTTP 400) rather than executing a bare name.
 
 ## Pane State
 
@@ -114,11 +114,15 @@ Rejected flags:
 
 Everything else, including `--dangerously-skip-permissions`, is allowed.
 
-`extra_args` is silently ignored for shell and codex panes.
+`extra_args` is silently ignored for shell panes; for codex panes it is appended verbatim to the `codex` argv (the New-pane dialog sends none).
 
 ## Codex Pane Specifics
 
-The codex adapter (`daemon/internal/agent/codex.go`) is minimal: it prepends the resolved `codexCmd` path and appends any `ExtraArgs`. No `--resume`, no preamble, no session persistence. If `codex` was unavailable at daemon startup, `BuildSpawn` returns `ErrCodexNotAvailable` and the HTTP handler returns 400.
+The codex adapter (`daemon/internal/agent/codex.go`) prepends the resolved `codexCmd` path and appends any `ExtraArgs`. On a **restore** it instead replays the argv+cwd captured at the original spawn (mirroring the shell adapter), so a codex pane comes back running the same command in the same directory after a daemon restart — slot-identity continuity is what lets the Satellite rebind the saved tab. If `codex` was unavailable at daemon startup, `BuildSpawn` returns `ErrCodexNotAvailable` and the HTTP handler returns 400.
+
+**Availability signal.** `GET /health` reports `codex_available` (`len(codexCmd) > 0`); the Satellite records it per-host and shows the "Codex" new-pane button only where a codex binary exists. Absent on older daemons ⇒ treated as false (button hidden).
+
+**Still deferred** (no repo evidence the `codex` CLI supports these): `--resume` (`BuildSpawn` returns `ErrResumeUnsupported`), preamble injection (Claude's `--append-system-prompt` has no known codex equivalent; codex's convention is a filesystem `AGENTS.md`), and lifecycle-hook–driven agent state (the daemon hook channel is already wired for every pane, but a codex-side `reck-codex-hook.sh` shim awaits confirmation that the codex CLI exposes hooks). See issue #33.
 
 ## Agent State (hook-driven)
 
