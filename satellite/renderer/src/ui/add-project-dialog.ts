@@ -164,7 +164,7 @@ function promptAddProject(): Promise<DialogResult> {
         <div class="dialog-body" style="margin-top:12px;">
           <label for="ap-name" style="display:block; font-size:12px; opacity:0.8;">Name</label>
           <input id="ap-name" type="text" class="text-input" placeholder="demo" />
-          <label for="ap-preamble" style="display:block; margin-top:12px; font-size:12px; opacity:0.8;">Preamble (optional) — appended to Claude's system prompt on every session</label>
+          <label for="ap-preamble" style="display:block; margin-top:12px; font-size:12px; opacity:0.8;">Preamble (optional) — appended to the agent's system prompt (Claude &amp; Codex) on every session</label>
           <textarea id="ap-preamble" class="text-input" rows="4" style="margin-top:6px; resize:vertical; font-family:inherit;"></textarea>
           <div style="margin-top:14px; font-size:11px; opacity:0.65; line-height:1.4;">
             A new folder will be created at <code>~/reck/projects/&lt;slug&gt;</code> on the station. To copy an existing laptop folder to the station instead, use the secondary button below.

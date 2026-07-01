@@ -94,6 +94,37 @@ func TestRedactArgv_appendSystemPromptIsRedacted(t *testing.T) {
 	}
 }
 
+// TestRedactArgv_codexDeveloperInstructions locks in that codex's
+// `-c developer_instructions=<preamble>` override — which carries the
+// multi-KiB Reck preamble on every codex spawn — is masked, keeping the
+// key visible so operators still see the argv shape. A non-sensitive `-c`
+// override (e.g. `-c model=...`) must be left intact.
+func TestRedactArgv_codexDeveloperInstructions(t *testing.T) {
+	in := []string{
+		"/opt/homebrew/bin/codex",
+		"-c", "developer_instructions=GLOBAL\n\n---\n\nPROJECT prompt text",
+		"--verbose",
+	}
+	got := redactArgv(in)
+	want := []string{
+		"/opt/homebrew/bin/codex",
+		"-c", "developer_instructions=<redacted>",
+		"--verbose",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("length: got %d want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("index %d: got %q want %q", i, got[i], want[i])
+		}
+	}
+	keep := redactArgv([]string{"codex", "-c", "model=gpt-5"})
+	if keep[2] != "model=gpt-5" {
+		t.Errorf("non-sensitive -c override was redacted: got %q", keep[2])
+	}
+}
+
 // TestRedactArgv_trailingFlagNoValue guards the edge case where a
 // sensitive flag sits at the end of argv with no value to mask. We
 // should leave it as-is rather than panic or invent a placeholder.

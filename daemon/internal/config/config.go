@@ -34,7 +34,7 @@ type Project struct {
 	Cwd         string   `toml:"cwd"`
 	DefaultPane string   `toml:"default_pane"` // "claude" | "shell" | "codex"; defaults to "claude"
 	Shell       []string `toml:"shell"`        // defaults to [$SHELL, "-l"]
-	Preamble    string   `toml:"preamble"`     // optional; --append-system-prompt for claude panes
+	Preamble    string   `toml:"preamble"`     // optional; claude: --append-system-prompt, codex: -c developer_instructions
 	// Docked is true when this project opted into Mission Control.
 	// Persisted so dock state survives daemon restarts.
 	Docked bool `toml:"docked,omitempty"`
