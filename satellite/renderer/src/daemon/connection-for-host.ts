@@ -220,6 +220,13 @@ export function setHostReady(host: HostRef, ready: boolean): void {
   const prev = readyFlags.get(host) === true;
   if (prev === ready) return;
   readyFlags.set(host, ready);
+  // The New-pane dialog greys a host on this exact flag. Log every real
+  // transition so "why is Local greyed out?" is answerable from the
+  // console: ready=false here + a preceding `[boot] local daemon start
+  // failed (code=…)` or connection-state line is the whole story.
+  console.info(
+    `[ready] host=${host} ready=${ready} (pane-create UI ${ready ? "enabled" : "greyed"})`,
+  );
   for (const l of readyListeners) l(host, ready);
 }
 

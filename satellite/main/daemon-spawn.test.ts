@@ -25,6 +25,7 @@ const {
   stopDaemon,
   daemonStatus,
   localDaemonToken,
+  ensureSpawnPath,
   _resetDaemonSpawnForTests,
   _setHermeticKillDefaultsForTests,
 } = await import("./daemon-spawn");
@@ -38,10 +39,20 @@ const {
 interface FakeChildOptions {
   /** Emit this string on stderr immediately after the spawn callback. */
   stderr?: string;
+  /** Emit this string on stdout immediately after the spawn callback.
+   * The real daemon logs via slog's JSONHandler to STDOUT — including
+   * the `listen failed` bind error (main.go:49 / :402) — so stdout is
+   * the canonical diagnostics stream, not stderr. */
+  stdout?: string;
   /** Exit code to set after `exitAfterMs` fires. Default: don't auto-exit. */
   exitCode?: number;
   /** Milliseconds after spawn before the fake child auto-exits. */
   exitAfterMs?: number;
+  /** Emit this Error as the child's 'error' event right after spawn.
+   * Models posix_spawn-level failures (EACCES, exec-format, Gatekeeper
+   * SIGKILL-before-main): NO exit event, NO output, exitCode stays
+   * null. */
+  errorEvent?: Error;
 }
 
 class FakeChild extends EventEmitter {
@@ -57,6 +68,12 @@ class FakeChild extends EventEmitter {
       // Async to mimic real spawn — handlers attach synchronously
       // before the first chunk lands.
       queueMicrotask(() => this.stderr.emit("data", Buffer.from(opts.stderr!)));
+    }
+    if (opts.stdout) {
+      queueMicrotask(() => this.stdout.emit("data", Buffer.from(opts.stdout!)));
+    }
+    if (opts.errorEvent) {
+      queueMicrotask(() => this.emit("error", opts.errorEvent!));
     }
     if (opts.exitCode !== undefined) {
       const ms = opts.exitAfterMs ?? 0;
@@ -345,6 +362,178 @@ describe("startDaemon('local') — port-bind failure surfacing", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.code).toBe("EUNKNOWN");
+  });
+
+  it("returns { ok:false, code:'EADDRINUSE' } when the daemon logs the listen failure to STDOUT (slog JSON)", async () => {
+    // The real daemon's slog JSONHandler writes to os.Stdout
+    // (daemon/cmd/reck-stationd/main.go:49), so the canonical bind
+    // failure arrives on STDOUT — not stderr. The classification
+    // previously grepped only stderr, so a live port conflict was
+    // misreported as a bare EUNKNOWN timeout.
+    const spawn = makeSpawnRecorder({
+      stdout:
+        '{"time":"2026-06-04T12:00:00Z","level":"ERROR","msg":"listen failed","err":"listen tcp 127.0.0.1:7315: bind: address already in use","addr":"127.0.0.1:7315"}',
+      exitCode: 1,
+      exitAfterMs: 5,
+    });
+    const probe = probeAlwaysFalse();
+    const result = await startDaemon("local", 7315, {
+      spawn: spawn.fn,
+      probePort: probe,
+      liveProbeTimeoutMs: 200,
+      liveProbeStepMs: 25,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("EADDRINUSE");
+    expect(result.reason).toMatch(/already in use/i);
+  });
+
+  it("EUNKNOWN reason carries the daemon's stdout 'listen failed' line for non-port-conflict bind errors", async () => {
+    // A bind failure that ISN'T a port conflict (e.g. permission
+    // denied) must still surface the daemon's own error line so the
+    // Settings rail shows an actionable reason instead of the bare
+    // "failed to listen within N ms".
+    const spawn = makeSpawnRecorder({
+      stdout:
+        '{"level":"ERROR","msg":"listen failed","err":"listen tcp 127.0.0.1:7315: bind: permission denied","addr":"127.0.0.1:7315"}',
+      exitCode: 1,
+      exitAfterMs: 5,
+    });
+    const probe = probeAlwaysFalse();
+    const result = await startDaemon("local", 7315, {
+      spawn: spawn.fn,
+      probePort: probe,
+      liveProbeTimeoutMs: 200,
+      liveProbeStepMs: 25,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("EUNKNOWN");
+    expect(result.reason).toMatch(/permission denied/);
+  });
+
+  it("EUNKNOWN reason carries the last ERROR-level line for non-listen startup failures (e.g. claude not on PATH)", async () => {
+    // The daemon exits on startup errors other than the bind: e.g.
+    // `resolve claude binary failed` + os.Exit(1) (main.go:220). The
+    // reason must surface THAT line, not the INFO noise before it.
+    const spawn = makeSpawnRecorder({
+      stdout:
+        '{"level":"INFO","msg":"daemon mode","mode":"local"}\n' +
+        '{"level":"INFO","msg":"daemon token loaded","source":"file:x"}\n' +
+        '{"level":"ERROR","msg":"resolve claude binary failed","err":"exec: \\"claude\\": executable file not found in $PATH","candidate":"claude"}\n',
+      exitCode: 1,
+      exitAfterMs: 5,
+    });
+    const probe = probeAlwaysFalse();
+    const result = await startDaemon("local", 7315, {
+      spawn: spawn.fn,
+      probePort: probe,
+      liveProbeTimeoutMs: 200,
+      liveProbeStepMs: 25,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("EUNKNOWN");
+    expect(result.reason).toMatch(/resolve claude binary failed/);
+    expect(result.reason).not.toMatch(/daemon token loaded/);
+  });
+});
+
+describe("ensureSpawnPath", () => {
+  // The daemon os.Exit(1)s when `claude` isn't resolvable
+  // (daemon/cmd/reck-stationd/main.go:220). The native claude installer
+  // puts the binary in ~/.local/bin and exports PATH in ~/.zshrc —
+  // which a NON-INTERACTIVE login shell (`zsh -l -c`, what
+  // resolveLoginPath runs) never reads. A Finder-launched Satellite
+  // therefore spawned the daemon without ~/.local/bin and the daemon
+  // died on startup.
+  it("appends ~/.local/bin when the login PATH lacks it", () => {
+    const out = ensureSpawnPath("/usr/bin:/bin", "/Users/u");
+    expect(out.split(":")).toContain("/Users/u/.local/bin");
+    // Existing entries stay first — we only append, never reorder.
+    expect(out.startsWith("/usr/bin:/bin")).toBe(true);
+  });
+
+  it("appends /opt/homebrew/bin when missing", () => {
+    const out = ensureSpawnPath("/usr/bin", "/Users/u");
+    expect(out.split(":")).toContain("/opt/homebrew/bin");
+  });
+
+  it("does not duplicate entries that are already present", () => {
+    const input = "/Users/u/.local/bin:/opt/homebrew/bin:/usr/bin";
+    const out = ensureSpawnPath(input, "/Users/u");
+    const entries = out.split(":");
+    expect(entries.filter((e) => e === "/Users/u/.local/bin")).toHaveLength(1);
+    expect(entries.filter((e) => e === "/opt/homebrew/bin")).toHaveLength(1);
+  });
+
+  it("handles an empty login PATH", () => {
+    const out = ensureSpawnPath("", "/Users/u");
+    expect(out.split(":")).toContain("/Users/u/.local/bin");
+    expect(out.startsWith(":")).toBe(false);
+  });
+
+  it("the spawned daemon env PATH always contains ~/.local/bin (integration)", async () => {
+    const spawn = makeSpawnRecorder();
+    const probe = probeAlwaysTrue();
+    await startDaemon("local", 7315, { spawn: spawn.fn, probePort: probe });
+    const envPath = spawn.calls[0].env.PATH ?? "";
+    const home = (await import("node:os")).homedir();
+    expect(envPath.split(":")).toContain(`${home}/.local/bin`);
+  });
+});
+
+describe("startDaemon('local') — cold-start probe budget", () => {
+  it("defaults liveProbeTimeoutMs to 8000 ms (Gatekeeper first-run assessment headroom)", async () => {
+    // A freshly built ad-hoc-signed binary triggers a one-time
+    // syspolicyd assessment between posix_spawn and Go's main() that
+    // can exceed 3 s (warm bind ≈ 100 ms). The default budget must
+    // leave headroom; tests and callers can still inject shorter
+    // values. The child exits after 5 ms so the loop breaks
+    // immediately; only the message text reflects the configured
+    // budget.
+    const spawn = makeSpawnRecorder({ exitCode: 2, exitAfterMs: 5 });
+    const probe = probeAlwaysFalse();
+    const result = await startDaemon("local", 7315, {
+      spawn: spawn.fn,
+      probePort: probe,
+      // No liveProbeTimeoutMs override — exercise the default.
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/within 8000 ms/);
+  });
+});
+
+describe("startDaemon('local') — spawn-level errors", () => {
+  it("returns { ok:false, code:'ESPAWN' } without burning the probe budget when the child emits 'error'", async () => {
+    // posix_spawn-level failures (EACCES, exec-format, Gatekeeper
+    // SIGKILL-before-main) surface as a child 'error' event: no exit,
+    // no output, exitCode stays null. Previously unhandled, so the
+    // probe loop burned its full budget and the user saw the bare
+    // EUNKNOWN timeout — and the unhandled 'error' event could crash
+    // the main process.
+    const spawn = makeSpawnRecorder({ errorEvent: new Error("spawn EACCES") });
+    const probe = probeAlwaysFalse();
+    const startedAt = Date.now();
+    const result = await startDaemon("local", 7315, {
+      spawn: spawn.fn,
+      probePort: probe,
+      // Deliberately generous: the implementation must resolve from the
+      // 'error' event, NOT from this deadline expiring.
+      liveProbeTimeoutMs: 4000,
+      liveProbeStepMs: 25,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("ESPAWN");
+    expect(result.reason).toMatch(/EACCES/);
+    // Same invariant as the port-bind failure: no token / no child
+    // left dangling for the renderer to trust.
+    expect(localDaemonToken()).toBeNull();
+    expect(daemonStatus("local").running).toBe(false);
   });
 });
 

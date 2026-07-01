@@ -16,7 +16,7 @@ declare global {
           | {
               ok: false;
               reason: string;
-              code?: "EADDRINUSE" | "ENOENT" | "EUNKNOWN";
+              code?: "EADDRINUSE" | "ENOENT" | "ESPAWN" | "EUNKNOWN";
             }
         >;
         stop: (host: import("./host").HostRef) => Promise<{ ok: true } | { ok: false; reason: string }>;
