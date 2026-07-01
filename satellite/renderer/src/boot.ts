@@ -1723,7 +1723,7 @@ export async function boot(splash?: StartupSplashController) {
     if (!found) return;
     const ok = await confirmDialog(document.body, {
       title: `Close ${found.tab.title}?`,
-      body: `This will end the ${found.tab.kind === "claude" ? "Claude" : "shell"} process running in this tab. Unsaved terminal state will be lost.`,
+      body: `This will end the ${found.tab.kind === "claude" ? "Claude" : found.tab.kind === "codex" ? "Codex" : "shell"} process running in this tab. Unsaved terminal state will be lost.`,
       confirmLabel: "Close tab",
       cancelLabel: "Keep",
     });
@@ -1748,7 +1748,7 @@ export async function boot(splash?: StartupSplashController) {
       title: paneCount === 1 ? `Close ${l.tabs[0].title}?` : `Close pane-box?`,
       body:
         paneCount === 1
-          ? `This will end the ${l.tabs[0].kind === "claude" ? "Claude" : "shell"} process.`
+          ? `This will end the ${l.tabs[0].kind === "claude" ? "Claude" : l.tabs[0].kind === "codex" ? "Codex" : "shell"} process.`
           : `This will close all ${paneCount} tabs and end their processes.`,
       confirmLabel: paneCount === 1 ? "Close tab" : `Close ${paneCount} tabs`,
       cancelLabel: "Keep",

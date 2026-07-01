@@ -551,6 +551,7 @@ describe("titleFor", () => {
   it("returns the kind default when both names are absent", () => {
     expect(titleFor(mkPane({ id: "p_1", kind: "claude" }))).toBe("Claude");
     expect(titleFor(mkPane({ id: "p_2", kind: "shell" }))).toBe("Shell");
+    expect(titleFor(mkPane({ id: "p_3", kind: "codex" }))).toBe("Codex");
   });
 
   it("auto_name on a shell pane still wins over the default (future-proofs the wire)", () => {

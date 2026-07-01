@@ -87,7 +87,9 @@ export function tab(
 }
 
 export function defaultTabTitle(kind: PaneKind): string {
-  return kind === "claude" ? "Claude" : "Shell";
+  if (kind === "claude") return "Claude";
+  if (kind === "codex") return "Codex";
+  return "Shell";
 }
 
 export function leafWithTab(t: Tab, id = newLeafId()): LeafNode {
