@@ -71,6 +71,24 @@ which claude            # note this path — you may need it in step 3
 > The daemon spawns `claude` for every Claude pane, so it **must** be installed and
 > logged in as the same user that runs the station.
 
+### Codex CLI (optional)
+
+Want **Codex panes** alongside Claude? Install OpenAI's `codex` CLI for Linux
+ARM64 (per its official instructions) as the **same user** that runs the station,
+and log in:
+
+```bash
+codex --version         # confirm it's installed
+which codex             # note the path — must be on the daemon's PATH
+```
+
+> The daemon resolves `codex` via `PATH` **once at startup** (there's no `--codex`
+> flag — unlike `--claude`). So install it **before** running the installer, or
+> `systemctl --user restart reck-stationd` afterward. If `codex` isn't found, Codex
+> panes stay unavailable and the Satellite's **Codex** button shows a "not installed"
+> toast — Claude and shell panes are unaffected. A typical user install lands in
+> `~/.local/bin`, which the systemd-user service already has on its `PATH`.
+
 ---
 
 ## 2. Get the code (on the Pi)
@@ -80,8 +98,11 @@ git clone https://github.com/mehdigreefhorst/reck-connect.git ~/src/reck-connect
 cd ~/src/reck-connect
 ```
 
-> **While this is still a PR (not yet merged to `main`):**
-> `git checkout feat/daemon-linux-platform`
+> **While the Codex work is still in PRs (not yet merged to `main`):**
+> `git checkout feat/codex-preamble` — this stacks first-class Codex panes
+> (#35) and the Codex preamble (#36) on top of the current `main` (which
+> already has the Linux-station support). Once those merge, plain `main` is
+> enough.
 
 ---
 
@@ -162,6 +183,10 @@ Expect JSON containing `"ok": true`. If it doesn't come up, jump to
   doesn't, the clipboard backend isn't up — see the image-paste row in
   [Troubleshooting](#troubleshooting). Paste still works via the `/uploads` fallback
   in the meantime.
+- If you installed the `codex` CLI, open a **Codex pane** too (New Pane → Codex). It
+  should spawn just like Claude; if instead you get a "not installed" toast, `codex`
+  wasn't on the daemon's PATH at startup — see the Codex row in
+  [Troubleshooting](#troubleshooting).
 
 That's it — the station is live on the Pi.
 
@@ -203,6 +228,7 @@ systemctl --user status reck-stationd
 | Daemon exits immediately / `RECK_STATION_ROOT must be set` | The var isn't in `~/.config/reck/.env`. Re-run `./ops/install-station-linux.sh` (it writes it), or add `RECK_STATION_ROOT=$HOME/projects` to that file and `systemctl --user restart reck-stationd`. |
 | `resolve claude binary failed` | Wrong `--claude=` path in the unit. Re-run with `RECK_CLAUDE_BIN="$(which claude)" ./ops/install-station-linux.sh`. |
 | Pane spawns then dies | `claude` not on the daemon's PATH or not logged in. SSH in, run `claude` once, then `systemctl --user restart reck-stationd`. |
+| **Codex** button shows a "not installed" toast | `codex` wasn't on the daemon's PATH when it started (it's resolved once per start, like claude — and there's no `--codex` flag). Confirm `which codex` is on the daemon's `PATH` (a `~/.local/bin` install already is), then `systemctl --user restart reck-stationd`. Also make sure the daemon is running a build with Codex support (`feat/codex-preamble` or `main` once merged) — an older `reck-stationd` doesn't advertise codex at all. |
 | `resolve default shell failed` | `SHELL` unset under systemd. Add `SHELL=/bin/bash` to `~/.config/reck/.env` and restart. |
 | `401` from the Satellite | Token mismatch — re-copy from `~/.config/reck/token` into the app. |
 | Can't reach the station from the Mac | Both ends on Tailscale? `tailscale status` on each. Try the tailnet IP instead of the name. Confirm `RECK_ADDR` isn't bound to loopback only. |
