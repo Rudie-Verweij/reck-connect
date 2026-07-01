@@ -515,10 +515,15 @@ func (s *Server) handleCreatePane(w nethttp.ResponseWriter, r *nethttp.Request) 
 	if err := decodeJSONBody(w, r, maxJSONBody, &req); err != nil {
 		return
 	}
-	if req.Kind != proto.PaneKindClaude && req.Kind != proto.PaneKindShell {
+	if req.Kind != proto.PaneKindClaude && req.Kind != proto.PaneKindShell && req.Kind != proto.PaneKindCodex {
 		nethttp.Error(w, "invalid kind", nethttp.StatusBadRequest)
 		return
 	}
+	// A codex create on a station without a resolved codex binary falls
+	// through to CreatePaneWith, where the codex adapter returns
+	// ErrCodexNotAvailable → 400 below. The Satellite hides the Codex
+	// button unless /health reports codex_available, so this is the
+	// raw-client / stale-UI safety net, not the normal path.
 	pane, err := s.Manager.CreatePaneWith(id, req.Kind, 120, 40, pty.CreatePaneOptions{
 		ResumeSessionID: req.ResumeSessionID,
 		RestoreSlotID:   req.RestoreSlotID,
