@@ -31,6 +31,14 @@ export interface AskPaneKindOptions {
    * `isHostReady` and never re-renders — unit tests use this path.
    */
   subscribeReady?: (cb: (host: HostRef, ready: boolean) => void) => () => void;
+  /**
+   * Whether the given host has a codex binary (from its /health
+   * `codex_available`). The "Codex" button is shown only for a host that
+   * returns true, and stays disabled when the host isn't ready. Omitted ⇒
+   * treated as false everywhere (button hidden) so callers/tests that
+   * don't know about codex keep the pre-codex behaviour.
+   */
+  codexAvailable?: (host: HostRef) => boolean;
 }
 
 /**
@@ -87,6 +95,7 @@ export function askPaneKind(
         <div class="dialog-buttons">
           <button class="primary" data-kind="claude">Claude Code</button>
           <button data-kind="shell">Shell</button>
+          <button data-kind="codex" hidden>Codex</button>
           <button data-kind="resume">Resume session…</button>
         </div>
       </div>
@@ -100,6 +109,9 @@ export function askPaneKind(
     });
     const actionEls = Array.from(
       overlay.querySelectorAll<HTMLButtonElement>(".dialog-buttons button"),
+    );
+    const codexBtn = overlay.querySelector<HTMLButtonElement>(
+      ".dialog-buttons button[data-kind='codex']",
     );
 
     function paint() {
@@ -116,6 +128,15 @@ export function askPaneKind(
       }
       const hostReady = opts.isHostReady(selectedHost);
       for (const el of actionEls) el.disabled = !hostReady;
+      // Codex is additionally gated on the *selected* host advertising a
+      // codex binary — a station may have codex while local doesn't, so
+      // this re-evaluates on every host switch. Hidden (not just disabled)
+      // where unavailable so it never looks spawnable.
+      if (codexBtn) {
+        const codexAvail = opts.codexAvailable?.(selectedHost) === true;
+        codexBtn.hidden = !codexAvail;
+        codexBtn.disabled = !hostReady || !codexAvail;
+      }
     }
 
     paint();
@@ -170,6 +191,13 @@ export function askPaneKind(
         e.preventDefault();
         e.stopPropagation();
         close({ kind: "shell", host: selectedHost });
+      } else if (e.key.toLowerCase() === "x") {
+        // "x" for codeX (c/s/r are taken). Only when the selected host
+        // actually has codex — otherwise fall through as a no-op.
+        if (opts.codexAvailable?.(selectedHost) !== true) return;
+        e.preventDefault();
+        e.stopPropagation();
+        close({ kind: "codex", host: selectedHost });
       } else if (e.key.toLowerCase() === "r") {
         e.preventDefault();
         e.stopPropagation();

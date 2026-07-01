@@ -9,6 +9,7 @@ import {
   setHostReady,
   subscribeHostReady,
   setHostCodexAvailable,
+  isHostCodexAvailable,
 } from "./daemon/connection-for-host";
 import {
   makePushState,
@@ -1563,9 +1564,17 @@ export async function boot(splash?: StartupSplashController) {
       },
       isHostReady: (h) => isHostReady(h),
       subscribeReady: (cb) => subscribeHostReady(cb),
+      codexAvailable: (h) => isHostCodexAvailable(h),
     });
     if (!choice) return null;
-    if (choice.kind === "claude" || choice.kind === "shell") {
+    if (
+      choice.kind === "claude" ||
+      choice.kind === "shell" ||
+      choice.kind === "codex"
+    ) {
+      // Codex, like shell, is a direct create (no preamble, no resume) —
+      // the three newTab callers below already gate extras/globalPreamble
+      // on kind==="claude", so codex correctly sends neither.
       return { kind: choice.kind, host: choice.host };
     }
     // "resume": surface the session list. The picker is Claude-only —
