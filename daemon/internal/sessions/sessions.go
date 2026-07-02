@@ -82,10 +82,10 @@ type Entry struct {
 }
 
 // Identity returns the stable identity key for this entry: SlotID for
-// shell panes, SessionID for Claude panes. Returns empty string when
-// neither is set (a corrupted row).
+// shell and codex panes, SessionID for Claude panes. Returns empty string
+// when neither is set (a corrupted row).
 func (e Entry) Identity() string {
-	if e.Kind == proto.PaneKindShell {
+	if e.Kind == proto.PaneKindShell || e.Kind == proto.PaneKindCodex {
 		return e.SlotID
 	}
 	return e.SessionID
@@ -183,8 +183,8 @@ func (s *Store) Upsert(projectID string, entry Entry) error {
 	key := entry.Identity()
 	if key == "" {
 		switch entry.Kind {
-		case proto.PaneKindShell:
-			return errors.New("sessions: slot_id required for shell entry")
+		case proto.PaneKindShell, proto.PaneKindCodex:
+			return errors.New("sessions: slot_id required for shell/codex entry")
 		default:
 			return errors.New("sessions: session_id required for claude entry")
 		}
@@ -372,7 +372,10 @@ func (s *Store) List(projectID string, opts ListOptions) ([]Entry, error) {
 	}
 	live := make([]Entry, 0, len(entries))
 	for _, e := range entries {
-		if e.Kind == proto.PaneKindShell {
+		// Shell and codex panes have no Claude JSONL transcript to gate
+		// on — their liveness is the slot record itself, so bypass the
+		// transcript check that only makes sense for claude entries.
+		if e.Kind == proto.PaneKindShell || e.Kind == proto.PaneKindCodex {
 			live = append(live, e)
 			continue
 		}

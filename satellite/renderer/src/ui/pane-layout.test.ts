@@ -60,6 +60,18 @@ vi.mock("@client-core/terminal/terminal-pane", () => {
       // tail, so the pane is no longer pinned.
       if (offset > 0) this.atBottom = false;
     }
+    /**
+     * The real TerminalPane exposes its underlying xterm Terminal so the
+     * file-viewer path linkifier (`installPathLinkProvider`) can hook into
+     * it when `onPaneCreated` is wired. The mock supplies the minimum
+     * shape the linkifier touches.
+     */
+    getXterm() {
+      return {
+        registerLinkProvider: () => ({ dispose: () => {} }),
+        buffer: { active: { getLine: () => undefined } },
+      };
+    }
   }
   return { TerminalPane: MockTerminalPane };
 });
@@ -751,6 +763,44 @@ describe("PaneLayout isRestoring gating ", () => {
     restoring = false;
     tabs[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(calls.switch).toHaveBeenCalledWith("leafA", "t2");
+    layout.dispose();
+  });
+
+  // Closing must fire on pointerdown, not click: the first click also flips
+  // the pane's stoplight dot (a mouse-tracking TUI like codex/Claude going
+  // green→grey), which re-renders the whole tab — so the mouseup/click can
+  // land on a freshly-created ✕ and no `click` ever fires. pointerdown lands
+  // before that churn.
+  it("closes a tab on pointerdown of the ✕", () => {
+    const { cb, calls } = makeGatedCallbacks(() => false);
+    const layout = new PaneLayout(cb);
+    layout.setTree(makeLeaf("leafA", ["t1", "t2"]));
+    const closeEls = root.querySelectorAll<HTMLElement>(".tab .tab-close");
+    expect(closeEls.length).toBe(2);
+    closeEls[1].dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(calls.close).toHaveBeenCalledTimes(1);
+    expect(calls.close).toHaveBeenCalledWith("leafA", "t2");
+    layout.dispose();
+  });
+
+  it("a click on the ✕ does not fall through to onSwitchTab", () => {
+    const { cb, calls } = makeGatedCallbacks(() => false);
+    const layout = new PaneLayout(cb);
+    layout.setTree(makeLeaf("leafA", ["t1", "t2"]));
+    const closeEls = root.querySelectorAll<HTMLElement>(".tab .tab-close");
+    closeEls[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(calls.switch).not.toHaveBeenCalled();
+    layout.dispose();
+  });
+
+  it("pointerdown on the ✕ is a no-op while restoring", () => {
+    let restoring = true;
+    const { cb, calls } = makeGatedCallbacks(() => restoring);
+    const layout = new PaneLayout(cb);
+    layout.setTree(makeLeaf("leafA", ["t1", "t2"]));
+    const closeEls = root.querySelectorAll<HTMLElement>(".tab .tab-close");
+    closeEls[1].dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(calls.close).not.toHaveBeenCalled();
     layout.dispose();
   });
 

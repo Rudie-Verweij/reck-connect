@@ -1,6 +1,6 @@
 # V2 — Station & Satellite Ops
 
-This directory holds everything needed to install Reck Connect V2 on the station Mac and to mount its projects directory from a laptop Satellite over Tailscale + sshfs.
+This directory holds everything needed to install Reck Connect V2 on the station and to mount its projects directory from a laptop Satellite over Tailscale + sshfs. The station can run on **macOS** (sections 1–9 below) or **Linux / Raspberry Pi** (see [Linux station](#linux-station)). The Satellite is always a Mac app.
 
 ## 1. Create the `reck-connect` macOS user
 
@@ -274,3 +274,87 @@ rm -rf ~/.config/reck
 ```
 
 The script is the canonical source of truth — if its behaviour changes (extra files to clean up, ordering tweaks, etc.) it's expected to drift ahead of this list. Diff the script if a manual run misses something.
+
+## Linux station
+
+The station daemon also runs on **Linux** — a Raspberry Pi 5 (8 GB+) on Pi OS Bookworm 64-bit, or any Debian/Ubuntu ARM64 host with `systemd --user` and a recent `go` toolchain. The Satellite is still a Mac app; only the station side changes. Orientation and the full macOS↔Linux command map live in [`docs/concepts/linux-station.md`](../docs/concepts/linux-station.md).
+
+### Quick install
+
+```bash
+git clone https://github.com/mehdigreefhorst/reck-connect.git ~/src/reck-connect
+cd ~/src/reck-connect
+./ops/install-station-linux.sh
+```
+
+The script:
+
+1. Builds `reck-stationd` and `reck-pane-launcher` into `~/.local/bin/`.
+2. Generates a 0600 bearer token at `~/.config/reck/token` if absent.
+3. Writes a starter `~/.config/reck/projects.toml` if absent.
+4. Writes `RECK_STATION_ROOT` (default `~/projects`) to `~/.config/reck/.env` — the daemon runs in `--mode=station`, which requires it.
+5. Renders `~/.config/systemd/user/reck-stationd.service` from the template and installs the `reck-xvfb.service` companion (skip with `RECK_SKIP_CLIPBOARD=1`).
+6. `systemctl --user daemon-reload && enable --now`.
+7. `sudo loginctl enable-linger $USER` so the service runs at boot without an interactive login.
+
+Re-running upgrades the binaries and reloads the unit; token and config are preserved. To build for the Pi from a Mac, run `make cross`.
+
+### Tunables (env vars)
+
+| Var                   | Default                           |
+|-----------------------|-----------------------------------|
+| `RECK_ADDR`           | `0.0.0.0:7315`                    |
+| `RECK_CLAUDE_BIN`     | `$(command -v claude)`            |
+| `RECK_LAUNCHER_PATH`  | `~/.local/bin/reck-pane-launcher` |
+| `RECK_STATION_ROOT`   | `~/projects`                      |
+| `RECK_SKIP_CLIPBOARD` | unset (set `1` to skip xclip/Xvfb)|
+
+For tailnet-only listening, pass e.g. `RECK_ADDR="$(tailscale ip -4):7315"`.
+
+### Prereqs
+
+```bash
+sudo apt update
+sudo apt install -y git curl rsync openssh-server bash python3 openssl golang-go
+```
+
+`python3` and `openssl` back the Claude Code lifecycle hook shim (it signs every event with HMAC-SHA256). `bash` is required — the shim uses bashisms, so do not switch to dash. If `golang-go` from apt is older than the version in `go.mod`, grab the latest `linux-arm64` tarball from <https://go.dev/dl/> and unpack to `/usr/local/go`.
+
+Install Claude Code per the official Linux ARM64 instructions, then `claude login`; capture `which claude` for `RECK_CLAUDE_BIN`. Install Tailscale: `curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up`.
+
+### Verify
+
+```bash
+TOKEN=$(cat ~/.config/reck/token)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:7315/health
+```
+
+Expect JSON with `"ok": true`. From the Mac Satellite, add the station with the Pi's tailnet hostname, port `7315`, and the token contents.
+
+### Service management & troubleshooting
+
+```bash
+journalctl --user -u reck-stationd -n 200 --no-pager
+systemctl --user status reck-stationd
+```
+
+Common causes:
+
+- "resolve claude binary failed" → wrong `--claude=` path in the unit; re-run with `RECK_CLAUDE_BIN=/abs/path/claude`.
+- "resolve default shell failed" → `SHELL` unset; pin it in `~/.config/reck/.env`: `SHELL=/bin/bash`.
+- "config load failed" → `~/.config/reck/projects.toml` missing, or a `cwd` that doesn't exist.
+- Daemon exits immediately → `RECK_STATION_ROOT` not in `~/.config/reck/.env` (`--mode=station` requires it).
+- 401 from Satellite → token mismatch; re-copy from `~/.config/reck/token`.
+- Pane spawns then dies → `claude` not on the daemon's PATH or not logged in. SSH in, run `claude`, then `systemctl --user restart reck-stationd`.
+- Service stops after logout → linger not enabled (`sudo loginctl enable-linger $USER`).
+- "image paste unsupported" / chip never appears → the daemon's `xclip` probe failed at startup. Ensure `xclip` is on `$PATH` and `reck-xvfb.service` is active before `reck-stationd` (`systemctl --user status reck-xvfb`). Capability is probed once per daemon lifetime, so a fix needs `systemctl --user restart reck-stationd`; the renderer's `/uploads` fallback keeps paste working meanwhile. See [`docs/concepts/linux-station.md`](../docs/concepts/linux-station.md).
+
+### Linux uninstall
+
+```bash
+./ops/uninstall-station-linux.sh
+# or also wipe ~/.config/reck and ~/.local/state/reck-stationd:
+./ops/uninstall-station-linux.sh --purge
+```
+
+Disable boot-survival: `sudo loginctl disable-linger $USER`.

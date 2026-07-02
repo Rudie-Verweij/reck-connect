@@ -273,3 +273,71 @@ describe("describeError", () => {
     expect(describeError({ weird: "object" })).toBe("Unknown error");
   });
 });
+
+// The background poll loop can be gated so a host isn't probed until it's
+// ready (e.g. local waiting on its per-spawn token). A gated tick must
+// still re-arm the loop so the host recovers when the gate opens. A
+// user-initiated refresh() is deliberately never gated.
+describe("DaemonConnection shouldPoll gate", () => {
+  let origFetch: typeof fetch;
+  beforeEach(() => {
+    origFetch = global.fetch;
+  });
+  afterEach(() => {
+    global.fetch = origFetch;
+    vi.useRealTimers();
+  });
+
+  it("skips the background probe while shouldPoll() is false", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = mockHealthOk();
+    global.fetch = fetchSpy;
+    const client = new ApiClient({ baseUrl: "http://x:7315" });
+    const conn = new DaemonConnection({
+      client,
+      pollIntervalMs: 2000,
+      shouldPoll: () => false,
+    });
+    conn.start();
+    await vi.advanceTimersByTimeAsync(5000); // several would-be ticks
+    conn.stop();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(conn.getInfo().state).toBe("connecting");
+  });
+
+  it("probes normally when shouldPoll() returns true", async () => {
+    vi.useFakeTimers();
+    global.fetch = mockHealthOk(7);
+    const client = new ApiClient({ baseUrl: "http://x:7315" });
+    const conn = new DaemonConnection({
+      client,
+      pollIntervalMs: 2000,
+      shouldPoll: () => true,
+    });
+    const states = captureStates(conn);
+    conn.start();
+    await vi.advanceTimersByTimeAsync(0); // fire the initial schedulePoll(0)
+    conn.stop();
+    expect(states).toContain("connected");
+  });
+
+  it("re-arms the loop so the host recovers once the gate opens", async () => {
+    vi.useFakeTimers();
+    global.fetch = mockHealthOk(3);
+    const client = new ApiClient({ baseUrl: "http://x:7315" });
+    let ready = false;
+    const conn = new DaemonConnection({
+      client,
+      pollIntervalMs: 2000,
+      shouldPoll: () => ready,
+    });
+    const states = captureStates(conn);
+    conn.start();
+    await vi.advanceTimersByTimeAsync(2000); // gated tick, no probe
+    expect(states).not.toContain("connected");
+    ready = true;
+    await vi.advanceTimersByTimeAsync(2000); // next tick probes
+    conn.stop();
+    expect(states).toContain("connected");
+  });
+});

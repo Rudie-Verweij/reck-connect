@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/rudie-verweij/reck-connect/daemon/internal/events"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/launcher"
+	"github.com/rudie-verweij/reck-connect/daemon/internal/macclipboard"
 	"github.com/rudie-verweij/reck-connect/proto"
 )
 
@@ -878,12 +878,15 @@ func (p *Pane) Info() proto.Pane {
 		SessionName: p.SessionName,
 		SlotID:      p.SlotID,
 		Capabilities: proto.PaneCapabilities{
-			// phase 2: clipboard-image gated on (a) the pane
-			// being Claude (writing 0x16 to a shell would do something
-			// unrelated) and (b) the daemon being on darwin (the
-			// macclipboard package is the only NSPasteboard write path,
-			// and the daemon is darwin-only in production anyway).
-			ClipboardImage: p.Kind == proto.PaneKindClaude && runtime.GOOS == "darwin",
+			// phase 2: clipboard-image gated on (a) the pane being
+			// Claude (writing 0x16 to a shell would do something
+			// unrelated) and (b) the daemon having a working clipboard
+			// backend. macclipboard.Available() is true on darwin
+			// always, and on linux when xclip is on PATH and $DISPLAY
+			// is set (the install script provisions Xvfb on TTY-only
+			// stations to satisfy that). Other platforms fall back to
+			// the /uploads path-typing route.
+			ClipboardImage: p.Kind == proto.PaneKindClaude && macclipboard.Available(),
 		},
 	}
 	if p.Cmd != nil && p.Cmd.Process != nil {

@@ -19,6 +19,12 @@ export interface StatusInfo {
   connError?: string | null;
   mount: MountState;
   /**
+   * Concise, human reason for a degraded connection, shown INLINE next to
+   * the CONN label (e.g. "RECONNECTING — station offline on Tailscale").
+   * null when connected / nothing to explain.
+   */
+  connDetail?: string | null;
+  /**
    * Hybrid mode rev 3.1, phase 9: when the station→local project-list
    * push fails, boot surfaces a one-line message here. The status bar
    * renders it as a small warning badge after the host label. Phase 11
@@ -81,7 +87,12 @@ export class StatusBar {
     this.mountDot.title = this.mountTitle(info.mount);
     this.connDot.style.background = this.connColor(info.conn);
     this.connDot.title = this.connTitle(info.conn, info.connError ?? null);
-    this.connLabel.textContent = info.conn.toUpperCase();
+    // Surface the reason inline (not just in the dot tooltip) so a degraded
+    // connection is legible at a glance in the existing status row.
+    const detail = info.conn !== "connected" ? (info.connDetail ?? null) : null;
+    this.connLabel.textContent = detail
+      ? `${info.conn.toUpperCase()} — ${detail}`
+      : info.conn.toUpperCase();
     this.hostLabel.textContent = info.host;
     const pushErr = info.localPushError ?? null;
     if (pushErr) {
@@ -170,10 +181,12 @@ export class StatusBar {
   }
 
   private mountTitle(m: MountState): string {
+    const manual =
+      "\nManual restart: launchctl kickstart -k gui/$(id -u)/eu.verwey.reck-mount";
     switch (m) {
       case "green": return "Mount healthy";
-      case "yellow": return "Mount not responding — reconnecting";
-      default: return "Mount not configured";
+      case "yellow": return `Mount not responding — reconnecting${manual}`;
+      default: return `Mount not configured${manual}`;
     }
   }
 }

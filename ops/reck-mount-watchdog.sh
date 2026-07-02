@@ -13,13 +13,15 @@ log() {
   printf '%s reck-mount-watchdog: %s\n' "$(date '+%F %T')" "$*"
 }
 
-# RECK_STATION_ROOT is supplied by the LaunchAgent plist's
-# EnvironmentVariables block (install-satellite.sh substitutes the value
-# into the rendered plist at install time). Loud-fail via log() if
-# missing rather than silently mounting against the wrong path.
+# RECK_STATION_ROOT is injected by the LaunchAgent's EnvironmentVariables
+# block (see ops/eu.verwey.reck-mount.plist.tmpl) which install-satellite.sh
+# renders with the operator-supplied value. Fail loudly if absent — a
+# silent fallback to the upstream default `/Users/reck-connect/projects`
+# would mount against a wrong/non-existent path and leave the mount
+# point empty with no obvious cause.
 if [[ -z "${RECK_STATION_ROOT:-}" ]]; then
-  log "RECK_STATION_ROOT is not set — refusing to mount. Re-run install-satellite.sh."
-  exit 0
+  log "RECK_STATION_ROOT is unset — refusing to mount. Re-run install-satellite.sh with RECK_STATION_ROOT set."
+  exit 1
 fi
 # install-satellite.sh substitutes __RECK_STATION_ROOT__ in the plist
 # template. If the rendered plist still carries the placeholder
@@ -110,11 +112,11 @@ SSHFS_ERR="$LOG_DIR/mount-sshfs.err"
     `# local benchmarks). Trade: external writes on the station appear with` \
     `# up to 60s lag — acceptable for code/docs.` \
     -o cache_timeout=60,cache_stat_timeout=60,cache_dir_timeout=60,cache_link_timeout=60 \
-    `# Pin a fast cipher first. Default OpenSSH negotiation often lands on` \
-    `# aes256-* which is meaningfully slower than chacha20 on Apple Silicon` \
-    `# unaccelerated paths, and every byte is re-encrypted by Tailscale's` \
-    `# WireGuard layer so the cost compounds.` \
-    -o Ciphers=chacha20-poly1305@openssh.com,aes128-gcm@openssh.com \
+    `# Cipher selection moved to the ~/.ssh/config Host reck-station` \
+    `# block — fuse-t-sshfs's option parser splits comma-separated -o` \
+    `# values into multiple options, breaking '-o Ciphers=A,B' which` \
+    `# sshfs then tries to interpret 'B' as its own option. The` \
+    `# Ciphers directive in ssh_config is the canonical place anyway.` \
     -o Compression=yes \
     -o defer_permissions 2>"$SSHFS_ERR" ) 2>/dev/null
 ec=$?

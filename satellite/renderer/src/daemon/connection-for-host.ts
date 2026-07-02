@@ -29,7 +29,11 @@ import type { ConnectionInfo } from "./connection";
 import { DaemonConnection } from "./connection";
 import type { HostRef } from "../host";
 import type { Settings } from "../config";
-import { apiForHost } from "../api-for-host";
+import {
+  apiForHost,
+  hasTokenForHost,
+  refreshLocalDaemonToken,
+} from "../api-for-host";
 
 export interface ConnectionsForHostOptions {
   /** Interval between polls after a successful probe (per connection). */
@@ -101,6 +105,13 @@ const failureLogged = new Set<HostRef>();
 const readyFlags = new Map<HostRef, boolean>();
 type ReadyListener = (host: HostRef, ready: boolean) => void;
 const readyListeners = new Set<ReadyListener>();
+
+// Per-host "does this station have a codex binary" flag, fed from each
+// host's /health `codex_available`. Read synchronously by the New-pane
+// dialog to show the Codex button only where a codex pane can spawn.
+// Defaults to false for every host until a poll reports otherwise, so a
+// codex-less station (or an older daemon that omits the field) hides it.
+const codexAvailableFlags = new Map<HostRef, boolean>();
 
 /**
  * Initialise the per-host connection registry. Call once during boot
@@ -189,6 +200,7 @@ export function disposeConnections(): void {
   failureLogged.clear();
   readyFlags.clear();
   readyListeners.clear();
+  codexAvailableFlags.clear();
   cachedSettings = null;
   cachedOptions = null;
 }
@@ -220,6 +232,13 @@ export function setHostReady(host: HostRef, ready: boolean): void {
   const prev = readyFlags.get(host) === true;
   if (prev === ready) return;
   readyFlags.set(host, ready);
+  // The New-pane dialog greys a host on this exact flag. Log every real
+  // transition so "why is Local greyed out?" is answerable from the
+  // console: ready=false here + a preceding `[boot] local daemon start
+  // failed (code=…)` or connection-state line is the whole story.
+  console.info(
+    `[ready] host=${host} ready=${ready} (pane-create UI ${ready ? "enabled" : "greyed"})`,
+  );
   for (const l of readyListeners) l(host, ready);
 }
 
@@ -234,6 +253,25 @@ export function subscribeHostReady(cb: ReadyListener): () => void {
   return () => {
     readyListeners.delete(cb);
   };
+}
+
+/**
+ * Report whether `host` last advertised a codex binary on /health. The
+ * New-pane dialog gates its "Codex" button on this. Defaults to false
+ * for every host until a successful poll sets it (see boot's
+ * `onPollSuccess`), so the button stays hidden on codex-less stations and
+ * on daemons too old to send the field.
+ */
+export function isHostCodexAvailable(host: HostRef): boolean {
+  return codexAvailableFlags.get(host) === true;
+}
+
+/**
+ * Record `host`'s codex availability from its latest /health poll.
+ * Per-host: a codex binary on the station does not imply one on local.
+ */
+export function setHostCodexAvailable(host: HostRef, available: boolean): void {
+  codexAvailableFlags.set(host, available);
 }
 
 /**
@@ -261,6 +299,19 @@ function buildEntry(
     pollIntervalMs: opts.pollIntervalMs,
     pollTimeoutMs: opts.pollTimeoutMs,
     refreshTimeoutMs: opts.refreshTimeoutMs,
+    shouldPoll: () => {
+      // Station always polls (its token comes from settings and doesn't
+      // rotate under us). Local is different: its per-spawn bearer is
+      // owned by main and rotates on every daemon (re)start. Hold off
+      // probing until we hold a token — a token-less probe just draws a
+      // 401 and greys the host out. When the token is missing (daemon
+      // down at boot, or (re)started after boot), quietly re-acquire it
+      // from main so a later tick can poll; skip probing this tick.
+      if (host === "station") return true;
+      if (hasTokenForHost("local")) return true;
+      void refreshLocalDaemonToken().catch(() => {});
+      return false;
+    },
     onPollSuccess: async (health) => {
       // Recovery — clear the once-per-host failure-log gate so the
       // next outage re-arms a single info line. Only emit a recovery

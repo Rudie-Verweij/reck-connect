@@ -88,6 +88,67 @@ describe("pickSession", () => {
   });
 });
 
+describe("askPaneKind — Codex button", () => {
+  function mount() {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    return root;
+  }
+
+  it("always renders a visible Codex button (availability is surfaced later via a toast)", () => {
+    const root = mount();
+    void askPaneKind(root, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
+    });
+    const codexBtn = root.querySelector<HTMLButtonElement>(
+      "button[data-kind='codex']",
+    );
+    expect(codexBtn).not.toBeNull();
+    expect(codexBtn?.hidden).toBe(false);
+    // Enabled when the host is ready, like the other kind buttons.
+    expect(codexBtn?.disabled).toBe(false);
+    root.querySelector<HTMLButtonElement>("button[data-kind='claude']")?.click();
+    root.remove();
+  });
+
+  it("disables the Codex button when the selected host isn't ready (like the others)", () => {
+    const root = mount();
+    void askPaneKind(root, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => false,
+    });
+    const codexBtn = root.querySelector<HTMLButtonElement>(
+      "button[data-kind='codex']",
+    );
+    expect(codexBtn?.hidden).toBe(false);
+    expect(codexBtn?.disabled).toBe(true);
+    root.remove();
+  });
+
+  it("resolves {kind:'codex'} when the button is clicked", async () => {
+    const root = mount();
+    const p = askPaneKind(root, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
+    });
+    root.querySelector<HTMLButtonElement>("button[data-kind='codex']")?.click();
+    await expect(p).resolves.toEqual({ kind: "codex", host: "station" });
+    root.remove();
+  });
+
+  it("keyboard 'x' resolves codex when the host is ready", async () => {
+    const root = mount();
+    const p = askPaneKind(root, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
+    });
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "x" }));
+    await expect(p).resolves.toEqual({ kind: "codex", host: "station" });
+    root.remove();
+  });
+});
+
 describe("askPaneKind — host picker (hybrid mode, phase 10)", () => {
   function mount() {
     const root = document.createElement("div");

@@ -94,3 +94,34 @@ func TestParseDaemonMode_returnsTypedZero(t *testing.T) {
 // alongside the reck-clipboard sidecar that read the file for
 // peer-auth. No replacement; the daemon no longer writes anything
 // under ~/.reck/.
+
+// TestDaemonURLFromAddr — the URL the daemon publishes via
+// $RECK_DAEMON_URL must point to an address the lifecycle-hook shim
+// can actually reach. Wildcard binds (":7315", "0.0.0.0:7315",
+// "[::]:7315") collapse to 127.0.0.1 because loopback is part of every
+// wildcard listener. An explicit non-loopback bind (e.g. a Tailscale IP
+// on a Linux station) MUST be preserved verbatim: a Pi station bound to
+// its tailnet IP was silently dropping every hook POST because the old
+// code always used 127.0.0.1, where nothing was listening — leaving the
+// stoplight stuck on gray for every Claude pane.
+func TestDaemonURLFromAddr(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{":7315", "http://127.0.0.1:7315"},
+		{"0.0.0.0:7315", "http://127.0.0.1:7315"},
+		{"[::]:7315", "http://127.0.0.1:7315"},
+		{"127.0.0.1:7315", "http://127.0.0.1:7315"},
+		{"100.64.0.1:7315", "http://100.64.0.1:7315"}, // non-loopback (tailnet) bind preserved
+		{"192.168.1.42:8080", "http://192.168.1.42:8080"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got := daemonURLFromAddr(tc.in)
+			if got != tc.want {
+				t.Errorf("daemonURLFromAddr(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

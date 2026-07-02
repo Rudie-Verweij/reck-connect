@@ -73,6 +73,16 @@ export function setApiTokenForHost(host: HostRef, token: string | undefined): vo
 }
 
 /**
+ * True when `host`'s client currently holds a bearer token. The poll-gate
+ * in `connection-for-host.ts` reads this to hold off probing a host until
+ * it's authenticated — a token-less probe just draws a 401 and greys the
+ * host out. Lazily constructs the client if needed (matches `apiForHost`).
+ */
+export function hasTokenForHost(host: HostRef): boolean {
+  return apiForHost(host).config.token !== undefined;
+}
+
+/**
  * Drop the cached client for `host`. Next `apiForHost(host)` rebuilds
  * from the current settings. Intended for the "URL or port changed"
  * surface in the future preferences view; Phase 3 has no caller, but

@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/rudie-verweij/reck-connect/daemon/internal/sessions"
 )
@@ -41,25 +42,35 @@ func (a *claudeAdapter) BuildSpawn(req SpawnRequest) (SpawnPlan, error) {
 	}
 	argv := append([]string(nil), req.DefaultClaudeCmd...)
 
-	// Compose the --append-system-prompt value: baseline first, project
-	// preamble second, joined by preambleSeparator. Either side may be
-	// empty (baseline when RECK_DISABLE_BASELINE_PREAMBLE is set;
-	// project when projects.toml omits `preamble`). Only emit the flag
-	// at all when at least one side is non-empty, otherwise we'd pass a
-	// literal "" which does nothing on the CLI side but still inflates
-	// argv and muddies logs.
-	baseline := BaseStationPreamble(req.Preamble)
-	project := req.Project.Preamble
-	var combined string
-	switch {
-	case baseline != "" && project != "":
-		combined = baseline + preambleSeparator + project
-	case baseline != "":
-		combined = baseline
-	case project != "":
-		combined = project
+	// Compose the --append-system-prompt value as up to three layers,
+	// joined by preambleSeparator:
+	//
+	//   1. baseline       — daemon-emitted, mode-aware (BaseStationPreamble)
+	//   2. globalPreamble — satellite-stored "Reck Connect prompt", sent
+	//                       per CreatePane request
+	//   3. project        — per-project preamble from projects.toml
+	//
+	// Any layer may be empty: baseline is "" when RECK_DISABLE_BASELINE_PREAMBLE
+	// is set; globalPreamble is "" when the satellite omits the field
+	// (fresh install with a cleared textarea, or an older satellite that
+	// doesn't know about the field); project is "" when projects.toml
+	// omits `preamble`. Collect the non-empty layers in order and Join
+	// them, so the separator only appears *between* layers (never
+	// leading/trailing). Only emit the flag when at least one layer is
+	// non-empty — otherwise we'd pass a literal "" that does nothing on
+	// the CLI side but still inflates argv and muddies logs.
+	layers := make([]string, 0, 3)
+	if s := BaseStationPreamble(req.Preamble); s != "" {
+		layers = append(layers, s)
 	}
-	if combined != "" {
+	if req.GlobalPreamble != "" {
+		layers = append(layers, req.GlobalPreamble)
+	}
+	if req.Project.Preamble != "" {
+		layers = append(layers, req.Project.Preamble)
+	}
+	if len(layers) > 0 {
+		combined := strings.Join(layers, preambleSeparator)
 		if len(combined) > MaxPreambleBytes {
 			return SpawnPlan{}, fmt.Errorf("claude preamble too large: %d bytes > %d", len(combined), MaxPreambleBytes)
 		}

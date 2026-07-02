@@ -28,10 +28,13 @@ pnpm typecheck         # type-check only, no emit
 pnpm test              # vitest unit tests (run once)
 pnpm test:watch        # vitest in watch mode
 pnpm test:e2e          # Playwright e2e (smoke.spec.ts)
+pnpm dev:bg            # vite + tsc -w only (no Electron) — used by the VSCode debug launcher
 pnpm dist              # full electron-builder package → release/mac-arm64/Reck Connect Satellite.app
 ```
 
 **`pnpm dev` is BROKEN — never use it.** The concurrent vite + electron dev-server flow does not work. For manual UI testing, build a real app bundle with `pnpm dist` and launch `release/mac-arm64/Reck Connect Satellite.app` directly. `pnpm typecheck`, `pnpm test`, and `pnpm build` are all fine for static verification.
+
+For an interactive run with **breakpoints** — and a reliable alternative to the broken `pnpm dev` — use the checked-in VSCode debug config: open the repo in VSCode and press F5. VSCode launches Electron itself against `dist/main/main.js` (the `dev:bg` script supplies the vite + `tsc -w` watch loop without launching Electron). See [`vscode-debugging.md`](vscode-debugging.md).
 
 Source: `satellite/package.json`.
 

@@ -16,12 +16,19 @@
 
 import "@xterm/xterm/css/xterm.css";
 import { TerminalPane } from "@client-core/terminal/terminal-pane";
+import { installPathLinkProvider } from "./viewer/PathLinkProvider";
 import type { HostRef } from "./host";
 // `loadSettings` reads via the same IPC channels the main renderer uses;
 // the popout's preload exposes the same `reckAPI` surface, so this works
 // unchanged. Theme is loaded the same way for parity with the main
 // window's first paint.
 import { loadSettings, loadTheme } from "./config";
+import { initTts } from "./tts/initTts";
+import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
+import { initSearch } from "./search/initSearch";
+import { TerminalSearchAdapter } from "./search/TerminalSearchAdapter";
+import { createOverlayScrollbar } from "./search/OverlayScrollbar";
+import { terminalScrollSurface } from "./search/scrollSurfaces";
 
 const DEFAULT_LOCAL_PORT = 7315;
 
@@ -150,6 +157,73 @@ async function bootPopout(): Promise<void> {
   });
   body.appendChild(term.container);
   term.mount();
+  // Install the file-path xterm linkifier on the popout's terminal so
+  // detached panes behave like main-window panes — Cmd+click on a path in
+  // scrollback opens the file viewer popup. No projectCwd here (a popout
+  // has no active-project context); main derives the project anchor from
+  // the resolved path. `info.host` lets main expand `~/` against the right
+  // home and route station paths through the local sshfs mount.
+  installPathLinkProvider(term.getXterm(), {
+    resolveBatch: (paths) => window.reckAPI.files.resolve(paths),
+    onActivate: (filePath) => {
+      void window.reckAPI.files.openInViewer(filePath, {
+        sourceHost: info.host,
+      });
+    },
+  });
+
+  // Wire the unified TTS subsystem into the popout. Detached panes share
+  // the same controller + control bar + shortcuts as the main window.
+  void (async () => {
+    try {
+      await initTts({
+        getActiveSpeakSurface: () => {
+          const xterm = term.getXterm();
+          const xtermEl = (xterm.element as HTMLElement | undefined) ?? body;
+          const dims = (xterm as unknown as {
+            _core?: { _renderService?: { dimensions?: {
+              css?: { cell?: { width?: number; height?: number } };
+              actualCellWidth?: number;
+              actualCellHeight?: number;
+            } } };
+          })._core?._renderService?.dimensions;
+          const cellWidth = dims?.css?.cell?.width ?? dims?.actualCellWidth ?? 8;
+          const cellHeight = dims?.css?.cell?.height ?? dims?.actualCellHeight ?? 16;
+          return new TerminalPaneAdapter({
+            term: xterm as unknown as ConstructorParameters<typeof TerminalPaneAdapter>[0]["term"],
+            xtermEl,
+            containerEl: body,
+            cellWidth,
+            cellHeight,
+          });
+        },
+      });
+    } catch (e) {
+      console.warn("[popout] TTS disabled:", e);
+    }
+  })();
+
+  // In-view search (⌘/Ctrl+F) + overlay scrollbar for the detached pane.
+  try {
+    const scrollbar = createOverlayScrollbar({
+      host: body,
+      surface: terminalScrollSurface(
+        term.getXterm() as unknown as Parameters<typeof terminalScrollSurface>[0],
+      ),
+    });
+    initSearch({
+      getActiveSearchSurface: () =>
+        new TerminalSearchAdapter({
+          container: body,
+          term: term.getXterm() as unknown as ConstructorParameters<
+            typeof TerminalSearchAdapter
+          >[0]["term"],
+        }),
+      onMatchesChanged: (fractions) => scrollbar.setMatches(fractions),
+    });
+  } catch (e) {
+    console.warn("[popout] search disabled:", e);
+  }
   // First-paint guard: even though TerminalPane installs a
   // ResizeObserver, it skips fitting when the container measures 0×0
   // (FitAddon would otherwise clamp to 2×1 and ship that to the PTY).

@@ -1,0 +1,21 @@
+[Unit]
+Description=Xvfb virtual display for Reck Connect (clipboard support)
+# Started before reck-stationd so the daemon's xclip probe at boot sees a
+# live display. Without this, the per-pane ClipboardImage capability
+# would report false on first probe and stay false for the daemon's
+# whole lifetime, forcing every paste through the /uploads path.
+
+[Service]
+Type=simple
+# Headless 1024x768x24 — sized for two-up image previews if any other
+# screenshot tool ends up using this display. Reck only uses the
+# clipboard, so the screen size is academic but cannot be 0.
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1024x768x24 -nolisten tcp -ac
+# Restart aggressively — if Xvfb dies, every clipboard write fails until
+# it's back. RestartSec is short because the cost of a missing display
+# is silent paste degradation, not crash loops.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

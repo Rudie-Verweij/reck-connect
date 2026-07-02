@@ -1,0 +1,30 @@
+[Unit]
+Description=Reck Connect station daemon (Linux)
+After=network-online.target reck-xvfb.service
+Wants=network-online.target reck-xvfb.service
+# Bring up the virtual X display first so the daemon's startup xclip
+# probe (internal/macclipboard) sees a reachable $DISPLAY and reports
+# ClipboardImage=true on Claude panes. Without it the satellite would
+# permanently fall back to the /uploads path-typing route.
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/reck-stationd \
+  --addr=__ADDR__ \
+  --claude=__CLAUDE_BIN__ \
+  --pane-launcher=__LAUNCHER__ \
+  --no-install-hooks=false
+EnvironmentFile=-%h/.config/reck/.env
+# DISPLAY is forwarded to spawned Claude panes via paneBaseEnv's
+# allowlist, so Claude Code's own xclip-based image-paste reader
+# agrees with the daemon's xclip-based writer on which X server.
+Environment=DISPLAY=:99
+Restart=on-failure
+RestartSec=30
+StartLimitBurst=3
+StartLimitIntervalSec=120
+StandardOutput=append:%h/.local/state/reck-stationd/reck-stationd.log
+StandardError=append:%h/.local/state/reck-stationd/reck-stationd.log
+
+[Install]
+WantedBy=default.target

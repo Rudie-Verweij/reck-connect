@@ -38,6 +38,14 @@ export interface DaemonConnectionConfig {
    * without subscribing to every tick.
    */
   onPollFailure?: (reason: string, error: unknown) => void;
+  /**
+   * Predicate consulted before each *background* poll. When it returns
+   * false the probe is skipped and the loop simply reschedules — used to
+   * hold off polling a host until it's authenticated, so a token-less
+   * probe never draws a spurious 401. A user-initiated `refresh()` is
+   * unaffected and always probes. Absent = always poll.
+   */
+  shouldPoll?: () => boolean;
 }
 
 /**
@@ -130,6 +138,12 @@ export class DaemonConnection {
 
   private async poll(): Promise<void> {
     if (!this.running) return;
+    if (this.config.shouldPoll && !this.config.shouldPoll()) {
+      // Not ready to probe yet (e.g. local host still un-authenticated).
+      // Reschedule so the loop keeps ticking and picks up readiness later.
+      if (this.running) this.schedulePoll(this.config.pollIntervalMs ?? 2000);
+      return;
+    }
     try {
       await this.probe(this.config.pollTimeoutMs ?? 5000);
     } catch {

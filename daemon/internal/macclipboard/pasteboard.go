@@ -1,9 +1,19 @@
-// Package macclipboard writes image bytes to the user's general
-// NSPasteboard via cgo + AppKit. Replaces the an earlier release
-// reck-clipboard sidecar after the daemon moved into the Aqua user
-// session itself (phase 1) — once the daemon owns an
-// Aqua audit session, it can drive NSPasteboard directly without a
-// per-user agent acting as proxy.
+// Package macclipboard writes image bytes into the user's system
+// clipboard so Claude Code can pull the bytes into an [Image #N] chip
+// when the satellite forwards a Ctrl+V trigger.
+//
+// Platform backends:
+//   - darwin: cgo + AppKit, writes to NSPasteboard.general directly.
+//     Replaces an earlier release reck-clipboard sidecar — once the
+//     daemon owns an Aqua audit session it can drive NSPasteboard without
+//     a per-user agent acting as proxy.
+//   - linux: shells out to `xclip -selection clipboard -t <mime> -i`.
+//     Requires `xclip` on PATH and a reachable X display ($DISPLAY) —
+//     on a TTY-only host the install script provisions an Xvfb-backed
+//     virtual display so chip-paste still works without a real GUI.
+//   - other: WriteImage returns ErrUnsupported, the HTTP layer returns
+//     500, and the renderer falls back to the path-typing /uploads
+//     route.
 //
 // Not intended for non-image clipboard interaction. Read paths are
 // not provided (the daemon never reads the user's pasteboard, only

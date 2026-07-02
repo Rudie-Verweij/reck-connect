@@ -12,9 +12,9 @@ Every pane kind with persistence uses exactly one identity field. They are mutua
 |------|---------------|------|----------------------|
 | `claude` | `SessionID` | RFC 4122 v4 UUID | Yes |
 | `shell` | `SlotID` | RFC 4122 v4 UUID | Yes |
-| `codex` | (none) | — | No |
+| `codex` | `SlotID` | RFC 4122 v4 UUID | Yes |
 
-This is the **Identity Rule** from the protocol spec. `DismissSessionsRequest.session_ids` (misnamed for historical reasons) accepts Claude SessionIDs or shell SlotIDs interchangeably — the daemon matches on whichever identity the entry carries.
+This is the **Identity Rule** from the protocol spec. Codex reuses the shell `SlotID` mechanism (it has no Claude session to resume; slot continuity is what carries a codex pane across a restart). `DismissSessionsRequest.session_ids` (misnamed for historical reasons) accepts Claude SessionIDs or shell/codex SlotIDs interchangeably — the daemon matches on whichever identity the entry carries.
 
 ## Session Index Storage
 

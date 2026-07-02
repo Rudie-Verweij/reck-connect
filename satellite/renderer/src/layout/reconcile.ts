@@ -102,13 +102,14 @@ export function titleFor(p: Pane): string {
 
 /**
  * Return the kind-correct identity for a tab: sessionId iff the tab
- * is Claude-kind, slotId iff it's shell-kind. Undefined for panes
- * without a persistent identity (pre-Scope-B shell tabs, codex tabs,
- * or any tab the daemon hasn't yet surfaced an id for).
+ * is Claude-kind, slotId iff it's shell- or codex-kind (both use the
+ * slot identity). Undefined for panes without a persistent identity
+ * (pre-Scope-B tabs, or any tab the daemon hasn't yet surfaced an id
+ * for).
  */
 function identityOfTab(t: Tab): string | undefined {
   if (t.kind === "claude") return t.sessionId;
-  if (t.kind === "shell") return t.slotId;
+  if (t.kind === "shell" || t.kind === "codex") return t.slotId;
   return undefined;
 }
 
@@ -117,7 +118,7 @@ function identityOfTab(t: Tab): string | undefined {
  */
 function identityOfPane(p: Pane): string | undefined {
   if (p.kind === "claude") return p.session_id;
-  if (p.kind === "shell") return p.slot_id;
+  if (p.kind === "shell" || p.kind === "codex") return p.slot_id;
   return undefined;
 }
 
@@ -202,14 +203,15 @@ export function countMatchingIdentities(
   livePanesByHost: LivePanesByHost,
 ): number {
   if (!saved) return 0;
-  type Buckets = { claude: Set<string>; shell: Set<string> };
+  type Buckets = { claude: Set<string>; shell: Set<string>; codex: Set<string> };
   const byHost = new Map<HostRef, Buckets>();
   for (const [host, panes] of Object.entries(livePanesByHost)) {
     if (!panes) continue;
-    const b: Buckets = { claude: new Set(), shell: new Set() };
+    const b: Buckets = { claude: new Set(), shell: new Set(), codex: new Set() };
     for (const p of panes) {
       if (p.kind === "claude" && p.session_id) b.claude.add(p.session_id);
       if (p.kind === "shell" && p.slot_id) b.shell.add(p.slot_id);
+      if (p.kind === "codex" && p.slot_id) b.codex.add(p.slot_id);
     }
     byHost.set(host as HostRef, b);
   }
@@ -220,6 +222,7 @@ export function countMatchingIdentities(
       if (!bucket) continue;
       if (tb.kind === "claude" && tb.sessionId && bucket.claude.has(tb.sessionId)) n++;
       else if (tb.kind === "shell" && tb.slotId && bucket.shell.has(tb.slotId)) n++;
+      else if (tb.kind === "codex" && tb.slotId && bucket.codex.has(tb.slotId)) n++;
     }
   }
   return n;
@@ -245,7 +248,7 @@ export function countSavedIdentityTabsInReachableHosts(
     for (const tb of leaf.tabs) {
       const hasIdentity =
         (tb.kind === "claude" && !!tb.sessionId) ||
-        (tb.kind === "shell" && !!tb.slotId);
+        ((tb.kind === "shell" || tb.kind === "codex") && !!tb.slotId);
       if (!hasIdentity) continue;
       if (!reachable.has(tb.host)) continue;
       n++;
@@ -329,7 +332,8 @@ function reconcileImpl(
       if (!live) return;
       if (live.kind !== tb.kind) return;
       if (tb.kind === "claude" && live.session_id) tb.sessionId = live.session_id;
-      if (tb.kind === "shell" && live.slot_id) tb.slotId = live.slot_id;
+      if ((tb.kind === "shell" || tb.kind === "codex") && live.slot_id)
+        tb.slotId = live.slot_id;
       boundTabIds.add(tb.id);
       consumedHostPaneKeys.add(key);
     });
@@ -378,7 +382,8 @@ function reconcileImpl(
     for (const p of hostPanes) {
       if (covered.has(p.id)) continue;
       const sessionId = p.kind === "claude" ? p.session_id : undefined;
-      const slotId = p.kind === "shell" ? p.slot_id : undefined;
+      const slotId =
+        p.kind === "shell" || p.kind === "codex" ? p.slot_id : undefined;
       const newTab = tab(
         p.id,
         p.kind,

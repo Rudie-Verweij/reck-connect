@@ -21,6 +21,21 @@ var sensitiveArgvFlags = map[string]bool{
 	"--append-system-prompt": true,
 }
 
+// configOverrideFlags introduce a codex `key=value` config override
+// (`codex -c developer_instructions=...`). The value rides in the token
+// AFTER the flag, so redaction keys off the preceding element.
+var configOverrideFlags = map[string]bool{
+	"-c":       true,
+	"--config": true,
+}
+
+// sensitiveConfigKeys are `-c key=value` override keys whose value must be
+// redacted. `developer_instructions` carries the multi-KiB Reck preamble on
+// every codex spawn — same log-flooding rationale as --append-system-prompt.
+var sensitiveConfigKeys = map[string]bool{
+	"developer_instructions": true,
+}
+
 // redactedPlaceholder is what replaces the value half of a sensitive flag.
 const redactedPlaceholder = "<redacted>"
 
@@ -59,6 +74,15 @@ func redactArgv(argv []string) []string {
 			out[i+1] = redactedPlaceholder
 			i++
 			continue
+		}
+		// Codex config override: `-c key=value`. When the previous token was
+		// a config flag and this token's key is sensitive, mask only the
+		// value, keeping `key=` visible so the argv shape stays debuggable.
+		if i > 0 && configOverrideFlags[argv[i-1]] {
+			if eq := strings.IndexByte(a, '='); eq > 0 && sensitiveConfigKeys[a[:eq]] {
+				out[i] = a[:eq] + "=" + redactedPlaceholder
+				continue
+			}
 		}
 		out[i] = a
 	}

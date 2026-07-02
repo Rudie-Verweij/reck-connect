@@ -56,6 +56,19 @@ export const CONFIG_KEYS = [
   // Default ON since an earlier release. Persisted as boolean; renderer treats explicit
   // `false` as opt-out and any other value as the default.
   "hoverToFocus",
+  // Text-to-speech preferences: { voice: string|null, rate: number }.
+  // Non-secret. Defaults applied at load time so a missing key is fine.
+  "tts",
+  // File-viewer / Cmd+click linkifier settings. Without these allowlisted,
+  // the IPC boundary silently rejects every config:get/config:set for them.
+  // `fileViewerExtraRoots`: user-added folders the viewer may open outside
+  // the built-in roots. `fileViewerModePerPath`: remembered source-vs-rendered
+  // choice per file. `linkifier.extensionlessAllowlist`: extensionless
+  // filenames (e.g. Dockerfile, Makefile) the terminal linkifier treats as
+  // clickable.
+  "fileViewerExtraRoots",
+  "fileViewerModePerPath",
+  "linkifier.extensionlessAllowlist",
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 

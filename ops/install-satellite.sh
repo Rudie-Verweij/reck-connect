@@ -361,6 +361,11 @@ Host reck-station
   IdentitiesOnly yes
   ServerAliveInterval 15
   ServerAliveCountMax 3
+  # Pin fast ciphers (chacha20 first for Apple Silicon; gcm fallback).
+  # Lives here rather than in the watchdog's sshfs -o because fuse-t-sshfs
+  # splits comma-separated -o values into multiple options and breaks
+  # '-o Ciphers=A,B'. sshfs reads this via its own ssh client.
+  Ciphers chacha20-poly1305@openssh.com,aes128-gcm@openssh.com
 $SSH_END_MARKER
 EOF
 fi

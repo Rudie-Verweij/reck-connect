@@ -1,6 +1,7 @@
 import { HttpError } from "@client-core/api/client";
 import { describeError } from "./daemon/connection";
 import type { ConnectionInfo } from "./daemon/connection";
+import { decidePollFailureAction } from "./daemon/poll-failure-policy";
 import {
   connectionForHost,
   enabledHosts,
@@ -8,6 +9,8 @@ import {
   isHostReady,
   setHostReady,
   subscribeHostReady,
+  setHostCodexAvailable,
+  isHostCodexAvailable,
 } from "./daemon/connection-for-host";
 import {
   makePushState,
@@ -15,6 +18,8 @@ import {
   type PushState,
 } from "./project-push";
 import { MountHint } from "./daemon/mount-hint";
+import { ProjectRefresher } from "./daemon/project-refresh";
+import { RemountCoordinator } from "./daemon/remount-coordinator";
 import { tokenizeClaudeArgs } from "@client-core/launch-args/tokenize";
 import { promptForToken } from "./ui/update-token-dialog";
 import {
@@ -29,8 +34,15 @@ import { Rail } from "./ui/rail";
 import { effectiveStoplight as filterEffectiveStoplight } from "./ui/effective-stoplight";
 import { AppBar, type Theme } from "./ui/app-bar";
 import { PaneLayout } from "./ui/pane-layout";
+import { installPathLinkProvider } from "./viewer/PathLinkProvider";
+import { resolveActivatePath } from "./viewer/resolveActivatePath";
+import {
+  setExtensionlessAllowlist,
+  SEEDED_EXTENSIONLESS_FILENAMES,
+} from "./viewer/LinkDetector";
 import { HoverFocusController } from "./ui/hover-focus-controller";
 import { StatusBar } from "./ui/status-bar";
+import { deriveConnectionReason, type TailscaleVerdict } from "./ui/connection-reason";
 import { MissionControl } from "./ui/mission-control";
 import {
   askPaneKind,
@@ -38,10 +50,22 @@ import {
   pickSession,
   showAddProjectInfo,
 } from "./ui/new-pane-dialog";
+import { codexUnavailableMessage } from "./ui/codex-availability";
+import { showToast } from "./viewer/Toast";
 import { installShortcuts } from "./ui/shortcuts";
 import { renderSettings } from "./ui/settings-view";
 import { addProjectFlow } from "./ui/add-project-dialog";
 import { confirmDeleteProject } from "./ui/delete-project-dialog";
+import { initTts } from "./tts/initTts";
+import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
+import { initSearch } from "./search/initSearch";
+import { TerminalSearchAdapter } from "./search/TerminalSearchAdapter";
+import {
+  createOverlayScrollbar,
+  type OverlayScrollbar,
+} from "./search/OverlayScrollbar";
+import { terminalScrollSurface } from "./search/scrollSurfaces";
+import type { TerminalPane } from "@client-core/terminal/terminal-pane";
 import {
   addTab,
   allLeaves,
@@ -73,6 +97,8 @@ import {
   loadClaudeLaunchArgs,
   loadClaudeLaunchArgsByProject,
   loadHoverToFocus,
+  loadLinkifierAllowlist,
+  saveLinkifierAllowlist,
   loadLayouts,
   loadProjectNameOverrides,
   loadProjectOrder,
@@ -81,6 +107,7 @@ import {
   loadTheme,
   resolveActiveUrl,
   resolveClaudeLaunchArgs,
+  resolveEffectiveReckConnectPrompt,
   saveClaudeLaunchArgs,
   saveClaudeLaunchArgsForProject,
   saveLayout,
@@ -144,6 +171,21 @@ export async function boot(splash?: StartupSplashController) {
   // background (the inline block in index.html keys off it).
   let theme: Theme = await loadTheme();
   document.documentElement.setAttribute("data-theme", theme);
+
+  // Hydrate the linkifier's extensionless-filename allowlist from persisted
+  // config. First run (no list yet) seeds the documented defaults and
+  // persists them immediately so the Preferences UI can show them as chips.
+  // Later runs honour the persisted list — even when empty, which signals
+  // the user emptied it on purpose.
+  {
+    const persisted = await loadLinkifierAllowlist();
+    if (persisted === null) {
+      await saveLinkifierAllowlist(SEEDED_EXTENSIONLESS_FILENAMES);
+      setExtensionlessAllowlist(SEEDED_EXTENSIONLESS_FILENAMES);
+    } else {
+      setExtensionlessAllowlist(persisted);
+    }
+  }
 
   const settings = await loadSettings();
   // No settings file → render Preferences. an earlier release made local always
@@ -946,6 +988,10 @@ export async function boot(splash?: StartupSplashController) {
   // the cleanup as a free side-effect. See an earlier release 3e.
   window.addEventListener("beforeunload", () => hoverFocus.detach(), { once: true });
 
+  // Per-pane overlay scrollbars, keyed by the TerminalPane so each entry is
+  // GC'd with its pane (the pane drops its scroll listener on dispose).
+  const terminalScrollbars = new WeakMap<TerminalPane, OverlayScrollbar>();
+
   const layout: PaneLayout = new PaneLayout({
     root: layoutRoot,
     // Phase 10: route each tab's WS through its own host's ApiClient.
@@ -966,6 +1012,102 @@ export async function boot(splash?: StartupSplashController) {
     isRestoring: () => isRetrying(),
     // seed theme so new terminals use the right colors from first mount
     onActiveLeafChange: () => {},
+    // Install the xterm path linkifier on every new pane so file paths in
+    // scrollback (from `ls`, `grep`, Claude Code edit messages, …) become
+    // Cmd+clickable. The provider is hover-driven — no cost until the user
+    // hovers a line. The resolve batch and openInViewer route through
+    // main's allowlist.
+    onPaneCreated: (paneId, pane) => {
+      // Per-pane auto-hiding overlay scrollbar (xterm's native scrollbar is
+      // hidden via CSS). Fire-and-forget like the linkifier below: tied to
+      // the pane's lifetime and GC'd with it via the WeakMap.
+      try {
+        const host = pane.container.parentElement ?? pane.container;
+        const sb = createOverlayScrollbar({
+          host,
+          surface: terminalScrollSurface(
+            pane.getXterm() as unknown as Parameters<typeof terminalScrollSurface>[0],
+          ),
+        });
+        terminalScrollbars.set(pane, sb);
+      } catch (e) {
+        console.warn("[scrollbar] disabled for pane:", e);
+      }
+
+      installPathLinkProvider(pane.getXterm(), {
+        resolveBatch: (paths) => window.reckAPI.files.resolve(paths),
+        onActivate: (filePath) => {
+          // Route the click through the pane's host so main can expand
+          // `~/` against the right home (station vs Mac) and apply the
+          // station-cwd translation. Lookup is by paneId because the
+          // pane's host is tracked at the tab level (see paneHost()).
+          const directHost = paneHost(paneId);
+          // paneHost can return null transiently while the layout tree
+          // rebuilds (e.g. during selectProject) or before the daemon's
+          // first pane-state push lands. Defaulting to "local" silently
+          // misrouted station-pane clicks to the Mac filesystem (a
+          // "file doesn't exist" error against a /Users/... path). Fall
+          // back to primaryHost instead — for users running with station
+          // enabled that's "station", the right guess for the vast
+          // majority of clicks. A console.warn flags the fallback.
+          const host: HostRef = directHost ?? primaryHost;
+          if (directHost === null) {
+            console.warn(
+              `[linkifier] paneHost(${paneId}) returned null — falling back to primaryHost=${primaryHost}`,
+            );
+          }
+          // Resolve bare filenames AND `./X` / `../X` against the active
+          // project's cwd; absolute (`/abs`) and home-anchored (`~/x`)
+          // paths pass through unchanged.
+          //
+          // The cwd lookup keys off the UI-SELECTED project, but the
+          // clicked pane is only provably that project's when it sits in
+          // the current layout tree (directHost !== null). Outside it
+          // (selectProject race), a WRONG cwd poisons resolveActivatePath
+          // and main's rescue pipeline, while an ABSENT cwd is safe — main
+          // derives the project anchor from the resolved path. So drop the
+          // cwd when the pane isn't provably the current project's.
+          const projectCwd =
+            directHost !== null
+              ? currentProjects.find((p) => p.id === currentProjectId)?.cwd ??
+                null
+              : null;
+          const target = resolveActivatePath(filePath, projectCwd);
+          console.log("[click:pane] activate -> openInViewer", {
+            paneId,
+            paneHost: directHost,
+            resolvedHost: host,
+            sourceHost: host,
+            projectCwd,
+            originalText: filePath,
+            rawPath: filePath,
+            target,
+          });
+          window.reckAPI.files
+            .openInViewer(target, {
+              sourceHost: host,
+              originalText: filePath,
+              projectCwd: projectCwd ?? undefined,
+            })
+            .then((r) => {
+              if (!r || (r as { ok?: boolean }).ok !== true) {
+                console.warn("[click:pane] openInViewer rejected", {
+                  target,
+                  sourceHost: host,
+                  result: r,
+                });
+              }
+            })
+            .catch((err: unknown) => {
+              console.warn("[click:pane] openInViewer threw", {
+                target,
+                sourceHost: host,
+                error: err,
+              });
+            });
+        },
+      });
+    },
     onStoplightChange: (paneId, s) => {
       // Bump the shared epoch first thing so any in-flight poll
       // response landing after this event sees `wsEpoch > pollEpoch`
@@ -1427,7 +1569,24 @@ export async function boot(splash?: StartupSplashController) {
       subscribeReady: (cb) => subscribeHostReady(cb),
     });
     if (!choice) return null;
-    if (choice.kind === "claude" || choice.kind === "shell") {
+    // Codex is a first-class kind but needs a `codex` binary on the chosen
+    // host's daemon PATH. If /health reported none, don't silently fail the
+    // create — tell the user exactly what's missing and how to fix it.
+    if (choice.kind === "codex" && !isHostCodexAvailable(choice.host)) {
+      showToast(document.body, codexUnavailableMessage(choice.host), {
+        kind: "info",
+        durationMs: 9000,
+      });
+      return null;
+    }
+    if (
+      choice.kind === "claude" ||
+      choice.kind === "shell" ||
+      choice.kind === "codex"
+    ) {
+      // Codex, like shell, is a direct create (no preamble, no resume) —
+      // the three newTab callers below already gate extras/globalPreamble
+      // on kind==="claude", so codex correctly sends neither.
       return { kind: choice.kind, host: choice.host };
     }
     // "resume": surface the session list. The picker is Claude-only —
@@ -1454,6 +1613,44 @@ export async function boot(splash?: StartupSplashController) {
     }
   }
 
+  /**
+   * Spawn a pane on `host` and return its id, or `null` after surfacing an
+   * error toast when the daemon rejects it. Pane-create failures used to be
+   * swallowed to the console (see the comment above); routing them through
+   * a toast means the user actually learns why nothing appeared — e.g. a
+   * codex create that slips past the availability gate returns the daemon's
+   * `ErrCodexNotAvailable` here.
+   */
+  async function createPaneOrToast(
+    host: HostRef,
+    projectId: string,
+    kind: PaneKind,
+    opts: {
+      resumeSessionId?: string;
+      extraArgs?: string[];
+      globalPreamble?: string;
+    },
+  ): Promise<string | null> {
+    try {
+      const { pane_id } = await apiForHost(host).createPane(
+        projectId,
+        kind,
+        opts,
+      );
+      return pane_id;
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      const label =
+        kind === "claude" ? "Claude" : kind === "codex" ? "Codex" : "Shell";
+      showToast(document.body, `Couldn't start the ${label} pane: ${detail}`, {
+        kind: "error",
+        durationMs: 8000,
+      });
+      console.error("createPane failed", { host, projectId, kind, error: e });
+      return null;
+    }
+  }
+
   async function newTabInLeaf(leafId: string) {
     if (!currentProjectId) return;
     const choice = await pickNewPane();
@@ -1462,19 +1659,29 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude" && !choice.resumeSessionId
         ? await resolveClaudeExtras(currentProjectId)
         : null;
+    // Reck Connect prompt — sent for every Claude pane (including resumes)
+    // AND for codex panes (the codex adapter injects it via
+    // `-c developer_instructions=`); undefined for shell panes.
+    const globalPreamble =
+      choice.kind === "claude" || choice.kind === "codex"
+        ? await resolveEffectiveReckConnectPrompt()
+        : undefined;
     // Hybrid mode (rev 3.1, phase 10): route pane-create to the host
     // the user picked. The local daemon resolves `projectId → cwd`
     // from its in-memory map populated by Phase 9's PUT /projects, so
     // no cwd override is needed here — the daemon handles the sshfs
     // mount-path translation transparently.
-    const { pane_id } = await apiForHost(choice.host).createPane(
+    const pane_id = await createPaneOrToast(
+      choice.host,
       currentProjectId,
       choice.kind,
       {
         resumeSessionId: choice.resumeSessionId,
         extraArgs: extras?.tokens,
+        globalPreamble,
       },
     );
+    if (!pane_id) return;
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
     const tree = layout.getTree();
     if (!tree) {
@@ -1508,14 +1715,24 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude" && !choice.resumeSessionId
         ? await resolveClaudeExtras(currentProjectId)
         : null;
-    const { pane_id } = await apiForHost(choice.host).createPane(
+    // Reck Connect prompt — sent for every Claude pane (including resumes)
+    // AND for codex panes (the codex adapter injects it via
+    // `-c developer_instructions=`); undefined for shell panes.
+    const globalPreamble =
+      choice.kind === "claude" || choice.kind === "codex"
+        ? await resolveEffectiveReckConnectPrompt()
+        : undefined;
+    const pane_id = await createPaneOrToast(
+      choice.host,
       currentProjectId,
       choice.kind,
       {
         resumeSessionId: choice.resumeSessionId,
         extraArgs: extras?.tokens,
+        globalPreamble,
       },
     );
+    if (!pane_id) return;
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
     const r = splitLeaf(
       tree,
@@ -1541,14 +1758,24 @@ export async function boot(splash?: StartupSplashController) {
       choice.kind === "claude" && !choice.resumeSessionId
         ? await resolveClaudeExtras(currentProjectId)
         : null;
-    const { pane_id } = await apiForHost(choice.host).createPane(
+    // Reck Connect prompt — sent for every Claude pane (including resumes)
+    // AND for codex panes (the codex adapter injects it via
+    // `-c developer_instructions=`); undefined for shell panes.
+    const globalPreamble =
+      choice.kind === "claude" || choice.kind === "codex"
+        ? await resolveEffectiveReckConnectPrompt()
+        : undefined;
+    const pane_id = await createPaneOrToast(
+      choice.host,
       currentProjectId,
       choice.kind,
       {
         resumeSessionId: choice.resumeSessionId,
         extraArgs: extras?.tokens,
+        globalPreamble,
       },
     );
+    if (!pane_id) return;
     const tooltip = extras?.raw ? `claude ${extras.raw}` : undefined;
     const newLeaf = leafWithTab(
       tab(pane_id, choice.kind, choice.host, undefined, undefined, tooltip),
@@ -1565,7 +1792,7 @@ export async function boot(splash?: StartupSplashController) {
     if (!found) return;
     const ok = await confirmDialog(document.body, {
       title: `Close ${found.tab.title}?`,
-      body: `This will end the ${found.tab.kind === "claude" ? "Claude" : "shell"} process running in this tab. Unsaved terminal state will be lost.`,
+      body: `This will end the ${found.tab.kind === "claude" ? "Claude" : found.tab.kind === "codex" ? "Codex" : "shell"} process running in this tab. Unsaved terminal state will be lost.`,
       confirmLabel: "Close tab",
       cancelLabel: "Keep",
     });
@@ -1590,7 +1817,7 @@ export async function boot(splash?: StartupSplashController) {
       title: paneCount === 1 ? `Close ${l.tabs[0].title}?` : `Close pane-box?`,
       body:
         paneCount === 1
-          ? `This will end the ${l.tabs[0].kind === "claude" ? "Claude" : "shell"} process.`
+          ? `This will end the ${l.tabs[0].kind === "claude" ? "Claude" : l.tabs[0].kind === "codex" ? "Codex" : "shell"} process.`
           : `This will close all ${paneCount} tabs and end their processes.`,
       confirmLabel: paneCount === 1 ? "Close tab" : `Close ${paneCount} tabs`,
       cancelLabel: "Keep",
@@ -1703,6 +1930,72 @@ export async function boot(splash?: StartupSplashController) {
       if (p) void selectProject(p.id);
     },
   });
+
+  // Text-to-speech subsystem. Resolves the active TerminalPane via the
+  // layout, listens for the speak shortcuts, and renders the floating
+  // control bar anchored to the active pane wrapper. Failures here are
+  // non-fatal — the rest of the app should still boot if the browser
+  // doesn't expose speechSynthesis (e.g. headless test harness).
+  void (async () => {
+    try {
+      await initTts({
+        getActiveSpeakSurface: () => {
+          const rec = layout.getActiveTerminalRecord();
+          if (!rec) return null;
+          // Wrap the active xterm pane in a TerminalPaneAdapter so the
+          // TtsController treats it as a generic SpeakSurfaceAdapter,
+          // identical to how the file-viewer popup wraps its markdown /
+          // CodeMirror surfaces. Cell metrics are read off xterm's
+          // render service when available, with a defaulted fallback.
+          const term = rec.term.getXterm();
+          const xtermEl = (term.element as HTMLElement | undefined) ?? rec.wrapper;
+          const dims = (term as unknown as {
+            _core?: { _renderService?: { dimensions?: {
+              css?: { cell?: { width?: number; height?: number } };
+              actualCellWidth?: number;
+              actualCellHeight?: number;
+            } } };
+          })._core?._renderService?.dimensions;
+          const cellWidth = dims?.css?.cell?.width ?? dims?.actualCellWidth ?? 8;
+          const cellHeight = dims?.css?.cell?.height ?? dims?.actualCellHeight ?? 16;
+          return new TerminalPaneAdapter({
+            term: term as unknown as ConstructorParameters<typeof TerminalPaneAdapter>[0]["term"],
+            xtermEl,
+            containerEl: rec.wrapper,
+            cellWidth,
+            cellHeight,
+          });
+        },
+      });
+    } catch (e) {
+      console.warn("[tts] disabled:", e);
+    }
+  })();
+
+  // In-view search (⌘/Ctrl+F). Resolves the active terminal pane as a
+  // TerminalSearchAdapter (same pattern as the TTS surface above) and
+  // routes match-position ticks to that pane's overlay scrollbar.
+  try {
+    initSearch({
+      getActiveSearchSurface: () => {
+        const rec = layout.getActiveTerminalRecord();
+        if (!rec) return null;
+        const term = rec.term.getXterm();
+        return new TerminalSearchAdapter({
+          container: rec.wrapper,
+          term: term as unknown as ConstructorParameters<
+            typeof TerminalSearchAdapter
+          >[0]["term"],
+        });
+      },
+      onMatchesChanged: (fractions) => {
+        const rec = layout.getActiveTerminalRecord();
+        if (rec) terminalScrollbars.get(rec.term)?.setMatches(fractions);
+      },
+    });
+  } catch (e) {
+    console.warn("[search] disabled:", e);
+  }
 
   async function selectProject(projectId: string) {
     if (missionControlActive) hideMissionControl();
@@ -2012,13 +2305,16 @@ export async function boot(splash?: StartupSplashController) {
     // users open one manually via the new-pane dialog.
     const kind: PaneKind = "claude";
     const extras = await resolveClaudeExtras(projectId);
+    // Starter panes are always Claude, so they carry the Reck Connect
+    // prompt too — auto-started sessions get the same global hints.
+    const globalPreamble = await resolveEffectiveReckConnectPrompt();
     if (currentProjectId !== projectId) return;
     let paneId: string | null = null;
     try {
       const created = await apiForHost(primaryHost).createPane(
         projectId,
         kind,
-        { extraArgs: extras.tokens },
+        { extraArgs: extras.tokens, globalPreamble },
       );
       paneId = created.pane_id;
       // Project switched while createPane was in flight. The pane
@@ -2065,6 +2361,25 @@ export async function boot(splash?: StartupSplashController) {
   }
 
   let connInfo: ConnectionInfo = { state: "connecting", lastError: null, uptimeSec: null };
+  // Tailscale verdict for the inline connection reason. Probed lazily when
+  // the station goes unreachable (not on a token error), cleared on
+  // recovery. Single-flight so a flapping link can't stack `tailscale`
+  // CLI calls.
+  let tailscaleVerdict: TailscaleVerdict | null = null;
+  let tailscaleProbeInFlight = false;
+  async function refreshTailscaleVerdict(): Promise<void> {
+    if (tailscaleProbeInFlight) return;
+    tailscaleProbeInFlight = true;
+    try {
+      const v = await window.reckAPI.tailscale.status(activeUrl);
+      tailscaleVerdict = v.ok ? v : null;
+      renderStatus();
+    } catch {
+      tailscaleVerdict = null;
+    } finally {
+      tailscaleProbeInFlight = false;
+    }
+  }
 
   // --- Phase 9 push state (declared before renderStatus so the status
   // bar can read localPushError on its very first paint) --------------
@@ -2078,6 +2393,11 @@ export async function boot(splash?: StartupSplashController) {
   let localMountPoint: string | null = null;
   const pushState: PushState = makePushState();
   let localPushError: string | null = null;
+  // When CONN is `connected` but the `/projects` fetch fails, the project
+  // refresher records the reason here instead of throwing back into the
+  // poll loop and demoting CONN. Dedup-guarded so a repeating failure
+  // doesn't re-render the status row every poll.
+  let projectsError: string | null = null;
 
   // Re-evaluate an earlier release soft hint from the current (CONN, mount) tuple
   // and return the decorated mount state. Call this whenever CONN or
@@ -2100,6 +2420,7 @@ export async function boot(splash?: StartupSplashController) {
       host: new URL(activeUrl).host,
       conn: connInfo.state,
       connError: connInfo.lastError,
+      connDetail: deriveConnectionReason(connInfo.lastError, tailscaleVerdict),
       mount: displayedMount,
       localPushError,
     });
@@ -2242,6 +2563,41 @@ export async function boot(splash?: StartupSplashController) {
   // here.
   const splashSafetyTimer = window.setTimeout(markBootReady, 5000);
 
+  // Decouples rail population from the health-probe gate: `refreshProjects`
+  // runs fire-and-forget so a slow/failing `/projects` can never throw out
+  // of `onPollSuccess` and bounce CONN back to `reconnecting`. Auto-select,
+  // splash advancement, and boot-ready all run in the success continuation.
+  const projectRefresher = new ProjectRefresher<Project>({
+    refresh: refreshProjects,
+    onError: (msg) => {
+      if (projectsError === msg) return;
+      projectsError = msg;
+      renderStatus();
+    },
+    onResult: async (projects, { firstSuccess, firstNonEmpty }) => {
+      if (!currentProjectId && !missionControlActive && projects.length > 0) {
+        if (firstNonEmpty) splash?.step("layout");
+        await selectProject(projects[0].id);
+      }
+      if (firstSuccess) {
+        window.clearTimeout(splashSafetyTimer);
+        markBootReady();
+      }
+    },
+  });
+
+  // Kicks an immediate remount on the genuine reconnecting→connected
+  // recovery edge so the sshfs mount catches up with HTTP instead of
+  // lagging the 60 s fuse-t watchdog. Station-only; debounced.
+  const remountCoordinator = new RemountCoordinator({
+    primaryHost,
+    forceRemount: async () => {
+      const res = await window.reckAPI.mount.forceRemount();
+      mountState = res.state;
+      renderStatus();
+    },
+  });
+
   initConnectionsForHost(settings, {
     pollIntervalMs: POLL_INTERVAL_MS,
     pollTimeoutMs: 5000,
@@ -2273,6 +2629,11 @@ export async function boot(splash?: StartupSplashController) {
         // because there's no station catalog to mirror.
         void pushStationProjectsToLocal();
       }
+      // Record codex availability for EVERY host (before the primary-host
+      // early-return) so the New-pane dialog can show the Codex button on
+      // whichever host the user targets. `codex_available` is absent on
+      // older daemons → coerced to false (button stays hidden).
+      setHostCodexAvailable(host, health.codex_available === true);
       if (host !== primaryHost) return;
       if (lastUptimeSec >= 0 && health.uptime_sec < lastUptimeSec) {
         window.location.reload();
@@ -2281,51 +2642,40 @@ export async function boot(splash?: StartupSplashController) {
       const firstSuccess = lastUptimeSec < 0;
       lastUptimeSec = health.uptime_sec;
       if (firstSuccess) splash?.step("projects");
-      const withOverrides = await refreshProjects();
-      if (!currentProjectId && !missionControlActive && withOverrides.length > 0) {
-        if (firstSuccess) splash?.step("layout");
-        await selectProject(withOverrides[0].id);
-      }
-      if (firstSuccess) {
-        window.clearTimeout(splashSafetyTimer);
-        markBootReady();
-        // Issue #228 (option B respawn-hardening): the daemon now
-        // auto-restores orphan WasLive=true sessions at startup
-        // before the HTTP listener is up, so the satellite never
-        // sees orphan candidates. The /restore-candidates endpoint
-        // is retained server-side as a diagnostic surface but no
-        // longer drives a UI prompt.
-      }
+      // Fire-and-forget: must NOT be awaited here. Awaiting the heavy
+      // `/projects` fetch inside this gated handler is what made a
+      // half-open Tailscale recovery bounce CONN back to "reconnecting".
+      // The refresher is single-flight and never throws; rail repaint,
+      // auto-select, splash dismissal, and the station→local push all
+      // happen in its success continuation / inside refreshProjects.
+      void projectRefresher.run();
     },
     onPollFailure: (host, _reason, e) => {
-      // Phase 4: 401 → host-aware re-auth prompt, but only for the
-      // primary host (`mode`). The secondary connection in hybrid
-      // mode polls in the background and its state is intentionally
-      // not surfaced anywhere in the UI yet (Phase 11 wires Mission
-      // Control aggregation). If we forwarded a secondary 401 to
-      // requestTokenUpdate, a misconfigured local token would pop a
-      // blocking modal at boot demanding the user fix something
-      // they have no UI affordance to even see is broken — flagged
-      // by codex review on the Phase 4 split. The 1008-on-pane
-      // path stays host-aware (panes have visible host badges in
-      // Phase 10); only this background-poll branch defers.
-      if (host !== primaryHost) return;
-      if (e instanceof HttpError && e.status === 401) {
-        // Phase 5 (an earlier release): for local, the user has no token to
-        // paste — main owns the per-spawn random bearer. Refresh
-        // from main and let the next poll retry; if the daemon is
-        // really gone (token cleared on exit) the request will
-        // fail again and the next failure-log entry tells the
-        // operator what's up. For station, prompt as before.
-        if (host === "local") {
-          console.info(
-            "[poll] local 401: refreshing per-spawn token from main process",
-          );
-          void refreshLocalDaemonToken().catch((err) => {
-            console.warn("[poll] local token refresh failed after 401", err);
-          });
-          return;
-        }
+      // Route the failure through a pure, tested policy. The subtle rule:
+      // a LOCAL 401 must self-heal even when it's the background host.
+      // The local daemon's per-spawn bearer rotates on every (re)start,
+      // so when the station is primary the local connection is polling in
+      // the background with a stale token — if we gated the refresh
+      // behind `host === primaryHost` (as an earlier draft did), local
+      // would 401-loop and grey out until the whole app was restarted.
+      // A STATION 401 stays host-aware: only prompt when it's the host
+      // we're actively driving. Forwarding a background station 401 to
+      // requestTokenUpdate would pop a blocking modal for a token the
+      // user has no UI affordance to fix (flagged in the Phase 4 review);
+      // the 1008-on-pane path keeps that host-aware separately.
+      const action = decidePollFailureAction(host, primaryHost, e);
+      if (action === "refresh-local-token") {
+        // The user has no token to paste — main owns the per-spawn
+        // bearer. Refresh from main and let the next poll retry; if the
+        // daemon is really gone the request fails again and the
+        // failure-log entry tells the operator what's up.
+        console.info(
+          "[poll] local 401: refreshing per-spawn token from main process",
+        );
+        void refreshLocalDaemonToken().catch((err) => {
+          console.warn("[poll] local token refresh failed after 401", err);
+        });
+      } else if (action === "prompt-station-token") {
         const reason =
           "Station rejected the current token. Paste a fresh one to reconnect.";
         void requestTokenUpdate(host, reason);
@@ -2342,6 +2692,8 @@ export async function boot(splash?: StartupSplashController) {
       // host picker regardless of which host is primary.
       if (host === "station") {
         setHostReady("station", info.state === "connected");
+        // Auto-remount on the recovery edge.
+        remountCoordinator.onConn(info.state);
       } else if (host === "local") {
         if (info.state !== "connected") {
           setHostReady("local", false);
@@ -2357,6 +2709,16 @@ export async function boot(splash?: StartupSplashController) {
       // local's info is consumed by the registry but not surfaced.
       if (host !== primaryHost) return;
       connInfo = info;
+      // When the station goes unreachable (not a token problem), probe
+      // Tailscale so the inline reason can say whether to fix this Mac or
+      // the station; clear the verdict once we recover.
+      if (primaryHost === "station") {
+        if (info.state === "connected") {
+          tailscaleVerdict = null;
+        } else if (info.lastError !== "Unauthorized") {
+          void refreshTailscaleVerdict();
+        }
+      }
       renderStatus();
     },
   });
@@ -2384,6 +2746,9 @@ export async function boot(splash?: StartupSplashController) {
       primaryConnection.refresh(),
       window.reckAPI.mount.forceRemount(),
     ]);
+    // Share the cooldown so the auto-remount coordinator doesn't fire a
+    // second kickstart right after this manual one.
+    remountCoordinator.noteRemount();
     const mountResult = results[1];
     if (mountResult.status === "fulfilled") {
       mountState = mountResult.value.state;

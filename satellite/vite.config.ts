@@ -27,6 +27,7 @@ export default defineConfig({
       input: {
         index: path.resolve(__dirname, "renderer/index.html"),
         popout: path.resolve(__dirname, "renderer/popout.html"),
+        fileViewer: path.resolve(__dirname, "renderer/file-viewer.html"),
       },
     },
   },

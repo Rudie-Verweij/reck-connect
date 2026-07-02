@@ -252,6 +252,19 @@ export class TerminalPane {
   }
 
   /**
+   * Public read-only access to the underlying xterm `Terminal`. Used by
+   * features that need to interact with xterm directly — installing the
+   * path linkifier on scrollback, registering decorations/markers for
+   * live highlighting, querying selection state, etc.
+   *
+   * Callers MUST NOT dispose the returned terminal — its lifecycle is
+   * owned by this `TerminalPane`.
+   */
+  public getXterm(): Terminal {
+    return this.term;
+  }
+
+  /**
    * Return a shallow snapshot of this pane's xterm viewport/buffer state.
    * Matches the capture checklist from an earlier release so a developer with devtools
    * open can eyeball the numbers in one line without navigating
@@ -327,11 +340,60 @@ export class TerminalPane {
       try {
         const webgl = new WebglAddon();
         this.term.loadAddon(webgl);
+        // WebGL context loss leaves the canvas permanently blank/white —
+        // xterm's WebGL renderer does not recover on its own. Chromium
+        // drops the GPU context on display sleep/wake, GPU switching
+        // (dual-GPU Macs), driver resets, and memory pressure. Dispose
+        // the addon so xterm falls back to its DOM renderer, then force a
+        // full repaint so the fallback paints immediately instead of
+        // waiting for the next PTY write. Without this the pane stays
+        // white until the user nudges it (resize handle / Enter). See #30.
+        webgl.onContextLoss(() => {
+          if (this.disposed) return;
+          try {
+            webgl.dispose();
+          } catch {
+            /* addon already torn down */
+          }
+          this.forceRepaint();
+        });
+        // WebGL-renderer workaround: with some TUIs' redraw + scroll-region
+        // pattern, the GPU renderer leaves cell colours painted at their
+        // pre-scroll rows while the text scrolls — colours visibly detach
+        // from their characters. Forcing a full viewport re-render on each
+        // scroll repaints every cell at its current row and keeps colour
+        // aligned with text. refresh() only marks rows dirty (the actual
+        // paint is rAF-coalesced), so this is cheap. The DOM/canvas
+        // fallback doesn't ghost, so the handler is scoped to the WebGL
+        // path.
+        this.term.onScroll(() => {
+          if (this.disposed) return;
+          this.term.refresh(0, this.term.rows - 1);
+        });
       } catch {
         /* fallback to canvas */
       }
     }
-    installOscFilter(this.term.parser);
+    installOscFilter(this.term.parser, {
+      // Route OSC 52 copy-on-select through Electron's main-process clipboard
+      // (via the preload bridge) when available — it isn't focus-gated like
+      // the renderer's navigator.clipboard. Falls back to navigator.clipboard
+      // outside Electron (web/PWA client).
+      writeClipboard: (text) => {
+        const bridge = (
+          globalThis as {
+            reckAPI?: { clipboard?: { write?: (t: string) => unknown } };
+          }
+        ).reckAPI?.clipboard?.write;
+        if (bridge) {
+          void bridge(text);
+          return;
+        }
+        if (typeof navigator !== "undefined" && navigator.clipboard) {
+          void navigator.clipboard.writeText(text).catch(() => {});
+        }
+      },
+    });
 
     // Shift+Enter → ESC + CR (0x1B 0x0D). Same byte sequence Claude
     // Code's `/terminal-setup` programs into VS Code/iTerm2 (verified
@@ -535,6 +597,7 @@ export class TerminalPane {
       this.lastSentCols = -1;
       this.lastSentRows = -1;
       this.sendResizeIfChanged();
+      this.forceRepaint();
       this.scrollDebug("refit:exit");
     } catch (err) {
       this.scrollDebug("refit:error", { err: String(err) });
@@ -612,6 +675,22 @@ export class TerminalPane {
   }
 
 
+  // Force a full-viewport repaint. fit()/resize() only repaint when the
+  // grid dimensions actually change, so a layout settle, window refocus,
+  // or tab show at an unchanged size leaves the WebGL canvas showing a
+  // stale frame — the "bottom not rendering / misaligned" symptom that a
+  // manual resize or Enter keystroke clears. refresh() marks every row
+  // dirty (the paint is rAF-coalesced, so this is cheap) and works on the
+  // DOM/canvas fallback too. Guarded against a disposed terminal. See #30.
+  private forceRepaint() {
+    if (this.disposed) return;
+    try {
+      this.term.refresh(0, this.term.rows - 1);
+    } catch {
+      /* terminal torn down between schedule and call */
+    }
+  }
+
   private onResize() {
     this.scrollDebug("onResize:enter", {
       laidOut: this.isLaidOut(),
@@ -632,6 +711,7 @@ export class TerminalPane {
         return;
       }
       this.sendResizeIfChanged();
+      this.forceRepaint();
       this.scrollDebug("onResize:exit");
     } catch (err) {
       this.scrollDebug("onResize:error", { err: String(err) });

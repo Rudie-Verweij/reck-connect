@@ -1,6 +1,13 @@
 appId: com.reckonlabs.reckconnect.satellite
 productName: Reck Connect Satellite
 copyright: "© 2026 Reckon Labs"
+# Bake RECK_STATION_ROOT into the .app's Info.plist so GUI launches
+# (Finder, Spotlight, Dock, `open -a`) inherit it WITHOUT depending on
+# `launchctl setenv` (which evaporates on logout/reboot). electron-builder's
+# `${env.X}` substitution does NOT fire on `extendInfo`, so a YAML-only
+# approach would land the literal string in Info.plist; scripts/after-pack.js
+# reads the real env var at pack time and writes it via PlistBuddy.
+afterPack: ./scripts/after-pack.js
 directories:
   output: release
   buildResources: build

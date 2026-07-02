@@ -4,6 +4,7 @@ import {
   _resetApiForHostForTests,
   apiForHost,
   clearApiForHost,
+  hasTokenForHost,
   initApiForHost,
   refreshLocalDaemonToken,
   resetForHost,
@@ -282,6 +283,35 @@ describe("refreshLocalDaemonToken (Phase 5)", () => {
     expect(apiForHost("local").config.token).toBe("tok-a");
     await refreshLocalDaemonToken(async () => "tok-b");
     expect(apiForHost("local").config.token).toBe("tok-b");
+  });
+});
+
+// The poll-gate in `connection-for-host.ts` uses this to hold off
+// probing a host until it's authenticated, so a token-less probe never
+// draws a spurious 401 (which would grey the host out in the UI).
+describe("hasTokenForHost", () => {
+  it("is false for a freshly-built local client (no token yet)", () => {
+    initApiForHost(HYBRID);
+    expect(hasTokenForHost("local")).toBe(false);
+  });
+
+  it("is true once a token has been applied to the host", () => {
+    initApiForHost(HYBRID);
+    setApiTokenForHost("local", "spawn-token-1");
+    expect(hasTokenForHost("local")).toBe(true);
+  });
+
+  it("reflects the station token that came from settings", () => {
+    initApiForHost(HYBRID); // station seeded with "stk-1"
+    expect(hasTokenForHost("station")).toBe(true);
+  });
+
+  it("flips back to false when the token is cleared", () => {
+    initApiForHost(HYBRID);
+    setApiTokenForHost("local", "tok");
+    expect(hasTokenForHost("local")).toBe(true);
+    setApiTokenForHost("local", undefined);
+    expect(hasTokenForHost("local")).toBe(false);
   });
 });
 

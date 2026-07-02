@@ -40,6 +40,18 @@ vi.mock("@client-core/terminal/terminal-pane", () => {
     refit() {}
     focus() {}
     setTheme() {}
+    /**
+     * The real TerminalPane exposes its underlying xterm Terminal so the
+     * file-viewer path linkifier (`installPathLinkProvider`) can hook into
+     * it. The mock supplies the minimum shape the linkifier touches:
+     * registerLinkProvider + a buffer that returns no lines.
+     */
+    getXterm() {
+      return {
+        registerLinkProvider: () => ({ dispose: () => {} }),
+        buffer: { active: { getLine: () => undefined } },
+      };
+    }
   }
   return { TerminalPane: MockTerminalPane };
 });

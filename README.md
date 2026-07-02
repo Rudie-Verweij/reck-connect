@@ -117,6 +117,7 @@ Issues and pull requests are welcome. Before filing, check [`INSTALL.md`](INSTAL
 - [`docs/architecture.md`](docs/architecture.md) · components, process model, data flow
 - [`docs/getting-started.md`](docs/getting-started.md) · install station and satellite, add a project, open a pane
 - [`docs/concepts/`](docs/concepts/) · projects, panes, modes, behaviors, stoplight
+- [`docs/concepts/linux-station.md`](docs/concepts/linux-station.md) · run the station on Linux / Raspberry Pi
 - [`docs/operations.md`](docs/operations.md) · running the station day to day
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) · when things go sideways
 - [`docs/internals.md`](docs/internals.md) · daemon internals, image-paste design

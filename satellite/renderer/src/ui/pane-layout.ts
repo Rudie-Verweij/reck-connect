@@ -25,6 +25,14 @@ export interface PaneLayoutCallbacks {
    */
   buildWsSubprotocols: (host: HostRef) => string[];
   onActiveLeafChange: (leafId: string | null) => void;
+  /**
+   * Fires once per newly-constructed pane terminal, right after its
+   * `TerminalPane` is built. Used to install the xterm path linkifier so
+   * file paths in scrollback become Cmd+clickable. Optional — consumers
+   * that don't need per-pane setup omit it; existing callers are
+   * unaffected.
+   */
+  onPaneCreated?: (paneId: string, pane: TerminalPane) => void;
   onStoplightChange: (paneId: string, s: Stoplight) => void;
   onExit: (paneId: string) => void;
   onTreeChange: (tree: TreeNode | null) => void;
@@ -263,6 +271,20 @@ export class PaneLayout {
     const l = findLeaf(this.tree, leafId);
     if (!l) return null;
     return l.tabs.find((t) => t.id === l.activeTabId) ?? l.tabs[0] ?? null;
+  }
+
+  // Resolve the active leaf's focused terminal record (term + wrapper +
+  // tab), or null when the active tab isn't a terminal. The TTS subsystem
+  // uses this to wrap the live xterm pane as a speak surface.
+  getActiveTerminalRecord(): { term: TerminalPane; wrapper: HTMLElement; tab: Tab } | null {
+    if (!this.activeLeafId) return null;
+    const view = this.views.get(this.activeLeafId);
+    if (!view) return null;
+    const tab = this.getActiveTabForLeaf(this.activeLeafId);
+    if (!tab) return null;
+    const record = view.terminals.get(tab.id);
+    if (!record || record.kind !== "terminal") return null;
+    return { term: record.term, wrapper: record.wrapper, tab: record.tab };
   }
 
   focusLeaf(leafId: string) {
@@ -629,6 +651,10 @@ export class PaneLayout {
       wrapper.appendChild(term.container);
       view.termsEl.appendChild(wrapper);
       term.mount();
+      // Install the xterm path linkifier on the freshly-mounted pane so
+      // file paths in scrollback become Cmd+clickable (hover-driven — no
+      // cost until the user hovers a line). Optional; a no-op when unset.
+      this.cb.onPaneCreated?.(t.paneId, term);
       view.terminals.set(t.id, {
         kind: "terminal",
         tab: t,
@@ -782,6 +808,19 @@ export class PaneLayout {
       closeEl.className = "tab-close";
       closeEl.title = "Close tab";
       closeEl.textContent = "\u00d7";
+      // Close on pointerdown, NOT click: the first click also flips the
+      // pane's stoplight dot (a mouse-tracking TUI like codex/Claude going
+      // green\u2192grey), and rendering that change rebuilds the whole tab \u2014 so
+      // the mouseup/click lands on a freshly-created \u2715 and no `click` ever
+      // fires (the first click gets "eaten"; only the second works). Firing
+      // on pointerdown lands the close before that re-render churn \u2014 the same
+      // reason the rename gesture is re-render-resilient (see titleEl below).
+      closeEl.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.cb.isRestoring?.()) return;
+        this.cb.onCloseTab(leaf.id, t.id);
+      });
       tabEl.appendChild(dotEl);
       if (hostBadgeEl) tabEl.appendChild(hostBadgeEl);
       tabEl.appendChild(titleEl);
@@ -912,8 +951,11 @@ export class PaneLayout {
           return;
         }
         if (target === closeEl) {
+          // Close already fired on pointerdown (above), which survives the
+          // stoplight-driven tab re-render that a trailing `click` doesn't.
+          // Swallow this click so it neither double-closes nor falls through
+          // to onSwitchTab.
           e.stopPropagation();
-          this.cb.onCloseTab(leaf.id, t.id);
           return;
         }
         if (target.isContentEditable) return;

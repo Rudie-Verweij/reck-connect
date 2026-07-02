@@ -119,11 +119,19 @@ func main() {
 			err      error
 		)
 		if *tokenFile != "" {
+			// Explicit flag is the operator's most explicit intent —
+			// it beats both the env var and the default chain.
 			tok, src, err = config.ResolveToken(*tokenFile)
 			if err != nil {
 				logger.Error("token load failed", "err", err, "path", *tokenFile)
 				os.Exit(1)
 			}
+		} else if config.PreferEnvToken(string(mode), os.Getenv("DAEMON_TOKEN")) {
+			// Local mode under a supervising Satellite: the per-spawn
+			// env token is authoritative (a stale ~/.config/reck/token
+			// winning the chain 401'd every renderer request).
+			// DAEMON_TOKEN is already in the env; nothing to publish.
+			logger.Info("daemon token loaded", "source", "env:DAEMON_TOKEN (local supervisor)")
 		} else {
 			cands := config.DefaultTokenCandidates()
 			tok, src, err = config.ResolveTokenChain(cands)
@@ -344,10 +352,11 @@ func main() {
 	})
 	wsH := &ws.Handler{Manager: mgr, Logger: logger}
 	srv := &httpsrv.Server{
-		Manager:   mgr,
-		WS:        wsH,
-		StartedAt: time.Now(),
-		Version:   Version,
+		Manager:        mgr,
+		WS:             wsH,
+		StartedAt:      time.Now(),
+		Version:        Version,
+		CodexAvailable: len(codexCmd) > 0,
 	}
 
 	// Mission Control supervisor — owns a hidden meta-project + an
@@ -635,16 +644,28 @@ func parseDaemonMode(s string) (agent.DaemonMode, error) {
 	}
 }
 
-// daemonURLFromAddr converts a net.Listener Addr string (e.g. "[::]:7315"
-// or "127.0.0.1:7315") into an http:// URL the hook shims can reach on
-// loopback. We always use 127.0.0.1 because the daemon binds to loopback
-// in local mode and the shims run on the same host.
+// daemonURLFromAddr converts a net.Listener Addr string (e.g. "[::]:7315",
+// "0.0.0.0:7315", "127.0.0.1:7315", or a Tailscale/VPN IP like
+// "100.64.0.1:7315") into an http:// URL the hook shims can reach.
+//
+// Hosts are mapped per-case:
+//   - empty / "0.0.0.0" / "::" / "[::]" (wildcard listeners) → "127.0.0.1"
+//     (loopback always works when the daemon binds to all interfaces).
+//   - any other explicit host (e.g. a Tailscale IP a station is bound to)
+//     → preserved as-is, because loopback would NOT be listening in that
+//     case and the hook shim's curl would get connection-refused. A Linux
+//     station bound to its Tailscale interface would otherwise silently
+//     drop every agent-event POST, leaving the stoplight stuck on gray.
 func daemonURLFromAddr(a string) string {
-	_, port, err := net.SplitHostPort(a)
+	host, port, err := net.SplitHostPort(a)
 	if err != nil {
 		return "http://127.0.0.1" + a
 	}
-	return "http://127.0.0.1:" + port
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // resolveProcComm returns the `comm` (command name) for the given pid via
@@ -671,4 +692,3 @@ func resolveProcComm(pid int) string {
 var _ = mcCtrlSentinel
 
 func mcCtrlSentinel() *supervisor.Controller { return nil }
-

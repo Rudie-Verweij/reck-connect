@@ -26,6 +26,7 @@ Reck Connect is a station/satellite dev environment: a powerful Mac runs `reck-s
 | [concepts/projects.md](./concepts/projects.md) | projects.toml, project IDs, managed root |
 | [concepts/sessions.md](./concepts/sessions.md) | Session persistence, resume, restore candidates |
 | [concepts/preamble.md](./concepts/preamble.md) | System-prompt injection into Claude panes |
+| [local-daemon-spawn.md](./local-daemon-spawn.md) | Local-mode spawn resilience: typed failure codes, cold-start pre-warm, PATH + token precedence |
 
 ### Interfaces & state
 

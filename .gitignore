@@ -9,6 +9,13 @@ worker/public/*
 .claude/
 .superpowers/
 
+# VSCode: ship the checked-in debug config (launch.json + tasks.json, see
+# docs/vscode-debugging.md) but ignore machine-specific personal settings
+# so contributors don't accidentally commit local tweaks.
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+
 # Archived / parked code (kept on disk, not tracked, not shipped)
 legacy-v1/
 share-reck-connect/
@@ -23,3 +30,13 @@ mini-satellite/
 
 # Microsoft Office lock files (created while a doc is open)
 **/~$*
+
+# Go build artefacts. The standard build (`make build`) only warms the
+# build-cache and installs to ~/.local/bin; these appear only if a dev
+# runs `go build ./cmd/...` from the repo root. (Satellite build outputs —
+# release/, coverage/, etc. — are already ignored in satellite/.gitignore.)
+/reck-stationd
+/reck-pane-launcher
+*.test
+*.out
+*.prof

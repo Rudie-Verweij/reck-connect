@@ -809,10 +809,14 @@ html, body, #app {
 
 .pane-terminal.hidden { display: none; }
 
-/* Hide xterm's scrollbar — it renders as a white strip on dark mode */
+/* Hide xterm's native scrollbar — it renders as a white strip on dark mode.
+   Hide only the CHROME (scrollbar-width / ::-webkit-scrollbar); do NOT force
+   `overflow: hidden`, which suppresses xterm's wheel → scroll → onScroll
+   pipeline and so kept the custom overlay scrollbar from ever appearing and
+   the search highlight from repositioning on wheel. Keeping the viewport
+   scrollable lets those fire; the custom .reck-scrollbar is the visible one. */
 .pane-terminal .xterm-viewport {
   scrollbar-width: none;
-  overflow: hidden !important;
 }
 .pane-terminal .xterm-viewport::-webkit-scrollbar {
   width: 0 !important;
@@ -1386,11 +1390,19 @@ html, body, #app {
 /* === Forms (V1) === */
 
 .settings-shell {
+  /* flex-start + height: 100% + overflow-y: auto. The parent #app uses
+     `overflow: hidden`, so `.settings-shell` MUST have a fixed height
+     (not min-height) to become its own scroll container; otherwise tall
+     content gets clipped by #app instead of scrolling. Centring is
+     sacrificed when content overflows; the card still hugs the
+     horizontal center via justify-content. */
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   height: 100%;
   padding: 2.5rem;
+  box-sizing: border-box;
+  overflow-y: auto;
   background: var(--app-bg);
 }
 
@@ -1469,6 +1481,27 @@ html, body, #app {
   font-size: 0.95rem;
   outline: none;
   transition: border-color 0.2s var(--ease-smooth);
+}
+
+/* TTS highlight colour pickers — a label + a small colour swatch per row,
+   instead of the full-width text-input treatment the generic rule applies. */
+.tts-color-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.6rem;
+}
+.tts-color-row label {
+  display: inline;
+  margin: 0;
+}
+.settings-card .tts-color-row input[type="color"] {
+  width: 52px;
+  height: 30px;
+  flex: 0 0 auto;
+  padding: 2px;
+  cursor: pointer;
 }
 
 .settings-card input::placeholder,
@@ -2143,4 +2176,1258 @@ html, body, #app {
     animation: none !important;
   }
   .boot-splash-progress-fill { transition: width 0.2s linear; }
+}
+
+
+/* The shell sits inside the popup's BrowserWindow body and is the only
+   top-level element. Header (38px high, drag region) hosts the title
+   and the reserved spinner slot in its top-right corner. Body scrolls
+   independently. */
+.file-viewer-shell,
+.file-viewer-root {
+  display: grid;
+  grid-template-rows: 38px 1fr;
+  height: 100vh;
+  /* clamp the popup root so only `.file-viewer-body`
+     paints a scrollbar. Without this, on long files the grid's content
+     row was leaking content height past 100vh and the popup HTML body
+     painted its own outer scrollbar in addition to the inner body's. */
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+/* Bug D — explicit `#viewer-root` clamp for the popup HTML's root
+   element (its class is `file-viewer-shell`, so the rule above already
+   handles it, but this is documentation-grade for future readers
+   landing in the test's regex search). */
+#viewer-root {
+  overflow: hidden;
+}
+
+.file-viewer-header {
+  -webkit-app-region: drag;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 12px 0 78px; /* room for macOS traffic lights */
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--app-text-dim);
+  z-index: 10;
+}
+
+.file-viewer-header .file-viewer-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* the parent/basename text is the dominant title;
+   the host chip sits beside it. */
+.file-viewer-title .file-viewer-title-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* STATION / SATELLITE host chip. Same shape as the
+   mode toggle but lighter weight, so it reads as a label rather than
+   a button. Colours are tinted (transparent over a neutral base) so
+   the chip works on both cream and dark themes without theme-specific
+   overrides. */
+.file-viewer-title .file-viewer-host-badge {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  line-height: 1.4;
+  user-select: none;
+}
+.file-viewer-title .file-viewer-host-badge[data-host="station"] {
+  color: #d97706; /* warm amber */
+  background: rgba(217, 119, 6, 0.08);
+}
+.file-viewer-title .file-viewer-host-badge[data-host="satellite"] {
+  color: #2563eb; /* mid blue */
+  background: rgba(37, 99, 235, 0.08);
+}
+
+/* Phase 7 of linkifier-followups — markdown view/edit mode toggle. Sits
+   left of the spinner slot in the header for the markdown viewer; the
+   code viewer leaves the slot empty. */
+.file-viewer-header .file-viewer-mode-toggle-slot {
+  -webkit-app-region: no-drag;
+  position: relative;
+  z-index: 11;
+  display: inline-flex;
+  align-items: center;
+}
+.file-viewer-header .file-viewer-mode-toggle-slot:empty {
+  display: none;
+}
+.file-viewer-mode-toggle {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--app-border);
+  color: var(--app-text);
+  padding: 5px 12px;
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  line-height: 1.2;
+  transition:
+    background 0.15s var(--ease-smooth),
+    color 0.15s var(--ease-smooth),
+    border-color 0.15s var(--ease-smooth);
+}
+/* rendered-mode toggle is the entry point users
+   were missing. Uses the Claude orange accent so the button reads as
+   an action native to Reck's visual language (nav icons, project
+   chips, etc. use the same tint). View-rendered mode (after the
+   user has discovered editing) keeps the quieter neutral style. */
+.file-viewer-mode-toggle[data-mode="rendered"] {
+  background: var(--claude-orange);
+  border-color: var(--claude-orange);
+  color: var(--claude-cream);
+}
+.file-viewer-mode-toggle[data-mode="rendered"]:hover {
+  background: var(--claude-orange-glow);
+  border-color: var(--claude-orange-glow);
+}
+.file-viewer-mode-toggle[data-mode="source"]:hover {
+  background: var(--app-hover);
+  color: var(--claude-orange);
+  border-color: var(--claude-orange);
+}
+.file-viewer-mode-toggle:focus-visible {
+  outline: 2px solid var(--claude-orange);
+  outline-offset: 2px;
+}
+
+/* Reserved slot in the top-right corner of the header for the loading
+   spinner (filled in P4). 24x24px so the layout doesn't reflow when the
+   spinner appears. Stays inside the header — the Speak control bar is
+   anchored bottom-right of the body, so they can never collide.
+
+   See docs/LEARNINGS.md for the spinner / Speak-bar partition rationale. */
+.file-viewer-header .file-viewer-spinner-slot {
+  -webkit-app-region: no-drag;
+  position: relative;
+  width: 24px;
+  height: 24px;
+  z-index: 11;
+}
+
+.file-viewer-body {
+  position: relative;
+  overflow: auto;
+  padding: 24px 32px;
+  background: var(--app-bg);
+  font-family: var(--font-sans, var(--font-mono));
+  line-height: 1.6;
+  z-index: 0;
+}
+
+/* Markdown content typography — close enough to the surrounding app
+   palette without trying to compete with a dedicated reader theme. */
+.file-viewer-body h1,
+.file-viewer-body h2,
+.file-viewer-body h3,
+.file-viewer-body h4,
+.file-viewer-body h5,
+.file-viewer-body h6 {
+  font-family: "Playfair Display", "Lora", serif;
+  font-weight: 700;
+  margin: 1.6em 0 0.6em;
+  line-height: 1.25;
+  color: var(--app-text);
+}
+.file-viewer-body h1 { font-size: 1.9em; margin-top: 0; }
+.file-viewer-body h2 { font-size: 1.5em; }
+.file-viewer-body h3 { font-size: 1.25em; }
+.file-viewer-body p { margin: 0.8em 0; }
+.file-viewer-body ul,
+.file-viewer-body ol { margin: 0.6em 0 0.6em 1.4em; padding-left: 1em; }
+.file-viewer-body li { margin: 0.2em 0; }
+.file-viewer-body blockquote {
+  margin: 0.8em 0;
+  padding: 0.2em 1em;
+  border-left: 3px solid var(--app-border);
+  color: var(--app-text-dim);
+}
+.file-viewer-body code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.9em;
+  background: var(--app-bg-raised);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.file-viewer-body pre {
+  background: var(--app-bg-raised);
+  padding: 12px 16px;
+  border-radius: 4px;
+  overflow-x: auto;
+  border: 1px solid var(--app-border);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.85em;
+}
+.file-viewer-body pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+.file-viewer-body hr {
+  border: none;
+  border-top: 1px solid var(--app-border);
+  margin: 1.4em 0;
+}
+.file-viewer-body table {
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+.file-viewer-body th,
+.file-viewer-body td {
+  border: 1px solid var(--app-border);
+  padding: 6px 10px;
+}
+.file-viewer-body th { background: var(--app-bg-raised); font-weight: 600; }
+
+/* Path links inside the viewer. Solid underline for P1; P2 will add the
+   dashed style for intended (not-yet-existing) paths via a modifier class. */
+.file-viewer-body a {
+  color: var(--claude-orange, #d4683a);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.file-viewer-body a.reck-internal-link {
+  cursor: pointer;
+}
+
+/* in-popup linkifier underline for path tokens.
+   Applied by CodeMirrorPathLinkifier (in the source view) and by the
+   free-text walker in MarkdownRenderer (rendered view via the
+   reck-internal-link anchor — its `.reck-path-link` selector here is
+   redundant but kept for parity / future use). Mirrors xterm's link
+   underline style (cyan-ish dashed) so the popup body and a terminal
+   pane feel consistent. */
+.reck-path-link,
+.file-viewer-body a.reck-internal-link {
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: rgba(96, 165, 250, 0.7);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.reck-path-link:hover,
+.file-viewer-body a.reck-internal-link:hover {
+  text-decoration-color: rgba(96, 165, 250, 1);
+}
+
+.file-viewer-plain-code {
+  white-space: pre;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.file-viewer-error {
+  padding: 24px 32px;
+  font-family: var(--font-mono);
+  color: var(--app-text-dim);
+  font-size: 0.85em;
+}
+
+/* Intended-path create banner: rendered when files.read returns
+   not-found. Offers a single "Create empty file" button. */
+.file-viewer-create-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 32px;
+  font-family: var(--font-mono);
+  color: var(--app-text);
+  font-size: 0.85em;
+}
+.file-viewer-create-message {
+  color: var(--app-text-dim);
+  word-break: break-all;
+}
+.file-viewer-create-actions {
+  display: flex;
+  gap: 8px;
+}
+.file-viewer-create-actions .file-viewer-create-action {
+  border: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text);
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: inherit;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth);
+}
+.file-viewer-create-actions .file-viewer-create-action:hover {
+  color: var(--claude-orange);
+  border-color: var(--claude-orange);
+  background: rgba(212, 104, 58, 0.08);
+}
+
+/* Phase 8 of linkifier-followups — banner for station files opened via
+   SSH (outside the sshfs projects mount). Sits at the top of the body
+   above the rendered/edited content; read-only indicator only. */
+.file-viewer-station-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--app-bg-raised);
+  border: 1px solid rgba(96, 165, 250, 0.4);
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-all;
+  box-shadow: 0 4px 8px -6px rgba(0, 0, 0, 0.35);
+}
+
+/* read-only banner above the editor body when the
+   file fails POSIX W_OK (no write permission for the current user).
+   Gray palette to distinguish from a conflict banner (orange) and
+   from a "this is editable" lock state (green). */
+.file-viewer-readonly-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 0 12px;
+  padding: 9px 14px;
+  border-radius: 6px;
+  background: var(--app-bg-raised);
+  border: 1px solid rgba(138, 135, 125, 0.5);
+  color: var(--app-text-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  box-shadow: 0 4px 8px -6px rgba(0, 0, 0, 0.35);
+}
+
+/* full-width lock banner (Variation D). Sits at
+   the top of the editor body. Orange when locked (default — prevents
+   accidental edits), green when unlocked (user opted in). Button on
+   the right toggles the state. */
+.file-viewer-lock-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 0 12px;
+  /* banner top padding tightened from 9px → 6px so
+     the popup's first row of meaningful content sits closer to the
+     header chrome. Horizontal padding unchanged. */
+  padding: 6px 14px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid;
+  box-shadow: 0 4px 8px -6px rgba(0, 0, 0, 0.35);
+  transition:
+    background 0.15s var(--ease-smooth),
+    color 0.15s var(--ease-smooth),
+    border-color 0.15s var(--ease-smooth);
+}
+.file-viewer-lock-banner[data-locked="true"] {
+  background: var(--app-bg-raised);
+  border-color: rgba(212, 104, 58, 0.6);
+  color: var(--claude-orange);
+}
+.file-viewer-lock-banner[data-locked="false"] {
+  background: var(--app-bg-raised);
+  border-color: rgba(46, 160, 67, 0.6);
+  color: #2ea043;
+}
+.file-viewer-lock-banner-label {
+  flex: 1;
+  min-width: 0;
+}
+.file-viewer-lock-banner-button {
+  appearance: none;
+  border: 0;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: var(--claude-cream);
+  background: var(--claude-orange);
+  transition: background 0.15s var(--ease-smooth);
+}
+.file-viewer-lock-banner-button:hover {
+  background: #c25c30;
+}
+.file-viewer-lock-banner[data-locked="false"] .file-viewer-lock-banner-button {
+  background: #2ea043;
+  color: #fff;
+}
+.file-viewer-lock-banner[data-locked="false"] .file-viewer-lock-banner-button:hover {
+  background: #26803a;
+}
+.file-viewer-lock-banner-button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* suffix-fallback picker. Shown inside the popup
+   body when the click target resolved to multiple candidate files. */
+.file-viewer-suffix-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px 32px;
+  font-family: var(--font-mono);
+  color: var(--app-text);
+  font-size: 0.85em;
+}
+.file-viewer-suffix-picker-heading {
+  font-size: 1.1em;
+  font-weight: 600;
+  color: var(--app-text);
+  word-break: break-all;
+}
+.file-viewer-suffix-picker-sub {
+  color: var(--app-text-dim);
+  font-size: 0.95em;
+}
+.file-viewer-suffix-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.file-viewer-suffix-picker-item {
+  appearance: none;
+  border: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  word-break: break-all;
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth);
+}
+.file-viewer-suffix-picker-item:hover {
+  color: var(--claude-orange);
+  border-color: var(--claude-orange);
+  background: rgba(212, 104, 58, 0.08);
+}
+.file-viewer-suffix-picker-cancel {
+  align-self: flex-start;
+  appearance: none;
+  border: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text-dim);
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 0.9em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  margin-top: 8px;
+}
+.file-viewer-suffix-picker-cancel:hover {
+  color: var(--claude-orange);
+  border-color: var(--claude-orange);
+}
+
+/* streaming suffix-search picker. Shows a spinner /
+   counter at the top and a list that grows as `file:suffix:match`
+   events arrive. The list shares item styling with the static picker. */
+.file-viewer-suffix-streaming {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 32px;
+  font-family: var(--font-mono);
+  color: var(--app-text);
+  font-size: 0.85em;
+}
+.file-viewer-suffix-streaming-heading {
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+  color: var(--app-text);
+}
+.file-viewer-suffix-streaming-heading::before {
+  content: "🔍";
+  margin-right: 8px;
+}
+.file-viewer-suffix-streaming-status {
+  color: var(--app-text-dim);
+  font-size: 0.85em;
+}
+.file-viewer-suffix-streaming-stop {
+  align-self: flex-start;
+  border: 1px solid var(--claude-orange);
+  background: transparent;
+  color: var(--claude-orange);
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.file-viewer-suffix-streaming-stop:hover {
+  background: rgba(212, 104, 58, 0.12);
+}
+.file-viewer-suffix-streaming-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.file-viewer-suffix-streaming-list .file-viewer-suffix-picker-item {
+  /* Inherit item styling from the static picker. */
+}
+
+/* ── Text-to-speech control bar (floating per-pane overlay) ───────── */
+
+.tts-control-bar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--tts-control-bg, rgba(30, 30, 32, 0.92));
+  border: 1px solid var(--tts-control-border, rgba(255, 255, 255, 0.16));
+  color: var(--tts-control-text, #f3f4f6);
+  font-size: 12px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.tts-control-bar[hidden] { display: none !important; }
+
+.tts-control-bar .tts-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 0;
+}
+
+.tts-control-bar .tts-btn:hover {
+  background: var(--tts-control-accent, #60a5fa);
+  color: white;
+}
+
+.tts-control-bar .tts-btn:focus-visible {
+  outline: 2px solid var(--tts-control-accent, #60a5fa);
+  outline-offset: 1px;
+}
+
+.tts-control-bar .tts-btn[hidden] { display: none; }
+
+.tts-control-bar .tts-rate-slider {
+  width: 90px;
+  margin: 0;
+  accent-color: var(--tts-control-accent, #60a5fa);
+}
+
+.tts-control-bar .tts-rate-label {
+  min-width: 32px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  opacity: 0.85;
+}
+
+.tts-control-bar .tts-voice-label {
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.7;
+  border-left: 1px solid var(--tts-control-border, rgba(255, 255, 255, 0.16));
+  padding-left: 8px;
+  margin-left: 2px;
+}
+
+.tts-control-bar .tts-voice-label:empty {
+  display: none;
+}
+
+/* Speak/TTS control bar inside the file viewer popup. Pinned TOP-right
+   of the popup, JUST BELOW the 38px header so the Edit-source toggle
+   and the bar can both live in the upper-right corner without overlap.
+   Terminal-pane bars keep their default top-right (covering top of pane
+   is fine there — no header above the pane to collide with). */
+.file-viewer-root > .tts-control-bar {
+  position: absolute;
+  top: 46px; /* 38px header height + 8px gutter */
+  right: 16px;
+  bottom: auto;
+  z-index: 20;
+}
+
+/* TTS word-highlight inside the CodeMirror surface
+   used by the file viewer's source/code mode. CodeMirrorSurfaceAdapter
+   paints `Decoration.mark({ class: "cm-tts-highlight" })` on the active
+   word as the engine speaks, but the class had no CSS so the highlight
+   was invisible. Mirrors the translucent-yellow used by the xterm
+   highlighter (rgba(255, 255, 0, 0.6) — the terminal-pane theme
+   default). Slight rounding to match the markdown overlay style. */
+.cm-tts-highlight {
+  /* Colour is the user-configured highlight, pushed as --cm-tts-highlight-bg
+     by CodeMirrorSurfaceAdapter.setTheme(); mixed with transparent so the
+     text reads through the tint (matching the other surfaces' opacity).
+     Falls back to the neutral yellow when no theme has been pushed yet. */
+  background: color-mix(
+    in srgb,
+    var(--cm-tts-highlight-bg, #ffeb3b) 55%,
+    transparent
+  );
+  border-radius: 2px;
+}
+
+/* The viewer root needs a positioning context so the absolute-positioned
+   speak bar stays anchored to the popup chrome (not the document or the
+   inner scrolling body — anchoring to the scrolling body would let the
+   bar ride up off-screen on long files). */
+.file-viewer-root {
+  position: relative;
+}
+
+.file-viewer-body {
+  position: relative;
+}
+
+/* CodeMirror surface inside the viewer body — fill the body so the
+   editor's own scrollbar handles long files. */
+.file-viewer-code-editor {
+  height: 100%;
+}
+.file-viewer-code-editor .cm-editor {
+  height: 100%;
+}
+.file-viewer-code-editor .cm-scroller {
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* P4: loading spinner pinned top-right of the header (24x24 slot
+   reserved at mount time; no reflow when shown/hidden). */
+.file-viewer-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin: 4px;
+  border-radius: 50%;
+  border: 2px solid var(--app-text-dim);
+  border-top-color: transparent;
+  animation: file-viewer-spinner-spin 0.9s linear infinite;
+}
+@keyframes file-viewer-spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* inline spinner used in the streaming-search picker status
+   row. Reuses the file-viewer-spinner-spin keyframes so the visual idiom
+   matches the header spinner; smaller (12px) and aligned with the
+   adjacent "Searching project tree…" text. */
+.file-viewer-suffix-streaming-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border-radius: 50%;
+  border: 2px solid var(--app-text-dim);
+  border-top-color: transparent;
+  animation: file-viewer-spinner-spin 0.9s linear infinite;
+}
+
+/* P4: conflict banner — non-modal strip pinned at the top of the body
+   when chokidar detects an external change with unsaved edits in the
+   viewer. Editor underneath stays interactive. */
+.file-viewer-conflict-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  box-shadow: 0 4px 8px -6px rgba(0, 0, 0, 0.35);
+}
+.file-viewer-conflict-message {
+  color: var(--app-text);
+}
+.file-viewer-conflict-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.file-viewer-conflict-action {
+  border: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text);
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 0.95em;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.file-viewer-conflict-action:hover {
+  color: var(--claude-orange);
+  border-color: var(--claude-orange);
+  background: rgba(212, 104, 58, 0.12);
+}
+
+/* P4: inline manual-merge overlay — placeholder side-by-side view.
+   P5 replaces this with @codemirror/merge. */
+.file-viewer-merge-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--app-bg);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 12px;
+}
+.file-viewer-merge-panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+.file-viewer-merge-label {
+  font-family: var(--font-mono);
+  font-size: 0.7em;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--app-text-dim);
+  margin-bottom: 4px;
+}
+.file-viewer-merge-pane {
+  width: 100%;
+  height: 100%;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.85em;
+  border: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  padding: 8px;
+  overflow: auto;
+  margin: 0;
+}
+textarea.file-viewer-merge-pane {
+  resize: none;
+  color: var(--app-text);
+}
+.file-viewer-merge-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.file-viewer-merge-action {
+  padding: 6px 16px;
+  background: transparent;
+  border: 1px solid var(--app-border);
+  color: var(--app-text);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.file-viewer-merge-action:hover {
+  color: var(--claude-orange);
+  border-color: var(--claude-orange);
+}
+
+/* Settings: file-viewer allowed-roots section. Built-in roots render
+   as read-only rows with a label + hint; custom roots get a Remove
+   button. The Add button uses the existing dialog.pickFolder IPC. */
+.settings-roots-builtin,
+.settings-roots-custom {
+  margin-top: 0.6rem;
+}
+.settings-roots-section-title {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0.8rem 0 0.4rem;
+}
+.settings-roots-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  margin-bottom: 4px;
+}
+.settings-roots-row-builtin {
+  opacity: 0.85;
+}
+.settings-roots-path {
+  flex: 1;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.85rem;
+  color: var(--app-text);
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+.settings-roots-hint {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+.settings-roots-empty {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  padding: 6px 8px;
+}
+.settings-roots-remove {
+  border: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text-dim);
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.settings-roots-remove:hover {
+  color: var(--sl-red, #b85a52);
+  border-color: var(--sl-red, #b85a52);
+  background: rgba(184, 90, 82, 0.08);
+}
+
+/* File-link allowlist (Preferences).
+   Input + Save on one row; chip grid below; × on chip hover triggers
+   the existing confirmDialog modal. Single unified chip style — no
+   built-in vs user-added distinction at the visual layer. */
+.linkifier-allowlist-input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+  margin-top: 0.6rem;
+}
+.linkifier-allowlist-input {
+  flex: 1;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  background: var(--app-bg-raised);
+  color: var(--app-text);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.linkifier-allowlist-input:focus {
+  outline: none;
+  border-color: var(--claude-orange);
+}
+.linkifier-input-error {
+  border-color: var(--sl-red, #b85a52) !important;
+  background: rgba(184, 90, 82, 0.08) !important;
+}
+.linkifier-allowlist-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 0.8rem;
+}
+.linkifier-allowlist-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.78rem;
+  color: var(--app-text);
+}
+.linkifier-chip-label {
+  pointer-events: none;
+}
+.linkifier-chip-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--app-bg);
+  background: var(--claude-orange);
+  color: #fff;
+  font-size: 12px;
+  line-height: 14px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.15s, transform 0.15s;
+}
+.linkifier-allowlist-chip:hover .linkifier-chip-remove,
+.linkifier-chip-remove:focus {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* high-contrast Reck-branded toast.
+   Default kind ("info"): Claude-orange fill, cream text, bottom-right
+   anchor, drop shadow. Error kind ("error"): Wes-rose fill.
+   Replaces the prior cream-on-cream low-visibility design. */
+.file-viewer-toast {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  background: var(--claude-orange);
+  border: 1px solid var(--claude-orange-glow);
+  color: var(--claude-cream-raised);
+  padding: 10px 18px;
+  border-radius: var(--radius);
+  font-family: var(--font-body);
+  font-size: 0.92em;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.3;
+  max-width: 360px;
+  z-index: 30;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.24s ease-out, transform 0.24s ease-out;
+  animation: file-viewer-toast-fadein 0.2s var(--ease-smooth);
+  box-shadow:
+    0 6px 18px rgba(212, 104, 58, 0.30),
+    0 2px 4px rgba(0, 0, 0, 0.10);
+  pointer-events: none;
+}
+.file-viewer-toast--error {
+  background: var(--wes-rose);
+  border-color: var(--wes-rose);
+  box-shadow:
+    0 6px 18px rgba(200, 114, 110, 0.30),
+    0 2px 4px rgba(0, 0, 0, 0.10);
+}
+.file-viewer-toast--fade-out {
+  opacity: 0;
+  transform: translateY(8px);
+}
+@keyframes file-viewer-toast-fadein {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Reusable in-view search bar (VSCode-style find widget) ─────────
+   Surface-agnostic overlay shared by the terminal, markdown and
+   CodeMirror views (see renderer/src/search/SearchBar.ts). Pinned
+   top-right, just below where the TTS control bar sits, so the two
+   stack instead of colliding. */
+.reck-search-bar {
+  position: absolute;
+  top: 48px; /* terminal pane: 8px TTS top + ~32px bar + 8px gutter */
+  right: 8px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(460px, calc(100% - 16px));
+  padding: 4px 6px;
+  border-radius: var(--radius, 6px);
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border-strong);
+  color: var(--app-text);
+  font-family: var(--font-body);
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.reck-search-bar[hidden] { display: none !important; }
+
+.reck-search-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 150px;
+}
+
+.reck-search-input {
+  flex: 1 1 auto;
+  width: 100%;
+  box-sizing: border-box;
+  /* room for the toggles tucked into the input's right edge */
+  padding: 4px 78px 4px 8px;
+  background: var(--app-input-bg);
+  border: 1px solid var(--app-border);
+  border-radius: 4px;
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+.reck-search-input::placeholder { color: var(--app-text-muted); }
+.reck-search-input:focus {
+  border-color: var(--claude-orange);
+  box-shadow: 0 0 0 1px var(--claude-orange);
+}
+
+.reck-search-toggles {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.reck-search-toggle {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--app-text-muted);
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  font-family: var(--font-mono);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.reck-search-toggle:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+.reck-search-toggle.active {
+  background: var(--app-active-bg);
+  border-color: var(--claude-orange);
+  color: var(--claude-orange);
+}
+.reck-search-toggle:focus-visible {
+  outline: 1px solid var(--claude-orange);
+  outline-offset: 1px;
+}
+/* whole-word glyph rendered as 'ab' underlined, à la VSCode */
+.reck-search-toggle-word { text-decoration: underline; }
+
+.reck-search-count {
+  flex: 0 0 auto;
+  min-width: 56px;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--app-text-dim);
+  font-variant-numeric: tabular-nums;
+  padding: 0 2px 0 4px;
+}
+.reck-search-count-empty,
+.reck-search-count-error { color: var(--wes-rose); }
+
+.reck-search-nav,
+.reck-search-close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--app-text-dim);
+  cursor: pointer;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  flex: 0 0 auto;
+}
+.reck-search-nav:hover:not(:disabled),
+.reck-search-close:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+.reck-search-nav:disabled { opacity: 0.35; cursor: default; }
+.reck-search-nav:focus-visible,
+.reck-search-close:focus-visible {
+  outline: 1px solid var(--claude-orange);
+  outline-offset: 1px;
+}
+
+/* Inside the file-viewer popup: drop below the viewer's TTS bar
+   (which sits at top:46px) and match its right gutter. */
+.file-viewer-root > .reck-search-bar {
+  top: 88px;
+  right: 16px;
+}
+
+/* CodeMirror search-match decorations (source viewer). All matches get a
+   faint wash; the active match gets a stronger fill + orange ring, à la
+   VSCode. */
+.cm-reck-search-match {
+  background: rgba(212, 104, 58, 0.22);
+  border-radius: 2px;
+}
+.cm-reck-search-match-active {
+  background: rgba(212, 104, 58, 0.5);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--claude-orange);
+}
+
+/* Markdown search matches via the CSS Custom Highlight API (no DOM
+   mutation). The active match wins because its rule comes last and uses
+   a stronger fill. */
+::highlight(reck-search) {
+  background-color: rgba(212, 104, 58, 0.28);
+  border-radius: 2px;
+}
+::highlight(reck-search-active) {
+  background-color: rgba(212, 104, 58, 0.6);
+  color: inherit;
+}
+
+/* ── Reusable auto-hiding overlay scrollbar ───────────────────────────
+   Mounted into a non-scrolling positioned host (the pane wrapper or the
+   viewer root). Fades in on scroll/wheel and out after an idle delay
+   (the .visible class is toggled from JS; the opacity transition does the
+   fade). Light, Reck-orange thumb. Match ticks are painted in the ticks
+   layer by the search controller. */
+.reck-scrollbar {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  bottom: 2px;
+  width: 10px;
+  z-index: 25;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.45s var(--ease-smooth, ease);
+}
+.reck-scrollbar.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.reck-scrollbar--disabled { display: none; }
+
+.reck-scrollbar-thumb {
+  position: absolute;
+  right: 0;
+  width: 8px;
+  min-height: 24px;
+  border-radius: 6px;
+  background: var(--claude-orange-glow, #e8875c);
+  opacity: 0.6;
+  cursor: grab;
+  transition: opacity 0.15s ease;
+}
+.reck-scrollbar-thumb:hover { opacity: 0.85; }
+.reck-scrollbar--dragging .reck-scrollbar-thumb {
+  opacity: 0.95;
+  cursor: grabbing;
+}
+
+.reck-scrollbar-ticks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.reck-scrollbar-tick {
+  position: absolute;
+  right: 1px;
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--claude-orange, #d4683a);
+  transform: translateY(-1px);
+}
+
+/* In the file-viewer popup the overlay scrollbar starts below the 38px
+   header so it doesn't ride up over the title/toggles. */
+.file-viewer-root > .reck-scrollbar {
+  top: 40px;
+}
+
+/* Hide the native scrollbars on the viewer surfaces — the overlay
+   scrollbar is the single, consistent affordance across all three views
+   (the terminal's native bar is already hidden elsewhere). */
+.file-viewer-body {
+  scrollbar-width: none;
+}
+.file-viewer-body::-webkit-scrollbar {
+  display: none;
+}
+.file-viewer-root .cm-scroller {
+  scrollbar-width: none;
+}
+.file-viewer-root .cm-scroller::-webkit-scrollbar {
+  display: none;
 }

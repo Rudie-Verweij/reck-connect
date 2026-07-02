@@ -6,11 +6,13 @@
   "author": "Reckon Labs",
   "main": "dist/main/main.js",
   "scripts": {
-    "dev": "concurrently -k -n vite,electron \"vite --port 5173\" \"wait-on http://localhost:5173 && tsc -p tsconfig.main.json && electron dist/main/main.js\"",
+    "dev": "concurrently -k -n vite,electron \"vite --port 5173\" \"wait-on http://localhost:5173 && tsc -p tsconfig.main.json && NODE_ENV=development electron dist/main/main.js\"",
+    "dev:bg": "concurrently -k -n vite,main \"vite --port 5173\" \"tsc -w -p tsconfig.main.json --preserveWatchOutput\"",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "build": "pnpm build:main && pnpm build:renderer",
     "dist": "pnpm build && electron-builder --mac --publish never",
+    "package": "pnpm build && electron-builder --mac --dir --publish never",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -19,12 +21,24 @@
     "make-icon": "node scripts/make-icon.mjs"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.42.1",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-webgl": "^0.18.0",
-    "@xterm/xterm": "^5.5.0"
+    "@xterm/xterm": "^5.5.0",
+    "codemirror": "^6.0.2",
+    "dompurify": "^3.4.2",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.1",
+    "markdown-it-anchor": "^9.2.0",
+    "markdown-it-task-lists": "^2.1.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.44.0",
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^20.12.0",
     "concurrently": "^8.2.2",
     "electron": "^30.0.0",
@@ -35,8 +49,5 @@
     "vite": "^5.2.0",
     "vitest": "^1.5.0",
     "wait-on": "^7.2.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": ["electron", "esbuild"]
   }
 }

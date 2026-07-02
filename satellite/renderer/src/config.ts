@@ -16,7 +16,7 @@ declare global {
           | {
               ok: false;
               reason: string;
-              code?: "EADDRINUSE" | "ENOENT" | "EUNKNOWN";
+              code?: "EADDRINUSE" | "ENOENT" | "ESPAWN" | "EUNKNOWN";
             }
         >;
         stop: (host: import("./host").HostRef) => Promise<{ ok: true } | { ok: false; reason: string }>;
@@ -41,6 +41,199 @@ declare global {
          * `paths:localMountPoint` in `main.ts`.
          */
         localMountPoint(): Promise<string>;
+        /**
+         * Resolve `rel` against `base` (a file path) using POSIX
+         * semantics. Implemented in preload via node:path so the renderer
+         * never touches Node modules directly. Used by the file viewer to
+         * resolve relative markdown links against the open file's dir.
+         */
+        resolveAgainst(base: string, rel: string): string;
+      };
+      /**
+       * File-viewer popup feature. All channels validate the path against
+       * the project-derived allowed-roots set on the main side (see
+       * satellite/main/file-allowlist.ts).
+       */
+      files: {
+        read(filePath: string): Promise<
+          | {
+              ok: true;
+              resolvedPath: string;
+              content: string;
+              baseline: { mtimeMs: number; sha256: string; size: number };
+              writable: boolean;
+            }
+          | { ok: false; code: string; error: string }
+        >;
+        stat(filePath: string): Promise<
+          | {
+              ok: true;
+              resolvedPath: string;
+              baseline: { mtimeMs: number; sha256: string; size: number };
+            }
+          | { ok: false; code: string; error: string }
+        >;
+        /**
+         * SSH-backed read for station files outside the sshfs mount. Used
+         * by the file viewer popup when its URL carries
+         * `?host=station-remote`.
+         */
+        readStation(stationPath: string): Promise<
+          | {
+              ok: true;
+              content: string;
+              baseline: { mtimeMs: number; sha256: string; size: number };
+              writable: boolean;
+            }
+          | { ok: false; code: string; error: string }
+        >;
+        /**
+         * SSH-backed write counterpart of readStation. Same security model:
+         * isStationPathSafe + the SSH user's POSIX permissions are the gate.
+         * No watcher, so concurrent remote edits surface only on next save.
+         */
+        writeStation(req: {
+          path: string;
+          content: string;
+          baseline: { mtimeMs: number; sha256: string; size: number };
+          force?: boolean;
+        }): Promise<
+          | {
+              ok: true;
+              baseline: { mtimeMs: number; sha256: string; size: number };
+            }
+          | {
+              ok: false;
+              code: string;
+              error: string;
+              currentBaseline?: { mtimeMs: number; sha256: string; size: number };
+              currentContent?: string;
+            }
+        >;
+        openInViewer(
+          filePath: string,
+          opts?:
+            | string
+            | {
+                opener?: string;
+                sourceHost?: "station" | "local";
+                /**
+                 * The raw click text BEFORE resolveActivatePath's
+                 * project-root prepending. Lets main detect deterministic
+                 * input (absolute / ~/x) and skip the streaming
+                 * suffix-search for those.
+                 */
+                originalText?: string;
+                /**
+                 * The active project's cwd at the time of the click.
+                 * Threaded to the main-side multi-root suffix search so the
+                 * walker walks both the resolved path's base AND the
+                 * project tree.
+                 */
+                projectCwd?: string;
+              },
+        ): Promise<{ ok: true } | { ok: false; code: string; error: string }>;
+        /**
+         * Batched existence/kind check used by the xterm linkifier. Returns
+         * one entry per input path that survives the main-side allowlist,
+         * in input order. Out-of-roots paths are silently filtered.
+         */
+        resolve(paths: string[]): Promise<
+          Array<{
+            path: string;
+            exists: boolean;
+            isDirectory: boolean;
+            parentExists: boolean;
+          }>
+        >;
+        /**
+         * Atomically create an empty file inside an allowed root. Used by
+         * the intended-path → "Create" flow. Refuses to overwrite.
+         */
+        create(filePath: string): Promise<
+          | {
+              ok: true;
+              resolvedPath: string;
+              baseline: { mtimeMs: number; sha256: string; size: number };
+            }
+          | { ok: false; code: string; error: string }
+        >;
+        /**
+         * Create an empty file on the station via SSH (`mkdir -p && touch`).
+         * Used by the station-remote create banner when the file lives
+         * outside the sshfs mount.
+         */
+        createStation(stationPath: string): Promise<
+          | { ok: true; resolvedPath: string }
+          | { ok: false; code: string; error: string }
+        >;
+        /**
+         * Save with optimistic-concurrency check. Returns the new baseline
+         * on success or a conflict envelope (with current disk state) so
+         * the viewer can route to the 3-way conflict banner.
+         */
+        write(req: {
+          path: string;
+          content: string;
+          baseline: { mtimeMs: number; sha256: string; size: number };
+          force?: boolean;
+        }): Promise<
+          | {
+              ok: true;
+              resolvedPath: string;
+              baseline: { mtimeMs: number; sha256: string; size: number };
+            }
+          | {
+              ok: false;
+              code: string;
+              error: string;
+              currentBaseline?: { mtimeMs: number; sha256: string; size: number };
+              currentContent?: string;
+            }
+        >;
+        watchSubscribe(filePath: string): Promise<
+          | { ok: true; resolvedPath: string }
+          | { ok: false; code: string; error: string }
+        >;
+        watchUnsubscribe(filePath: string): Promise<{ ok: boolean }>;
+        onWatchEvent(
+          cb: (ev: { path: string; kind: "change" | "unlink" }) => void,
+        ): () => void;
+        /**
+         * Streaming suffix-search bridge. The popup subscribes to match /
+         * progress / done / cancelled events for the search it was spawned
+         * for, and can cancel via `cancel(searchId)`. Each subscriber
+         * returns an unsub thunk.
+         */
+        suffixSearch: {
+          onMatch(
+            cb: (ev: { searchId: string; path: string }) => void,
+          ): () => void;
+          onProgress(
+            cb: (ev: {
+              searchId: string;
+              scannedDirs: number;
+              foundCount: number;
+            }) => void,
+          ): () => void;
+          onDone(
+            cb: (ev: {
+              searchId: string;
+              totalFound: number;
+              /** Roots the search walked (drives the no-match banner). */
+              searchedRoots?: string[];
+            }) => void,
+          ): () => void;
+          onCancelled(
+            cb: (ev: { searchId: string; totalFound: number }) => void,
+          ): () => void;
+          cancel(searchId: string): Promise<{ ok: boolean }>;
+        };
+        /**
+         * Read the file path this popup was opened for, from the URL
+         * query string. Returns `null` in the main window (no `?path=`).
+         */
+        getViewerPath(): string | null;
       };
       mount: {
         status(): Promise<"green" | "yellow" | "gray">;
@@ -50,6 +243,15 @@ declare global {
           error?: string;
         }>;
         onStatus(cb: (s: "green" | "yellow" | "gray") => void): void;
+      };
+      tailscale: {
+        status(stationUrl: string | null): Promise<{
+          ok: boolean;
+          selfOnline: boolean | null;
+          stationOnline: boolean | null;
+          stationLastSeen: string | null;
+          backendState: string | null;
+        }>;
       };
       rsync: {
         // an audit finding — `checkCollision` removed. Slug collision
@@ -327,6 +529,45 @@ export async function saveHoverToFocus(enabled: boolean) {
   await window.reckAPI.config.set(HOVER_TO_FOCUS_KEY, enabled === true);
 }
 
+// "Reck Connect prompt" — app-wide system-prompt text auto-appended to
+// every Claude pane the satellite spawns, composed by the daemon as the
+// middle preamble layer (baseline + this + per-project). Stored as a
+// top-level config key (like hoverToFocus), not a Settings field. The
+// load function returns null when never written so callers can tell
+// "user explicitly cleared the field" (persisted "") from "fresh install"
+// (null → DEFAULT), matching the linkifier-allowlist contract.
+const RECK_CONNECT_PROMPT_KEY = "reckConnectPrompt";
+
+export const DEFAULT_RECK_CONNECT_PROMPT = `PATH CONVENTIONS:
+When you print file paths, prefer absolute paths or paths relative to
+the project root over paths relative to your current shell cwd. The
+user's Reck pane resolves Cmd+click against the project root, so a
+cwd-relative path printed from inside a subdirectory becomes ambiguous
+(and may open the wrong file or trigger a slow suffix-search fallback).
+Good: \`services/foo/main.py\`, \`<project-root>/services/foo/main.py\`.
+Ambiguous: \`main.py\` (relative to which subdir?).
+
+RENDERING:
+The Reck file viewer renders Markdown popups with Mermaid diagrams
+(\`\`\`mermaid blocks) and KaTeX math (inline \`$..$\`, display \`$$..$$\`).
+You can freely emit diagrams and math notation in any \`.md\` file the
+user might open — they'll render rather than appearing as raw source.`;
+
+export async function loadReckConnectPrompt(): Promise<string | null> {
+  const raw = await window.reckAPI.config.get<string>(RECK_CONNECT_PROMPT_KEY);
+  if (typeof raw !== "string") return null;
+  return raw;
+}
+
+export async function saveReckConnectPrompt(value: string): Promise<void> {
+  await window.reckAPI.config.set(RECK_CONNECT_PROMPT_KEY, value);
+}
+
+export async function resolveEffectiveReckConnectPrompt(): Promise<string> {
+  const persisted = await loadReckConnectPrompt();
+  return persisted ?? DEFAULT_RECK_CONNECT_PROMPT;
+}
+
 export type ProjectNameOverrides = Record<string, string>;
 
 export async function loadProjectNameOverrides(): Promise<ProjectNameOverrides> {
@@ -417,4 +658,80 @@ export function applyProjectOrder(projects: Project[], savedOrder: string[]): Pr
     .filter((p) => !seen.has(p.id))
     .sort((a, b) => a.name.localeCompare(b.name));
   return [...ordered, ...rest];
+}
+
+/**
+ * Custom file-viewer allowed roots. Combined with the built-ins
+ * (MOUNT_POINT, $HOME, /tmp) by main's `composeFileViewerRoots`. Edits
+ * take effect on the NEXT IPC the file viewer makes — no app restart.
+ */
+export async function loadFileViewerExtraRoots(): Promise<string[]> {
+  const raw = await window.reckAPI.config.get<string[]>("fileViewerExtraRoots");
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((p): p is string => typeof p === "string" && p.length > 0);
+}
+
+/**
+ * Persist the custom-roots list. Normalises on save: rejects non-string /
+ * non-absolute / empty / duplicate entries. The main-side
+ * `composeFileViewerRoots` would also drop these, but normalising here
+ * means the Settings UI never re-displays a malformed entry it just
+ * saved.
+ */
+export async function saveFileViewerExtraRoots(
+  roots: readonly string[],
+): Promise<void> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of roots) {
+    if (typeof p !== "string") continue;
+    if (p.length === 0) continue;
+    if (!p.startsWith("/")) continue; // absolute-only (POSIX)
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  await window.reckAPI.config.set("fileViewerExtraRoots", out);
+}
+
+/**
+ * Persisted extensionless-filename allowlist for the linkifier. Driven by
+ * `setExtensionlessAllowlist` at boot and after a Preferences save. Stored
+ * under `linkifier.extensionlessAllowlist`.
+ *
+ * Returns the persisted list verbatim (case-sensitive, drop-empty-string
+ * only). Returns `null` when the user has never persisted a list — callers
+ * seed with `SEEDED_EXTENSIONLESS_FILENAMES` in that case. (We can't return
+ * the seeded list directly: that would lose the "user explicitly emptied
+ * the list" signal.)
+ */
+const LINKIFIER_ALLOWLIST_KEY = "linkifier.extensionlessAllowlist";
+
+export async function loadLinkifierAllowlist(): Promise<string[] | null> {
+  const raw = await window.reckAPI.config.get<string[]>(LINKIFIER_ALLOWLIST_KEY);
+  if (!Array.isArray(raw)) return null;
+  return raw.filter(
+    (s): s is string => typeof s === "string" && s.length > 0,
+  );
+}
+
+/**
+ * Persist the allowlist. Trims whitespace, drops empty / non-string
+ * entries, and dedupes case-sensitively. `README` and `readme` survive
+ * as distinct entries on purpose.
+ */
+export async function saveLinkifierAllowlist(
+  names: readonly string[],
+): Promise<void> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of names) {
+    if (typeof raw !== "string") continue;
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  await window.reckAPI.config.set(LINKIFIER_ALLOWLIST_KEY, out);
 }

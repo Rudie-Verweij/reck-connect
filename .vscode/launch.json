@@ -1,0 +1,73 @@
+{
+  "version": "0.2.0",
+  "compounds": [
+    {
+      "name": "Electron: main + renderer (debug)",
+      "configurations": ["Electron: main", "Electron: renderer (attach)"],
+      "stopAll": false,
+      "presentation": { "group": "1-electron", "order": 1 }
+    }
+  ],
+  "configurations": [
+    {
+      "name": "Electron: main",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/satellite",
+      "runtimeExecutable": "${workspaceFolder}/satellite/node_modules/.bin/electron",
+      "args": [
+        "--remote-debugging-port=9223",
+        "dist/main/main.js"
+      ],
+      "env": {
+        "NODE_ENV": "development",
+        "VITE_RECK_STATION_ROOT": "/Users/reck-connect/projects",
+        "RECK_STATION_ROOT": "/Users/reck-connect/projects"
+      },
+      "outputCapture": "std",
+      "console": "integratedTerminal",
+      "sourceMaps": true,
+      "outFiles": [
+        "${workspaceFolder}/satellite/dist/main/**/*.js"
+      ],
+      "preLaunchTask": "vite-and-tsc-w",
+      "presentation": { "group": "1-electron", "order": 2 }
+    },
+    {
+      "name": "Electron: renderer (attach)",
+      "type": "chrome",
+      "request": "attach",
+      "port": 9223,
+      "webRoot": "${workspaceFolder}/satellite/renderer",
+      // Long timeout + restart=true so the attach keeps polling while
+      // Electron starts up. Electron opens --remote-debugging-port AFTER
+      // app.whenReady(), and even then no targets are listed until the
+      // first BrowserWindow loads. Without restart=true the attach errors
+      // out with "Could not find any debuggable target" before the main
+      // window finishes loading.
+      "timeout": 60000,
+      "restart": true,
+      "sourceMaps": true,
+      "sourceMapPathOverrides": {
+        "webpack:///./~/*": "${webRoot}/node_modules/*",
+        "webpack:///./*": "${webRoot}/*",
+        "webpack:///*": "*"
+      },
+      "presentation": { "group": "1-electron", "order": 3 }
+    },
+    {
+      "name": "Vitest: current file",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/satellite",
+      "runtimeExecutable": "${workspaceFolder}/satellite/node_modules/.bin/vitest",
+      "args": ["run", "${file}"],
+      "env": {
+        "VITE_RECK_STATION_ROOT": "/Users/reck-connect/projects",
+        "RECK_STATION_ROOT": "/Users/reck-connect/projects"
+      },
+      "console": "integratedTerminal",
+      "presentation": { "group": "2-tests", "order": 1 }
+    }
+  ]
+}
