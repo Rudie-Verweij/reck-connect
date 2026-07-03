@@ -597,3 +597,140 @@ describe("mixed document", () => {
     expect(root.innerHTML).toBe(before);
   });
 });
+
+describe("neutralizeExternalRefs — CSS escape/comment obfuscation (extdata-fix3)", () => {
+  // `\68` decodes to `h` (0x68), so `\68ttps://` is `https://` after CSS
+  // resolution — but the literal bytes never contain `http`. `\2f\2f` decodes
+  // to `//` (protocol-relative). CSS ALSO strips `/* … */` comments before
+  // resolving a URL, so a comment can sit between `url(` and the string. The
+  // literal backslash is written as `\\` in source; the DOM/attribute holds a
+  // single backslash byte, which is exactly what must survive restore.
+  const ESC_HTTPS = "\\68ttps://evil.example/x.png"; // -> https://evil.example/x.png
+  // Protocol-relative via escapes. Per CSS, a hex escape greedily consumes up
+  // to 6 hex digits, so `\2f\2fevil` would eat the `e` (0x2FE) and NOT yield
+  // `//`. The genuine escaped-protocol-relative attack escapes the first host
+  // char too (`\65` = `e`), so `\2f\2f\65vil` unambiguously decodes to
+  // `//evil.example/x.png`.
+  const ESC_PROTO = "\\2f\\2f\\65vil.example/x.png"; // -> //evil.example/x.png
+
+  // --- Inline `style` attribute payloads (set via setAttribute for exact bytes)
+  const INLINE_STYLE_PAYLOADS: { name: string; style: string }[] = [
+    {
+      name: "escaped scheme, top-level url()",
+      style: `background:url(${ESC_HTTPS})`,
+    },
+    {
+      name: "escaped scheme, NON-FIRST image-set() bare string",
+      style: `background:image-set(url(./a) 1x, '${ESC_HTTPS}' 2x)`,
+    },
+    {
+      name: "escaped protocol-relative image-set() bare string",
+      style: `background:image-set(url(./a) 1x, '${ESC_PROTO}' 2x)`,
+    },
+    {
+      name: "comment between url( and the string",
+      style: `background:url(/*x*/'https://evil.example/x.png')`,
+    },
+  ];
+
+  it.each(INLINE_STYLE_PAYLOADS)(
+    "inline style: $name → PARKED, restore returns the ORIGINAL bytes",
+    ({ style }) => {
+      const root = makeRoot(`<div>x</div>`);
+      const div = root.querySelector("div")!;
+      div.setAttribute("style", style);
+
+      expect(neutralizeExternalRefs(root)).toBe(1);
+      expect(div.hasAttribute("style")).toBe(false);
+      // Parked value is the ORIGINAL, un-normalized bytes (escapes/comment kept).
+      expect(div.getAttribute("data-reck-blocked-style")).toBe(style);
+      expect(countBlockedExternalRefs(root)).toBe(1);
+
+      restoreExternalRefs(root);
+      expect(div.getAttribute("style")).toBe(style);
+      expect(div.hasAttribute("data-reck-blocked-style")).toBe(false);
+    },
+  );
+
+  // --- <style> element payloads (escaped url() + escaped image-set variant)
+  const STYLE_BLOCK_PAYLOADS: { name: string; css: string }[] = [
+    {
+      name: "escaped scheme url()",
+      css: `.a{background:url(${ESC_HTTPS})}`,
+    },
+    {
+      name: "escaped scheme image-set() bare string",
+      css: `.a{background:image-set(url(./a) 1x, '${ESC_HTTPS}' 2x)}`,
+    },
+  ];
+
+  it.each(STYLE_BLOCK_PAYLOADS)(
+    "<style> block: $name → PARKED, restore returns the ORIGINAL bytes",
+    ({ css }) => {
+      const root = makeRoot(`<style></style>`);
+      const styleEl = root.querySelector("style")!;
+      styleEl.textContent = css;
+
+      expect(neutralizeExternalRefs(root)).toBe(1);
+      expect(styleEl.textContent).toBe("");
+      expect(styleEl.getAttribute("data-reck-blocked-styletext")).toBe(css);
+
+      restoreExternalRefs(root);
+      expect(styleEl.textContent).toBe(css);
+      expect(styleEl.hasAttribute("data-reck-blocked-styletext")).toBe(false);
+    },
+  );
+
+  it("SVG paint attr: escaped url(\\68ttps://…) → PARKED, restore returns ORIGINAL bytes", () => {
+    const value = "url(\\68ttps://evil#g)"; // -> url(https://evil#g)
+    const root = makeRoot(`<svg><rect></rect></svg>`);
+    const rect = root.querySelector("rect")!;
+    rect.setAttribute("fill", value);
+
+    expect(neutralizeExternalRefs(root)).toBe(1);
+    expect(rect.hasAttribute("fill")).toBe(false);
+    expect(rect.getAttribute("data-reck-blocked-fill")).toBe(value);
+
+    restoreExternalRefs(root);
+    expect(rect.getAttribute("fill")).toBe(value);
+    expect(rect.hasAttribute("data-reck-blocked-fill")).toBe(false);
+  });
+
+  // --- Negative controls: must STAY LIVE after normalization (never parked).
+  const STAY_LIVE_STYLES: { name: string; style: string }[] = [
+    { name: "url(#local) fragment", style: "background:url(#local)" },
+    {
+      name: "url(data:…) URI",
+      style: "background:url(data:image/png;base64,AAAA)",
+    },
+    { name: "relative url(./a.png)", style: "background:url(./a.png)" },
+    {
+      name: "all-relative image-set",
+      style: "background:image-set(url(./a) 1x, url(./b) 2x)",
+    },
+    // `\23 grad` decodes to `#grad` (a fragment) — must NOT be treated external.
+    { name: "escaped fragment url(\\23 grad)", style: "background:url(\\23 grad)" },
+  ];
+
+  it.each(STAY_LIVE_STYLES)(
+    "negative control: $name stays LIVE (not parked)",
+    ({ style }) => {
+      const root = makeRoot(`<div>x</div>`);
+      const div = root.querySelector("div")!;
+      div.setAttribute("style", style);
+
+      expect(neutralizeExternalRefs(root)).toBe(0);
+      expect(countBlockedExternalRefs(root)).toBe(0);
+      expect(div.getAttribute("style")).toBe(style);
+    },
+  );
+
+  it("positive control: un-escaped external url() still parks (no regression)", () => {
+    const style = "background:url(https://evil.example/x.png)";
+    const root = makeRoot(`<div>x</div>`);
+    const div = root.querySelector("div")!;
+    div.setAttribute("style", style);
+    expect(neutralizeExternalRefs(root)).toBe(1);
+    expect(div.getAttribute("data-reck-blocked-style")).toBe(style);
+  });
+});

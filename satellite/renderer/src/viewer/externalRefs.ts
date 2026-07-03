@@ -139,6 +139,80 @@ const REF_VECTORS: readonly RefVector[] = [
   ...SVG_PRESENTATION_VECTORS,
 ];
 
+// ── CSS normalization for detection ───────────────────────────────────────
+// The browser resolves a CSS URL only AFTER stripping `/* … */` comments and
+// decoding backslash escapes (`\68`→`h`, `\2f`→`/`). Matching raw bytes lets an
+// attacker hide an external scheme (`url(\68ttps://…)`, `url(/*x*/'https://…')`)
+// past a literal check while Blink/Gecko still fetch it. `normalizeCssForMatch`
+// produces a DETECTION-ONLY copy that mirrors that resolution so the existing
+// external checks see the real scheme. It is NEVER parked/restored — parking
+// always uses the ORIGINAL bytes, so restore reproduces the input exactly.
+
+// Strip CSS comments (slash-star … star-slash), including an unterminated
+// trailing "slash-star" which CSS treats as running to end-of-input. This is
+// detection-only, so treating a comment-like sequence inside a string as a
+// comment is acceptable — we never write this copy back.
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\*[\s\S]*$/, "");
+}
+
+/** Map a CSS hex-escape code point to a string, following the CSS rule that
+ *  null, out-of-range, and surrogate code points become U+FFFD. */
+function codePointToString(codePoint: number): string {
+  if (
+    codePoint === 0 ||
+    codePoint > 0x10ffff ||
+    (codePoint >= 0xd800 && codePoint <= 0xdfff)
+  ) {
+    return "\uFFFD";
+  }
+  return String.fromCodePoint(codePoint);
+}
+
+const CSS_HEX_ESCAPE = /^[0-9a-fA-F]{1,6}/;
+const CSS_WHITESPACE = /\s/;
+
+/** Decode CSS backslash escapes: `\` + 1–6 hex digits (plus an optional single
+ *  trailing whitespace, consumed as the delimiter) → the code point; `\` + any
+ *  non-hex char → that literal char. A trailing lone `\` is kept literal. */
+function decodeCssEscapes(css: string): string {
+  let out = "";
+  for (let i = 0; i < css.length; i += 1) {
+    const ch = css[i];
+    if (ch !== "\\") {
+      out += ch;
+      continue;
+    }
+    const hex = CSS_HEX_ESCAPE.exec(css.slice(i + 1));
+    if (hex !== null) {
+      out += codePointToString(Number.parseInt(hex[0], 16));
+      i += hex[0].length; // advance onto the last hex digit
+      const delimiter = css[i + 1];
+      if (delimiter !== undefined && CSS_WHITESPACE.test(delimiter)) {
+        i += 1; // consume the single trailing whitespace delimiter
+      }
+      continue;
+    }
+    const next = css[i + 1];
+    if (next === undefined) {
+      out += "\\"; // trailing backslash with nothing to escape
+      continue;
+    }
+    out += next; // `\` + non-hex → the literal char
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Produce a DETECTION-ONLY normalization of `css`: comments stripped first,
+ * then escapes decoded (matching the browser's resolve order). Callers run the
+ * external checks against this copy but PARK the original bytes.
+ */
+function normalizeCssForMatch(css: string): string {
+  return decodeCssEscapes(stripCssComments(css));
+}
+
 /** External = trimmed value starts with http://, https://, or // (protocol-
  *  relative). `data:` and relative URLs are intentionally NOT external. */
 function isExternalUrl(value: string): boolean {
@@ -238,7 +312,10 @@ function argsHaveExternalCandidate(args: string): boolean {
  * Positional scanner for `image-set()` / `-webkit-image-set()`: finds every
  * occurrence, isolates its balanced argument list, and reports whether ANY
  * candidate (not just the first) is external — closing the bare-string
- * non-first-candidate leak that the first-arg-only regex missed.
+ * non-first-candidate leak that the first-arg-only regex missed. Defense in
+ * depth: when a token's argument list cannot be balanced
+ * (`extractBalancedGroup` returns `null`), FAIL SAFE and treat it as external
+ * so a malformed/truncated payload parks rather than leaks.
  */
 function imageSetHasExternalRef(css: string): boolean {
   IMAGE_SET_HEAD.lastIndex = 0;
@@ -249,7 +326,8 @@ function imageSetHasExternalRef(css: string): boolean {
   ) {
     const openIndex = head.index + head[0].length - 1; // index of the '('
     const group = extractBalancedGroup(css, openIndex);
-    if (group !== null && argsHaveExternalCandidate(group)) return true;
+    if (group === null) return true; // unparseable → fail safe (park it)
+    if (argsHaveExternalCandidate(group)) return true;
   }
   return false;
 }
@@ -262,11 +340,15 @@ function imageSetHasExternalRef(css: string): boolean {
  * live (they never fetch).
  */
 function cssHasExternalRef(css: string): boolean {
+  // Detection runs against a normalized copy (comments stripped, escapes
+  // decoded) so an obfuscated scheme is caught the way the browser resolves it.
+  // The CALLER still parks the ORIGINAL, un-normalized bytes.
+  const normalized = normalizeCssForMatch(css);
   return (
-    STYLE_URL_EXTERNAL.test(css) ||
-    STYLE_IMAGE_SET_EXTERNAL.test(css) ||
-    imageSetHasExternalRef(css) ||
-    STYLE_IMPORT_EXTERNAL.test(css)
+    STYLE_URL_EXTERNAL.test(normalized) ||
+    STYLE_IMAGE_SET_EXTERNAL.test(normalized) ||
+    imageSetHasExternalRef(normalized) ||
+    STYLE_IMPORT_EXTERNAL.test(normalized)
   );
 }
 
@@ -303,11 +385,15 @@ export function neutralizeExternalRefs(root: HTMLElement): number {
     for (const el of selectVectorTargets(root, vector)) {
       const live = el.getAttribute(vector.attr);
       if (live === null) continue;
+      // `cssurl` (SVG paint attrs like `fill="url(...)"`) is CSS, so detect on
+      // a normalized copy — an escaped/commented `url(\68ttps://…)` resolves to
+      // an external scheme in the browser. `url`/`srcset` are plain HTML URL
+      // attributes that do NOT CSS-decode, so they keep literal matching.
       const external =
         vector.kind === "srcset"
           ? srcsetHasExternal(live)
           : vector.kind === "cssurl"
-            ? STYLE_URL_EXTERNAL.test(live)
+            ? STYLE_URL_EXTERNAL.test(normalizeCssForMatch(live))
             : isExternalUrl(live);
       if (!external) continue;
       el.setAttribute(parkAttrFor(vector.parkKey), live);
