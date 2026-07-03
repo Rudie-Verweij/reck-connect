@@ -3431,3 +3431,131 @@ textarea.file-viewer-merge-pane {
 .file-viewer-root .cm-scroller::-webkit-scrollbar {
   display: none;
 }
+
+/* ---------- Claude transcript view — the "History" overlay (#51) ----------
+   Mounted over a Claude pane's terminal; the xterm keeps running
+   underneath. Own DOM scroll container → the truthful overlay scrollbar
+   and whole-chat search work exactly, at any pane width. */
+.transcript-view {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-rows: 34px 1fr;
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+.transcript-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--app-text-dim);
+}
+.transcript-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.transcript-close {
+  background: none;
+  border: none;
+  color: var(--app-text-dim);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 2px 6px;
+  border-radius: var(--radius);
+}
+.transcript-close:hover {
+  color: var(--app-text);
+  background: var(--app-hover);
+}
+.transcript-body {
+  position: relative;
+  overflow: auto;
+  padding: 16px 22px 24px;
+  line-height: 1.55;
+}
+.transcript-turn {
+  margin: 0 0 18px;
+}
+.transcript-role {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  margin-bottom: 4px;
+}
+.transcript-turn--user .transcript-role {
+  color: var(--claude-orange);
+}
+/* User turns are plain text (never parsed as markup) — preserve the
+   line breaks people actually typed. */
+.transcript-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+.transcript-md {
+  font-family: var(--font-body, sans-serif);
+  font-size: 0.9rem;
+}
+.transcript-md pre {
+  overflow-x: auto;
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+.transcript-md code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+details.transcript-thinking,
+details.transcript-tool,
+details.transcript-tool-result {
+  margin: 6px 0;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  background: var(--app-bg-raised);
+  font-size: 0.8rem;
+}
+details.transcript-thinking > summary,
+details.transcript-tool > summary,
+details.transcript-tool-result > summary {
+  cursor: pointer;
+  padding: 5px 10px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: var(--app-text-dim);
+  user-select: none;
+}
+details.transcript-thinking > pre,
+details.transcript-tool > pre,
+details.transcript-tool-result > pre {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  max-height: 320px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--app-text-dim);
+  border-top: 1px solid var(--app-border);
+}
