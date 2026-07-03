@@ -56,6 +56,7 @@ import { installShortcuts } from "./ui/shortcuts";
 import { renderSettings } from "./ui/settings-view";
 import { addProjectFlow } from "./ui/add-project-dialog";
 import { confirmDeleteProject } from "./ui/delete-project-dialog";
+import { confirmRestoreProject } from "./ui/confirm-restore-dialog";
 import { initTts } from "./tts/initTts";
 import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
 import { initSearch } from "./search/initSearch";
@@ -681,7 +682,16 @@ export async function boot(splash?: StartupSplashController) {
 
   const rail = new Rail({
     root: document.getElementById("rail")!,
-    onSelect: (projectId) => void selectProject(projectId),
+    onSelect: (projectId) => {
+      // Clicking an archived project restores it (behind a confirm) rather
+      // than selecting an empty, panes-killed view.
+      const proj = currentProjects.find((p) => p.id === projectId);
+      if (proj?.archived) {
+        void requestUnarchive(projectId);
+        return;
+      }
+      void selectProject(projectId);
+    },
     onAddProject: () => void handleAddProject(),
     onRename: (projectId, newName) => {
       // Optimistic: paint the new name right away, then persist on the
@@ -744,13 +754,22 @@ export async function boot(splash?: StartupSplashController) {
       // Next poll picks up the new `docked` flag and the rail re-renders.
     },
     onToggleArchive: async (projectId, archived) => {
-      try {
-        if (archived) await client.archiveProject(projectId);
-        else await client.unarchiveProject(projectId);
-      } catch (e) {
-        console.error("archive toggle failed", e);
+      if (!archived) {
+        // Unarchive (menu "Unarchive" or drag-out) goes through the same
+        // confirm-then-restore path as clicking an archived project.
+        await requestUnarchive(projectId);
+        return;
       }
-      // Next poll picks up the new `archived` flag and the rail re-renders.
+      // Archive: kill the daemon's panes to free RAM, then — if this was
+      // the active project — tear down its renderer terminals and switch
+      // away. Its saved layout stays frozen for restore.
+      try {
+        await client.archiveProject(projectId);
+      } catch (e) {
+        console.error("archiveProject failed", e);
+        return;
+      }
+      switchAwayFromArchived(projectId);
     },
     // an earlier release — flatten the project's saved layout left-to-right so
     // the rail can reorder dots out of daemon creation order. Active
@@ -2006,6 +2025,51 @@ export async function boot(splash?: StartupSplashController) {
     console.warn("[search] disabled:", e);
   }
 
+  // Shared unarchive path for every entry point (rail click, drag-out,
+  // context-menu "Unarchive"). Confirm first — restoring can spin several
+  // heavy agent panes back up — then unarchive on the daemon and select the
+  // project so the frozen layout reconciles onto the respawned panes.
+  async function requestUnarchive(projectId: string): Promise<void> {
+    const proj = currentProjects.find((p) => p.id === projectId);
+    const name = proj?.name ?? projectId;
+    const savedTree = savedLayouts[projectId] ?? null;
+    const paneCount = savedTree ? allTabs(savedTree).length : 0;
+    const ok = await confirmRestoreProject(name, paneCount);
+    if (!ok) return;
+    try {
+      await client.unarchiveProject(projectId);
+    } catch (e) {
+      console.error("unarchiveProject failed", e);
+      return;
+    }
+    // UnarchiveProject respawns the panes synchronously before responding,
+    // so selecting now reconciles the frozen layout onto live panes.
+    await selectProject(projectId);
+  }
+
+  // The active project was just archived (its panes are being killed). Move
+  // focus off it: selecting another project disposes the archived project's
+  // TerminalPanes via setTree (freeing renderer RAM), and its saved layout
+  // stays frozen because onTreeChange only persists the current selection —
+  // which we're changing here.
+  function switchAwayFromArchived(projectId: string): void {
+    if (currentProjectId !== projectId) return;
+    const nextActive = currentProjects.find(
+      (p) => p.id !== projectId && !p.archived,
+    );
+    if (nextActive) {
+      void selectProject(nextActive.id);
+      return;
+    }
+    // Nothing else to show — clear the pane area (disposing the archived
+    // project's terminals) and deselect. Null currentProjectId first so
+    // onTreeChange doesn't persist the empty tree under the archived id.
+    currentProjectId = null;
+    rail.select(null);
+    layout.setTree(null, { persist: false });
+    renderStatus();
+  }
+
   async function selectProject(projectId: string) {
     if (missionControlActive) hideMissionControl();
     if (currentProjectId === projectId) return;
@@ -2471,6 +2535,13 @@ export async function boot(splash?: StartupSplashController) {
     const ordered = applyProjectOrder(merged, projectOrder);
     const withOverrides = applyProjectOverrides(ordered);
     currentProjects = withOverrides;
+    // If the active project got archived (by this client or another), tear
+    // down its terminals and move focus off it. Idempotent — no-op once we
+    // are no longer on that project.
+    if (currentProjectId) {
+      const active = withOverrides.find((p) => p.id === currentProjectId);
+      if (active?.archived) switchAwayFromArchived(currentProjectId);
+    }
     trackStoplightTransitions(withOverrides);
     trackPaneStoplightTransitions(withOverrides, pollEpoch);
     renderRail();
