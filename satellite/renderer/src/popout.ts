@@ -27,8 +27,14 @@ import { initTts } from "./tts/initTts";
 import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
 import { initSearch } from "./search/initSearch";
 import { TerminalSearchAdapter } from "./search/TerminalSearchAdapter";
+import { MarkdownSearchAdapter } from "./search/MarkdownSearchAdapter";
 import { createOverlayScrollbar } from "./search/OverlayScrollbar";
 import { terminalScrollSurface } from "./search/scrollSurfaces";
+import { ApiClient } from "@client-core/api/client";
+import { createTranscriptView, type TranscriptViewHandle } from "./transcript/TranscriptView";
+import { createTranscriptTail, type TranscriptTail } from "./transcript/TranscriptTail";
+import { TranscriptParser } from "./transcript/parseTranscript";
+import { resolveTranscriptSession } from "./transcript/resolveSession";
 
 const DEFAULT_LOCAL_PORT = 7315;
 
@@ -203,6 +209,69 @@ async function bootPopout(): Promise<void> {
     }
   })();
 
+  // Transcript "History" overlay (#51) — parity with the main window's
+  // per-pane toggle. The popout URL doesn't carry the pane's kind, so
+  // gate the button on whether a Claude session actually resolves for
+  // this pane (shell/codex popouts simply never get the button).
+  const api = new ApiClient({
+    baseUrl: resolved.baseUrl,
+    token: resolved.token ?? undefined,
+  });
+  // Narrowed copies for the closures below — TS drops the `!info`
+  // guard's narrowing inside nested functions.
+  const paneProjectId = info.projectId;
+  const paneTitle = info.title;
+  let transcriptOverlay: { view: TranscriptViewHandle; tail: TranscriptTail } | null = null;
+
+  function closeTranscript(): void {
+    if (!transcriptOverlay) return;
+    const overlay = transcriptOverlay;
+    transcriptOverlay = null;
+    overlay.tail.stop();
+    overlay.view.dispose();
+  }
+
+  function openTranscript(sessionId: string): void {
+    if (transcriptOverlay) {
+      closeTranscript();
+      return;
+    }
+    const view = createTranscriptView({
+      host: body,
+      title: paneTitle || "Claude",
+      onClose: closeTranscript,
+    });
+    const parser = new TranscriptParser();
+    const tail = createTranscriptTail({
+      fetchChunk: (offset) => api.getTranscript(paneProjectId, sessionId, offset),
+      onChunk: (chunk) => {
+        const update = parser.push(chunk);
+        if (update) view.render(parser.turns, update.firstChanged);
+      },
+      onError: (e) => console.warn("[popout] transcript tail error:", e),
+    });
+    transcriptOverlay = { view, tail };
+    tail.start();
+  }
+
+  void (async () => {
+    try {
+      const sessionId = await resolveTranscriptSession({
+        paneId: info.paneId,
+        listSessions: () => api.listSessions(info.projectId),
+      });
+      if (!sessionId) return; // not a Claude pane (or no transcript yet)
+      const historyBtn = document.createElement("button");
+      historyBtn.type = "button";
+      historyBtn.title = "Chat history — scroll & search the full transcript";
+      historyBtn.textContent = "History";
+      historyBtn.addEventListener("click", () => openTranscript(sessionId));
+      actions.insertBefore(historyBtn, reattachBtn);
+    } catch (e) {
+      console.warn("[popout] history disabled:", e);
+    }
+  })();
+
   // In-view search (⌘/Ctrl+F) + overlay scrollbar for the detached pane.
   try {
     const scrollbar = createOverlayScrollbar({
@@ -212,14 +281,29 @@ async function bootPopout(): Promise<void> {
       ),
     });
     initSearch({
-      getActiveSearchSurface: () =>
-        new TerminalSearchAdapter({
+      getActiveSearchSurface: () => {
+        // An open History overlay owns ⌘F (#51) — search the whole
+        // transcript rather than the terminal's visible rows.
+        if (transcriptOverlay) {
+          return new MarkdownSearchAdapter({
+            container: transcriptOverlay.view.root,
+            body: transcriptOverlay.view.body,
+          });
+        }
+        return new TerminalSearchAdapter({
           container: body,
           term: term.getXterm() as unknown as ConstructorParameters<
             typeof TerminalSearchAdapter
           >[0]["term"],
-        }),
-      onMatchesChanged: (fractions) => scrollbar.setMatches(fractions),
+        });
+      },
+      onMatchesChanged: (fractions) => {
+        if (transcriptOverlay) {
+          transcriptOverlay.view.setMatches(fractions);
+          return;
+        }
+        scrollbar.setMatches(fractions);
+      },
     });
   } catch (e) {
     console.warn("[popout] search disabled:", e);

@@ -5,7 +5,7 @@ import type { PasteUploadResult } from "@client-core/terminal/terminal-pane";
 import type { PaneWSCloseInfo } from "@client-core/api/ws";
 import type { Stoplight } from "@proto/proto";
 import type { HostRef } from "../host";
-import { iconClose, iconSplitDown, iconSplitRight, iconDetach } from "./icons";
+import { iconClose, iconSplitDown, iconSplitRight, iconDetach, iconHistory } from "./icons";
 import { computeReorder } from "./reorder";
 import { HoverFocusController } from "./hover-focus-controller";
 
@@ -139,6 +139,12 @@ export interface PaneLayoutCallbacks {
    * here. Optional for the same reason as `onDetachPane`.
    */
   onReattachPane?: (paneId: string) => void;
+  /**
+   * Open the transcript "History" overlay for `paneId` (#51). Rendered
+   * only for Claude panes — shell/codex panes have no session
+   * transcript. Optional for the same reason as `onDetachPane`.
+   */
+  onHistoryPane?: (paneId: string, leafId: string) => void;
 }
 
 /**
@@ -285,6 +291,22 @@ export class PaneLayout {
     const record = view.terminals.get(tab.id);
     if (!record || record.kind !== "terminal") return null;
     return { term: record.term, wrapper: record.wrapper, tab: record.tab };
+  }
+
+  // Resolve any pane's terminal record by pane id, active or not. The
+  // transcript "History" overlay (#51) mounts into that pane's wrapper
+  // regardless of which leaf currently has focus.
+  getTerminalRecordByPane(
+    paneId: string,
+  ): { term: TerminalPane; wrapper: HTMLElement; tab: Tab } | null {
+    for (const view of this.views.values()) {
+      for (const record of view.terminals.values()) {
+        if (record.kind === "terminal" && record.tab.paneId === paneId) {
+          return { term: record.term, wrapper: record.wrapper, tab: record.tab };
+        }
+      }
+    }
+    return null;
   }
 
   focusLeaf(leafId: string) {
@@ -989,7 +1011,14 @@ export class PaneLayout {
         : "Detach pane to its own window (⌘⇧O)";
       detachButtonHtml = `<button class="icon-btn" data-act="detach" title="${title}"${disabledAttr}>${iconDetach}</button>`;
     }
+    // "History" (#51) — transcript overlay for the active tab. Claude
+    // panes only: shell/codex panes have no session transcript to show.
+    let historyButtonHtml = "";
+    if (this.cb.onHistoryPane && activeTab && activeTab.kind === "claude") {
+      historyButtonHtml = `<button class="icon-btn" data-act="history" title="Chat history — scroll &amp; search the full transcript">${iconHistory}</button>`;
+    }
     actions.innerHTML = `
+      ${historyButtonHtml}
       ${detachButtonHtml}
       <button class="icon-btn" data-act="split-right" title="Split right (⌘D)">${iconSplitRight}</button>
       <button class="icon-btn" data-act="split-down" title="Split down (⌘⇧D)">${iconSplitDown}</button>
@@ -1003,6 +1032,10 @@ export class PaneLayout {
           if (activeTab && !activeIsDetached) {
             this.cb.onDetachPane?.(activeTab.paneId, leaf.id);
           }
+          return;
+        }
+        if (act === "history") {
+          if (activeTab) this.cb.onHistoryPane?.(activeTab.paneId, leaf.id);
           return;
         }
         if (act === "split-right") this.cb.onSplitRight(leaf.id);

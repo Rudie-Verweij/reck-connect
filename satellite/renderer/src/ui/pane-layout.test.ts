@@ -1372,3 +1372,67 @@ describe("Drag-to-split styles ", () => {
     expect(css).toMatch(/pointer-events:\s*none/);
   });
 });
+
+/**
+ * "History" button (#51) — opens the Claude-pane transcript overlay.
+ * Rendered only when the host wires `onHistoryPane` AND the active tab
+ * is a Claude pane (shell/codex panes have no session transcript).
+ */
+describe("PaneLayout history button", () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    MockTerminalPane.instances.length = 0;
+    (PaneLayout as unknown as { draggedTab: unknown }).draggedTab = null;
+  });
+
+  afterEach(() => {
+    root.remove();
+  });
+
+  function makeClaudeLeaf(id: string, tabs: string[]): LeafNode {
+    return {
+      kind: "leaf",
+      id,
+      activeTabId: tabs[0] ?? "",
+      tabs: tabs.map((tabId) => ({
+        id: tabId,
+        paneId: `pane-${tabId}`,
+        kind: "claude" as const,
+        title: tabId,
+        host: "local" as HostRef,
+      })),
+    };
+  }
+
+  it("appears on a claude tab and invokes onHistoryPane with paneId+leafId", () => {
+    const history = vi.fn();
+    const cb = makeCallbacks(root, makeController());
+    cb.onHistoryPane = history;
+    const layout = new PaneLayout(cb);
+    layout.setTree(makeClaudeLeaf("leafA", ["t1"]));
+    const btn = root.querySelector<HTMLButtonElement>('.tab-actions button[data-act="history"]');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(history).toHaveBeenCalledWith("pane-t1", "leafA");
+    layout.dispose();
+  });
+
+  it("is hidden for shell tabs", () => {
+    const cb = makeCallbacks(root, makeController());
+    cb.onHistoryPane = vi.fn();
+    const layout = new PaneLayout(cb);
+    layout.setTree(makeLeaf("leafA", ["t1"])); // makeLeaf builds shell tabs
+    expect(root.querySelector('.tab-actions button[data-act="history"]')).toBeNull();
+    layout.dispose();
+  });
+
+  it("is hidden when the onHistoryPane callback is absent", () => {
+    const layout = new PaneLayout(makeCallbacks(root, makeController()));
+    layout.setTree(makeClaudeLeaf("leafA", ["t1"]));
+    expect(root.querySelector('.tab-actions button[data-act="history"]')).toBeNull();
+    layout.dispose();
+  });
+});
