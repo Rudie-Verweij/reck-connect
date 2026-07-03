@@ -397,6 +397,78 @@ html, body, #app {
   overflow-y: auto;
 }
 
+/* Active list doubles as an unarchive drop target while dragging an
+   archived row out of the Archive section. */
+.rail-list.drop-target {
+  box-shadow: inset 0 0 0 1px var(--claude-orange);
+  border-radius: var(--radius);
+}
+
+/* === Archive section === */
+
+.rail-archive {
+  flex-shrink: 0;
+  margin: 0.25rem 0.75rem 0;
+  border-top: 1px solid var(--app-border);
+}
+
+.rail-archive.drop-target {
+  background: var(--app-hover);
+  box-shadow: inset 0 0 0 1px var(--claude-orange);
+  border-radius: var(--radius);
+}
+
+.rail-archive-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.55rem 0.6rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  transition: color 0.2s var(--ease-smooth);
+}
+
+.rail-archive-header:hover { color: var(--app-text-dim); }
+
+.rail-archive-caret {
+  display: inline-block;
+  font-size: 0.7rem;
+  transition: transform 0.15s var(--ease-smooth);
+}
+
+.rail-archive:not(.collapsed) .rail-archive-caret { transform: rotate(90deg); }
+
+.rail-archive-title { flex: 1; text-align: left; }
+
+.rail-archive-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.rail-archive-list {
+  padding: 0 0.5rem 0.35rem;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+/* Archived rows: dimmed + asleep; no live pane indicator. */
+.rail-item.archived {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+.rail-item.archived:hover { opacity: 0.85; }
+
+.rail-item.archived .pane-indicator { display: none; }
+
 .rail-add {
   display: inline-flex;
   align-items: center;

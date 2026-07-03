@@ -743,6 +743,15 @@ export async function boot(splash?: StartupSplashController) {
       }
       // Next poll picks up the new `docked` flag and the rail re-renders.
     },
+    onToggleArchive: async (projectId, archived) => {
+      try {
+        if (archived) await client.archiveProject(projectId);
+        else await client.unarchiveProject(projectId);
+      } catch (e) {
+        console.error("archive toggle failed", e);
+      }
+      // Next poll picks up the new `archived` flag and the rail re-renders.
+    },
     // an earlier release — flatten the project's saved layout left-to-right so
     // the rail can reorder dots out of daemon creation order. Active
     // project: hand back the live tree (`layout.getTree()`) so an
