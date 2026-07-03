@@ -8,7 +8,6 @@
 
 import { createMarkdownRenderer } from "./MarkdownRenderer";
 import {
-  isMarkdownPath,
   isRenderablePath,
   pickViewerMode,
   type PersistedRenderMode,
@@ -1129,39 +1128,7 @@ async function renderStationRemote(
   // to plans on the station is a real workflow. Mounts the same
   // adapter pair as renderForPath; no write coupling because station
   // popups stay read-only.
-  const surface: SpeakSurfaceAdapter = codeEditor
-    ? new CodeMirrorSurfaceAdapter({
-        container: root,
-        view: codeEditor.view,
-      })
-    : new MarkdownSurfaceAdapter({
-        container: root,
-        body: shell.body,
-      });
-  let ttsHandle: TtsHandle | null = null;
-  void (async () => {
-    try {
-      ttsHandle = await initTts({
-        getActiveSpeakSurface: () => surface,
-      });
-    } catch (e) {
-      console.warn("[file-viewer] TTS disabled:", e);
-    }
-  })();
-  speakHandles.set(root, {
-    surface,
-    dispose: () => {
-      ttsHandle?.dispose();
-      surface.dispose();
-    },
-  });
-
-  // Search bar + auto-hiding overlay scrollbar for this viewer. CodeMirror
-  // source mode searches the editor; rendered markdown searches the body.
-  searchHandles.set(
-    root,
-    attachViewerSearch({ root, body: shell.body, view: codeEditor?.view ?? null }),
-  );
+  attachSpeakAndSearch(root, shell, codeEditor);
 }
 
 // Per-host state for the active Speak handle so re-renders (auto-reload,
@@ -1177,6 +1144,43 @@ const speakHandles = new WeakMap<HTMLElement, SpeakHandle>();
 // Per-host search handle (bar + overlay scrollbar), torn down on re-render
 // alongside the speak handle.
 const searchHandles = new WeakMap<HTMLElement, ViewerSearchHandle>();
+
+/**
+ * Attach the unified TTS engine + search bar to whichever surface the
+ * viewer just mounted. When a CodeMirror editor exists we speak/search the
+ * editor; otherwise we speak/search the rendered DOM in `shell.body`
+ * (markdown today, static HTML in Phase A — both are plain DOM, so the
+ * MarkdownSurfaceAdapter/MarkdownSearchAdapter handle them unchanged).
+ * Registers per-root handles so the next render's teardown disposes them.
+ */
+function attachSpeakAndSearch(
+  root: HTMLElement,
+  shell: ViewerShell,
+  codeEditor: CodeEditorHandle | null,
+): void {
+  const surface: SpeakSurfaceAdapter = codeEditor
+    ? new CodeMirrorSurfaceAdapter({ container: root, view: codeEditor.view })
+    : new MarkdownSurfaceAdapter({ container: root, body: shell.body });
+  let ttsHandle: TtsHandle | null = null;
+  void (async () => {
+    try {
+      ttsHandle = await initTts({ getActiveSpeakSurface: () => surface });
+    } catch (e) {
+      console.warn("[file-viewer] TTS disabled:", e);
+    }
+  })();
+  speakHandles.set(root, {
+    surface,
+    dispose: () => {
+      ttsHandle?.dispose();
+      surface.dispose();
+    },
+  });
+  searchHandles.set(
+    root,
+    attachViewerSearch({ root, body: shell.body, view: codeEditor?.view ?? null }),
+  );
+}
 
 async function renderForPath(
   root: HTMLElement,
@@ -1460,44 +1464,9 @@ async function renderForPath(
     void lockBannerRef;
   }
 
-  // Phase 1 (linkifier-followups): install the unified TTS subsystem
-  // with a surface adapter matching the active viewer kind. Same
-  // engine, same control bar, same shortcuts as terminal panes —
-  // including per-word highlighting via the adapter's own decoration
-  // path. Disposing this handle tears down the engine + bar + listeners.
-  const surface: SpeakSurfaceAdapter = codeEditor
-    ? new CodeMirrorSurfaceAdapter({
-        container: root,
-        view: codeEditor.view,
-      })
-    : new MarkdownSurfaceAdapter({
-        container: root,
-        body: shell.body,
-      });
-  let ttsHandle: TtsHandle | null = null;
-  void (async () => {
-    try {
-      ttsHandle = await initTts({
-        getActiveSpeakSurface: () => surface,
-      });
-    } catch (e) {
-      console.warn("[file-viewer] TTS disabled:", e);
-    }
-  })();
-  speakHandles.set(root, {
-    surface,
-    dispose: () => {
-      ttsHandle?.dispose();
-      surface.dispose();
-    },
-  });
-
-  // Search bar + auto-hiding overlay scrollbar for this viewer. CodeMirror
-  // source mode searches the editor; rendered markdown searches the body.
-  searchHandles.set(
-    root,
-    attachViewerSearch({ root, body: shell.body, view: codeEditor?.view ?? null }),
-  );
+  // Attach TTS + search to the surface we just mounted (shared with the
+  // station path). Disposed by the next render's teardown.
+  attachSpeakAndSearch(root, shell, codeEditor);
 
   // P4: watch the file on disk. When the viewer is clean we silently
   // reload; when it's dirty (CodeMirror content has diverged from
