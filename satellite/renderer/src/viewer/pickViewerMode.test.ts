@@ -3,6 +3,7 @@ import {
   isMarkdownPath,
   isRenderablePath,
   pickViewerMode,
+  isHtmlPath,
 } from "./pickViewerMode";
 
 describe("isMarkdownPath", () => {
@@ -30,5 +31,25 @@ describe("pickViewerMode", () => {
   it("uses source for non-renderable files regardless of persisted value", () => {
     expect(pickViewerMode("/a/b.ts", "rendered")).toBe("source");
     expect(pickViewerMode("/a/b.ts", undefined)).toBe("source");
+  });
+});
+
+describe("isHtmlPath", () => {
+  it("matches .html and .htm case-insensitively", () => {
+    expect(isHtmlPath("/a/b.html")).toBe(true);
+    expect(isHtmlPath("/a/b.HTM")).toBe(true);
+    expect(isHtmlPath("/a/b.md")).toBe(false);
+  });
+});
+
+describe("pickViewerMode (html)", () => {
+  it("renders .html statically by default", () => {
+    expect(pickViewerMode("/a/b.html", undefined)).toBe("html-static");
+  });
+  it("honours a persisted 'source' choice for .html", () => {
+    expect(pickViewerMode("/a/b.html", "source")).toBe("source");
+  });
+  it("treats .html as renderable", () => {
+    expect(isRenderablePath("/a/b.html")).toBe(true);
   });
 });

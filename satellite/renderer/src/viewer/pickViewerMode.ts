@@ -6,16 +6,20 @@
 export type PersistedRenderMode = "rendered" | "source";
 
 /** The concrete surface a viewer should mount for a file. */
-export type ViewerMode = "markdown-rendered" | "source";
+export type ViewerMode = "markdown-rendered" | "html-static" | "source";
 
 export function isMarkdownPath(p: string): boolean {
   return /\.(md|markdown)$/i.test(p);
 }
 
+export function isHtmlPath(p: string): boolean {
+  return /\.html?$/i.test(p);
+}
+
 /** True for file types that offer a rendered view (and thus a
  *  rendered/source toggle). Extended in Phase A to include HTML. */
 export function isRenderablePath(p: string): boolean {
-  return isMarkdownPath(p);
+  return isMarkdownPath(p) || isHtmlPath(p);
 }
 
 /**
@@ -27,8 +31,9 @@ export function pickViewerMode(
   path: string,
   persisted: PersistedRenderMode | undefined,
 ): ViewerMode {
-  if (isMarkdownPath(path) && persisted !== "source") {
-    return "markdown-rendered";
+  if (persisted !== "source") {
+    if (isMarkdownPath(path)) return "markdown-rendered";
+    if (isHtmlPath(path)) return "html-static";
   }
   return "source";
 }
