@@ -7,6 +7,12 @@
 // arrives in P3; editing + conflict UI arrives in P4.
 
 import { createMarkdownRenderer } from "./MarkdownRenderer";
+import {
+  isMarkdownPath,
+  isRenderablePath,
+  pickViewerMode,
+  type PersistedRenderMode,
+} from "./pickViewerMode";
 import { mountCodeEditor, type CodeEditorHandle } from "./CodeEditor";
 import { installCodeMirrorPathLinkifier } from "./CodeMirrorPathLinkifier";
 import {
@@ -196,10 +202,6 @@ function renderCreateBanner(opts: CreateBannerOptions): void {
 
   banner.appendChild(actions);
   opts.body.appendChild(banner);
-}
-
-function isMarkdownPath(p: string): boolean {
-  return /\.(md|markdown)$/i.test(p);
 }
 
 /**
@@ -911,10 +913,11 @@ async function renderStationRemote(
   // config key as renderForPath). Both modes are now editable via
   // SSH-backed writeStation; source mode is the keystroke-edit path,
   // rendered mode falls through to the toggle for actual editing.
-  const isMd = isMarkdownPath(filePath);
-  const markdownMode: MarkdownMode = isMd
+  const renderable = isRenderablePath(filePath);
+  const persisted: PersistedRenderMode | undefined = renderable
     ? await readMarkdownMode(filePath)
-    : "source";
+    : undefined;
+  const mode = pickViewerMode(filePath, persisted);
   let codeEditor: CodeEditorHandle | null = null;
   let baseline: FileBaseline = result.baseline;
 
@@ -984,9 +987,10 @@ async function renderStationRemote(
     },
   });
 
-  if (isMd) {
-    mountModeToggle(shell.modeToggleSlot, markdownMode, async () => {
-      const next: MarkdownMode = markdownMode === "rendered" ? "source" : "rendered";
+  if (renderable) {
+    const currentMode: MarkdownMode = persisted ?? "rendered";
+    mountModeToggle(shell.modeToggleSlot, currentMode, async () => {
+      const next: MarkdownMode = currentMode === "rendered" ? "source" : "rendered";
       await writeMarkdownMode(filePath, next);
       // Round 5 Phase W — when the user clicked "Edit source" to
       // jump out of rendered mode, the intent is clearly to edit.
@@ -1001,7 +1005,7 @@ async function renderStationRemote(
     shell.modeToggleSlot.innerHTML = "";
   }
 
-  if (isMd && markdownMode === "rendered") {
+  if (mode === "markdown-rendered") {
     const md = createMarkdownRenderer({
       onLinkActivate: (href) => {
         // Resolve relative hrefs against the station path. The
@@ -1309,13 +1313,15 @@ async function renderForPath(
   // user can toggle to "source" via the header button (mounts CodeMirror
   // with markdown grammar; all P4 auto-save + conflict-banner plumbing
   // re-runs). Code files don't show the toggle.
-  const isMd = isMarkdownPath(filePath);
-  const markdownMode: MarkdownMode = isMd
+  const renderable = isRenderablePath(filePath);
+  const persisted: PersistedRenderMode | undefined = renderable
     ? await readMarkdownMode(result.resolvedPath)
-    : "source";
-  if (isMd) {
-    mountModeToggle(shell.modeToggleSlot, markdownMode, async () => {
-      const next: MarkdownMode = markdownMode === "rendered" ? "source" : "rendered";
+    : undefined;
+  const mode = pickViewerMode(filePath, persisted);
+  if (renderable) {
+    const currentMode: MarkdownMode = persisted ?? "rendered";
+    mountModeToggle(shell.modeToggleSlot, currentMode, async () => {
+      const next: MarkdownMode = currentMode === "rendered" ? "source" : "rendered";
       await writeMarkdownMode(result.resolvedPath, next);
       // Re-enter the render path so the new mode mounts with all the
       // associated machinery (auto-save in source mode, link interception
@@ -1332,7 +1338,7 @@ async function renderForPath(
     shell.modeToggleSlot.innerHTML = "";
   }
 
-  if (isMd && markdownMode === "rendered") {
+  if (mode === "markdown-rendered") {
     const md = createMarkdownRenderer({
       onLinkActivate: (href) => {
         // Resolve relative hrefs against the file we're currently viewing.
