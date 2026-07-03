@@ -176,6 +176,7 @@ func (s *Server) Router() *chi.Mux {
 	r.Delete("/projects/{id}/panes/{pane_id}", s.handleDeletePane)
 	r.Post("/projects/{id}/panes/{pane_id}/rename", s.handleRenamePane)
 	r.Get("/projects/{id}/sessions", s.handleListSessions)
+	r.Get("/projects/{id}/sessions/{session_id}/transcript", s.handleTranscript)
 	r.Post("/projects/{id}/sessions/dismiss", s.handleDismissSessions)
 	r.Get("/restore-candidates", s.handleRestoreCandidates)
 	r.Post("/panes/{pane_id}/agent-event", s.handleAgentEvent)
