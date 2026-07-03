@@ -22,9 +22,11 @@ const STYLE_TEXT_PARK_ATTR = `${PARK_PREFIX}styletext`;
 
 /**
  * How a given (element, attribute) pair carries a URL. `"url"` values are a
- * single URL; `"srcset"` values are a comma-separated candidate list.
+ * single URL; `"srcset"` values are a comma-separated candidate list;
+ * `"cssurl"` values are a CSS-fragment whose external-ness is decided by an
+ * embedded `url(...)` (e.g. an SVG paint attribute `fill="url(https://…#g)"`).
  */
-type RefKind = "url" | "srcset";
+type RefKind = "url" | "srcset" | "cssurl";
 
 interface RefVector {
   /** CSS selector for candidate elements. When `localName` is also set this is
@@ -44,6 +46,37 @@ interface RefVector {
   readonly parkKey: string;
   readonly kind: RefKind;
 }
+
+/**
+ * SVG PRESENTATION attributes whose value is a CSS paint/resource reference
+ * that may point at an EXTERNAL document via `url(https://…#id)` / `url(//…)`.
+ * DOMPurify keeps these attributes, and the `style`-attribute neutralizer never
+ * inspects them, so an external `url()` here would be un-parked. These are
+ * same-document-only on Blink (inert on the Electron runtime) but leak on
+ * Gecko, so we close them for defense-in-depth. Local `url(#id)` fragment refs
+ * stay live — `"cssurl"` externality is decided by the embedded `url(...)`.
+ * Each attr name doubles as its park key; all are valid `data-*` fragments
+ * (hyphens allowed, no colon).
+ */
+const SVG_PRESENTATION_URL_ATTRS: readonly string[] = [
+  "fill",
+  "stroke",
+  "filter",
+  "mask",
+  "clip-path",
+  "marker",
+  "marker-start",
+  "marker-mid",
+  "marker-end",
+];
+
+const SVG_PRESENTATION_VECTORS: readonly RefVector[] =
+  SVG_PRESENTATION_URL_ATTRS.map((attr) => ({
+    selector: `[${attr}]`,
+    attr,
+    parkKey: attr,
+    kind: "cssurl" as const,
+  }));
 
 /**
  * Every external-loading attribute vector we neutralize. Reused verbatim by
@@ -99,6 +132,11 @@ const REF_VECTORS: readonly RefVector[] = [
     parkKey: "xlinkhref",
     kind: "url",
   },
+  // SVG paint/resource PRESENTATION attributes (fill/stroke/filter/mask/
+  // clip-path/marker[-start|-mid|-end]) carrying an external `url(https://…)`.
+  // `"cssurl"` kind → externality decided by the embedded `url(...)`, so
+  // `url(#localRef)` stays live.
+  ...SVG_PRESENTATION_VECTORS,
 ];
 
 /** External = trimmed value starts with http://, https://, or // (protocol-
@@ -123,22 +161,111 @@ const STYLE_URL_EXTERNAL = /url\(\s*['"]?(?:https?:|\/\/)/i;
 // `@import` of an external stylesheet, e.g. `@import "https://…"` or
 // `@import url(https://…)`.
 const STYLE_IMPORT_EXTERNAL = /@import\s+(?:url\(\s*)?['"]?(?:https?:|\/\/)/i;
-// CSS `image-set()` BARE-STRING form, e.g. `image-set('https://…' 1x)` — no
-// `url(` token, so `STYLE_URL_EXTERNAL` misses it entirely. Matches an
-// optionally-quoted external URL as the first `image-set(` argument. The
-// `image-set(url(https://…))` form is already caught by `STYLE_URL_EXTERNAL`.
+// CSS `image-set()` BARE-STRING form as a FAST-PATH / malformed-input fallback,
+// e.g. `image-set('https://…' 1x)` — no `url(` token, so `STYLE_URL_EXTERNAL`
+// misses it. Only catches the FIRST candidate; a non-first bare-string external
+// (`image-set(url(./a) 1x, 'https://…' 2x)`) is caught by the positional
+// `imageSetHasExternalRef` scanner below, which this regex backstops when the
+// parens are unbalanced.
 const STYLE_IMAGE_SET_EXTERNAL = /image-set\(\s*['"]?(?:https?:|\/\/)/i;
+
+// Head of an `image-set(` / `-webkit-image-set(` function. Global so
+// `imageSetHasExternalRef` can walk every occurrence in the CSS text.
+const IMAGE_SET_HEAD = /(?:-webkit-)?image-set\(/gi;
+
+// A single- or double-quoted CSS string; the delimiter is captured in group 1
+// and matched again at the end, with `\\.` allowing escaped chars inside. The
+// string CONTENT is captured in group 2 — used to scan image-set() bare-string
+// candidates for an external URL.
+const QUOTED_STRING = /(['"])((?:\\.|(?!\1).)*)\1/g;
+
+/**
+ * From `css` and the index of an opening `(`, return the substring strictly
+ * INSIDE the matching `)`, correctly skipping parens that live inside quoted
+ * strings and nested `url(...)` groups. Returns `null` when unbalanced.
+ */
+function extractBalancedGroup(css: string, openIndex: number): string | null {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = openIndex; i < css.length; i += 1) {
+    const ch = css[i];
+    if (quote !== null) {
+      if (ch === "\\") {
+        i += 1; // skip the escaped character
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") {
+      depth += 1;
+    } else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return css.slice(openIndex + 1, i);
+    }
+  }
+  return null;
+}
+
+/**
+ * True when an `image-set(...)` argument list contains an external candidate in
+ * ANY position — either an external `url(...)` OR a BARE quoted string that is
+ * an external URL. Bare quoted strings are treated as URL candidates ONLY here
+ * (inside image-set), never as generic CSS text, so we don't over-block e.g.
+ * `content:'https://…'`. Relative / `#fragment` / `data:` candidates are not
+ * external, so an all-relative list returns false and stays live.
+ */
+function argsHaveExternalCandidate(args: string): boolean {
+  // External `url(...)` anywhere in the candidate list (incl. quoted inner).
+  if (STYLE_URL_EXTERNAL.test(args)) return true;
+  // Any BARE quoted string whose content is an external URL.
+  QUOTED_STRING.lastIndex = 0;
+  for (
+    let m = QUOTED_STRING.exec(args);
+    m !== null;
+    m = QUOTED_STRING.exec(args)
+  ) {
+    if (isExternalUrl(m[2] ?? "")) return true;
+  }
+  return false;
+}
+
+/**
+ * Positional scanner for `image-set()` / `-webkit-image-set()`: finds every
+ * occurrence, isolates its balanced argument list, and reports whether ANY
+ * candidate (not just the first) is external — closing the bare-string
+ * non-first-candidate leak that the first-arg-only regex missed.
+ */
+function imageSetHasExternalRef(css: string): boolean {
+  IMAGE_SET_HEAD.lastIndex = 0;
+  for (
+    let head = IMAGE_SET_HEAD.exec(css);
+    head !== null;
+    head = IMAGE_SET_HEAD.exec(css)
+  ) {
+    const openIndex = head.index + head[0].length - 1; // index of the '('
+    const group = extractBalancedGroup(css, openIndex);
+    if (group !== null && argsHaveExternalCandidate(group)) return true;
+  }
+  return false;
+}
 
 /**
  * True when CSS text (an inline `style` value OR a `<style>` element body)
- * references an external sub-resource via `url(…)`, the bare-string
- * `image-set(…)`, or `@import`. External-only: `url(#id)` fragment refs and
- * `url(data:…)` URIs do NOT match, so they stay live (they never fetch).
+ * references an external sub-resource via `url(…)`, an `image-set(…)` candidate
+ * in ANY position (quoted-bare or `url()`), or `@import`. External-only:
+ * `url(#id)` fragment refs and `url(data:…)` URIs do NOT match, so they stay
+ * live (they never fetch).
  */
 function cssHasExternalRef(css: string): boolean {
   return (
     STYLE_URL_EXTERNAL.test(css) ||
     STYLE_IMAGE_SET_EXTERNAL.test(css) ||
+    imageSetHasExternalRef(css) ||
     STYLE_IMPORT_EXTERNAL.test(css)
   );
 }
@@ -177,7 +304,11 @@ export function neutralizeExternalRefs(root: HTMLElement): number {
       const live = el.getAttribute(vector.attr);
       if (live === null) continue;
       const external =
-        vector.kind === "srcset" ? srcsetHasExternal(live) : isExternalUrl(live);
+        vector.kind === "srcset"
+          ? srcsetHasExternal(live)
+          : vector.kind === "cssurl"
+            ? STYLE_URL_EXTERNAL.test(live)
+            : isExternalUrl(live);
       if (!external) continue;
       el.setAttribute(parkAttrFor(vector.parkKey), live);
       el.removeAttribute(vector.attr);

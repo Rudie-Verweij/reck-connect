@@ -367,6 +367,160 @@ describe("neutralizeExternalRefs — CSS image-set()", () => {
   });
 });
 
+describe("neutralizeExternalRefs — CSS image-set() non-first candidate", () => {
+  // The external ref appears as a NON-FIRST image-set() candidate. A
+  // positional first-arg-only regex misses these, so they used to fetch on
+  // Chromium/Retina. Each must now be parked all-or-nothing and restore
+  // verbatim.
+  const NONFIRST_STYLE_CASES: { name: string; style: string }[] = [
+    {
+      name: "bare single-quoted external as 2nd candidate",
+      style: `background:image-set(url(./a.png) 1x, '${EXTERNAL}' 2x)`,
+    },
+    {
+      name: "bare double-quoted external as 2nd candidate",
+      style: `background:image-set('./a' 1x, "${EXTERNAL}" 2x)`,
+    },
+    {
+      name: "external url() as non-first candidate",
+      style: `background:image-set(url(./a) 1x, url(${EXTERNAL}) 2x)`,
+    },
+    {
+      name: "-webkit-image-set external url() non-first",
+      style: `background:-webkit-image-set(url(./a) 1x, url(${EXTERNAL}) 2x)`,
+    },
+    {
+      name: "-webkit-image-set bare double-quoted non-first",
+      style: `background:-webkit-image-set('./a' 1x, "${EXTERNAL}" 2x)`,
+    },
+  ];
+
+  it.each(NONFIRST_STYLE_CASES)(
+    "inline style: $name → parked, restore reverses",
+    ({ style }) => {
+      // Set the attribute value directly rather than through innerHTML: a
+      // literal `"` inside a double-quoted HTML `style="…"` attribute would be
+      // truncated at HTML-parse time (a source-quoting artifact), whereas a
+      // sanitized DOM holds the exact value the neutralizer must inspect.
+      const root = makeRoot(`<div>x</div>`);
+      root.querySelector("div")!.setAttribute("style", style);
+      expect(neutralizeExternalRefs(root)).toBe(1);
+      const div = root.querySelector("div")!;
+      expect(div.hasAttribute("style")).toBe(false);
+      expect(div.getAttribute("data-reck-blocked-style")).toBe(style);
+      restoreExternalRefs(root);
+      expect(div.getAttribute("style")).toBe(style);
+      expect(div.hasAttribute("data-reck-blocked-style")).toBe(false);
+    },
+  );
+
+  it.each(NONFIRST_STYLE_CASES)(
+    "<style> block: $name → parked, restore reverses",
+    ({ style }) => {
+      const css = `.a{${style}}`;
+      const root = makeRoot(`<style>${css}</style>`);
+      expect(neutralizeExternalRefs(root)).toBe(1);
+      const styleEl = root.querySelector("style")!;
+      expect(styleEl.textContent).toBe("");
+      expect(styleEl.getAttribute("data-reck-blocked-styletext")).toBe(css);
+      restoreExternalRefs(root);
+      expect(styleEl.textContent).toBe(css);
+      expect(styleEl.hasAttribute("data-reck-blocked-styletext")).toBe(false);
+    },
+  );
+
+  it("negative control: all-relative image-set(url(./a) 1x, url(./b) 2x) stays LIVE", () => {
+    const style = "background:image-set(url(./a) 1x, url(./b) 2x)";
+    const root = makeRoot(`<div style="${style}">x</div>`);
+    expect(neutralizeExternalRefs(root)).toBe(0);
+    expect(countBlockedExternalRefs(root)).toBe(0);
+    expect(root.querySelector("div")!.getAttribute("style")).toBe(style);
+  });
+
+  it("negative control: image-set with only fragment/data candidates stays LIVE", () => {
+    const style =
+      "background:image-set('#frag' 1x, 'data:image/png;base64,AAAA' 2x)";
+    const root = makeRoot(`<div style="${style}">x</div>`);
+    expect(neutralizeExternalRefs(root)).toBe(0);
+    expect(root.querySelector("div")!.getAttribute("style")).toBe(style);
+  });
+});
+
+describe("neutralizeExternalRefs — SVG paint/resource presentation attributes", () => {
+  const SVG_ATTR_CASES: { name: string; attr: string; parkAttr: string }[] = [
+    { name: "fill", attr: "fill", parkAttr: "data-reck-blocked-fill" },
+    { name: "stroke", attr: "stroke", parkAttr: "data-reck-blocked-stroke" },
+    { name: "filter", attr: "filter", parkAttr: "data-reck-blocked-filter" },
+    { name: "mask", attr: "mask", parkAttr: "data-reck-blocked-mask" },
+    {
+      name: "clip-path",
+      attr: "clip-path",
+      parkAttr: "data-reck-blocked-clip-path",
+    },
+    { name: "marker", attr: "marker", parkAttr: "data-reck-blocked-marker" },
+    {
+      name: "marker-start",
+      attr: "marker-start",
+      parkAttr: "data-reck-blocked-marker-start",
+    },
+    {
+      name: "marker-mid",
+      attr: "marker-mid",
+      parkAttr: "data-reck-blocked-marker-mid",
+    },
+    {
+      name: "marker-end",
+      attr: "marker-end",
+      parkAttr: "data-reck-blocked-marker-end",
+    },
+  ];
+
+  it.each(SVG_ATTR_CASES)(
+    "$name with external url() → parked, restore reverses",
+    ({ attr, parkAttr }) => {
+      const value = `url(https://evil.example/x#g)`;
+      const root = makeRoot(`<svg><rect ${attr}="${value}"></rect></svg>`);
+      expect(neutralizeExternalRefs(root)).toBe(1);
+      const rect = root.querySelector("rect")!;
+      expect(rect.hasAttribute(attr)).toBe(false);
+      expect(rect.getAttribute(parkAttr)).toBe(value);
+      expect(countBlockedExternalRefs(root)).toBe(1);
+      restoreExternalRefs(root);
+      expect(rect.getAttribute(attr)).toBe(value);
+      expect(rect.hasAttribute(parkAttr)).toBe(false);
+    },
+  );
+
+  it.each(SVG_ATTR_CASES)(
+    "$name with local url(#id) fragment stays LIVE",
+    ({ attr, parkAttr }) => {
+      const value = "url(#local)";
+      const root = makeRoot(`<svg><rect ${attr}="${value}"></rect></svg>`);
+      expect(neutralizeExternalRefs(root)).toBe(0);
+      const rect = root.querySelector("rect")!;
+      expect(rect.getAttribute(attr)).toBe(value);
+      expect(rect.hasAttribute(parkAttr)).toBe(false);
+    },
+  );
+
+  it("parks fill and filter together on one element, restore reverses both", () => {
+    const root = makeRoot(
+      `<svg><rect fill="url(${EXTERNAL}#g)" filter="url(${EXTERNAL}#f)"></rect></svg>`,
+    );
+    // Two references neutralized (fill + filter)...
+    expect(neutralizeExternalRefs(root)).toBe(2);
+    // ...but only one blocked ELEMENT.
+    expect(countBlockedExternalRefs(root)).toBe(1);
+    const rect = root.querySelector("rect")!;
+    expect(rect.hasAttribute("fill")).toBe(false);
+    expect(rect.hasAttribute("filter")).toBe(false);
+    restoreExternalRefs(root);
+    expect(rect.getAttribute("fill")).toBe(`url(${EXTERNAL}#g)`);
+    expect(rect.getAttribute("filter")).toBe(`url(${EXTERNAL}#f)`);
+    expect(countBlockedExternalRefs(root)).toBe(0);
+  });
+});
+
 describe("neutralizeExternalRefs — untouched vectors", () => {
   it("leaves relative and data: URLs alone", () => {
     const root = makeRoot(
