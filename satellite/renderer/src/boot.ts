@@ -66,10 +66,7 @@ import {
   type OverlayScrollbar,
 } from "./search/OverlayScrollbar";
 import { terminalScrollSurface } from "./search/scrollSurfaces";
-import { createTranscriptView, type TranscriptViewHandle } from "./transcript/TranscriptView";
-import { createTranscriptTail, type TranscriptTail } from "./transcript/TranscriptTail";
-import { TranscriptParser } from "./transcript/parseTranscript";
-import { resolveTranscriptSession } from "./transcript/resolveSession";
+import { createTranscriptController } from "./transcript/TranscriptController";
 import type { TerminalPane } from "@client-core/terminal/terminal-pane";
 import {
   addTab,
@@ -998,71 +995,28 @@ export async function boot(splash?: StartupSplashController) {
   const terminalScrollbars = new WeakMap<TerminalPane, OverlayScrollbar>();
 
   // --- Claude transcript "History" overlays (#51) ---------------------
-  // One overlay per pane, keyed by paneId. The overlay mounts into the
-  // pane's wrapper (the xterm keeps running underneath) and tails the
-  // session transcript from the pane's host daemon — the exact,
-  // whole-chat scroll/search surface the alt-screen terminal can't be.
-  const transcriptOverlays = new Map<
-    string,
-    { view: TranscriptViewHandle; tail: TranscriptTail }
-  >();
-
-  function closeTranscript(paneId: string): void {
-    const overlay = transcriptOverlays.get(paneId);
-    if (!overlay) return;
-    transcriptOverlays.delete(paneId);
-    overlay.tail.stop();
-    overlay.view.dispose();
-  }
-
-  async function toggleTranscriptForPane(paneId: string): Promise<void> {
-    if (transcriptOverlays.has(paneId)) {
-      closeTranscript(paneId);
-      return;
-    }
-    const rec = layout.getTerminalRecordByPane(paneId);
-    if (!rec || rec.tab.kind !== "claude") return;
-    const projectId = currentProjectId;
-    if (!projectId) return;
-    const api = apiForHost(rec.tab.host);
-    const sessionId = await resolveTranscriptSession({
-      tabSessionId: rec.tab.sessionId,
-      paneId,
-      listSessions: () => api.listSessions(projectId),
-    });
-    if (!sessionId) {
-      // Freshly-spawned pane whose session record hasn't landed yet, or
-      // the daemon is unreachable — the banner covers the latter.
-      console.warn(`[transcript] no session known for pane ${paneId} yet`);
-      return;
-    }
-    if (transcriptOverlays.has(paneId)) return; // double-toggle race
-    const view = createTranscriptView({
-      host: rec.wrapper,
-      title: rec.tab.title || "Claude",
-      onClose: () => closeTranscript(paneId),
-    });
-    const parser = new TranscriptParser();
-    const tail = createTranscriptTail({
-      fetchChunk: (offset) => {
-        // Layout rebuilds (project switch, pane close) replace the
-        // wrapper; a disconnected root means the overlay is a ghost —
-        // shut down instead of polling forever.
-        if (!view.root.isConnected) {
-          closeTranscript(paneId);
-          return Promise.resolve({ chunk: "", nextOffset: offset, hasMore: false });
-        }
-        return api.getTranscript(projectId, sessionId, offset);
-      },
-      onChunk: (chunk) => {
-        const update = parser.push(chunk);
-        if (update) view.render(parser.turns, update.firstChanged);
-      },
-      onError: (e) => console.warn("[transcript] tail error:", e),
-    });
-    transcriptOverlays.set(paneId, { view, tail });
-    tail.start();
-  }
+  // Owned by the TranscriptController: one overlay per pane, mounted in
+  // the pane's wrapper (the xterm keeps running underneath), tailing the
+  // session transcript from the pane's host daemon. The controller
+  // always shows a visible status (loading/error/no-session) instead of
+  // failing silently, and traces every decision with `[transcript]`
+  // console logs — set localStorage["reck-transcript-debug"]="1" for
+  // per-poll/per-render verbosity.
+  const transcripts = createTranscriptController({
+    resolvePane: (paneId) => {
+      const rec = layout.getTerminalRecordByPane(paneId);
+      if (!rec) return null;
+      return {
+        wrapper: rec.wrapper,
+        kind: rec.tab.kind,
+        host: rec.tab.host,
+        title: rec.tab.title ?? "",
+        sessionId: rec.tab.sessionId,
+      };
+    },
+    projectId: () => currentProjectId,
+    api: (host) => apiForHost(host),
+  });
 
   const layout: PaneLayout = new PaneLayout({
     root: layoutRoot,
@@ -1600,7 +1554,7 @@ export async function boot(splash?: StartupSplashController) {
     },
     // "History" (#51): toggle the transcript overlay for a Claude pane.
     onHistoryPane: (paneId) => {
-      void toggleTranscriptForPane(paneId);
+      void transcripts.toggle(paneId);
     },
   });
   layout.setTheme(theme);
@@ -2059,7 +2013,7 @@ export async function boot(splash?: StartupSplashController) {
         if (!rec) return null;
         // An open History overlay owns ⌘F for its pane (#51): search
         // the whole transcript, not the terminal's visible rows.
-        const overlay = transcriptOverlays.get(rec.tab.paneId);
+        const overlay = transcripts.get(rec.tab.paneId);
         if (overlay) {
           return new MarkdownSearchAdapter({
             container: overlay.view.root,
@@ -2077,7 +2031,7 @@ export async function boot(splash?: StartupSplashController) {
       onMatchesChanged: (fractions) => {
         const rec = layout.getActiveTerminalRecord();
         if (!rec) return;
-        const overlay = transcriptOverlays.get(rec.tab.paneId);
+        const overlay = transcripts.get(rec.tab.paneId);
         if (overlay) {
           overlay.view.setMatches(fractions);
           return;

@@ -3441,10 +3441,24 @@ textarea.file-viewer-merge-pane {
   inset: 0;
   z-index: 30;
   display: grid;
-  grid-template-rows: 34px 1fr;
+  grid-template-rows: 34px auto 1fr;
   overflow: hidden;
   background: var(--app-bg);
   color: var(--app-text);
+}
+.transcript-status {
+  padding: 6px 22px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--app-text-dim);
+}
+.transcript-status--error {
+  color: var(--claude-orange);
+}
+.transcript-status--hidden {
+  display: none;
 }
 .transcript-header {
   display: flex;

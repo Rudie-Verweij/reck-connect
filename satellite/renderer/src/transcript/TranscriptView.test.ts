@@ -108,4 +108,23 @@ describe("TranscriptView", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("setStatus shows loading/empty/error messages and 'live' hides the banner", () => {
+    const status = () => view.root.querySelector(".transcript-status") as HTMLElement;
+
+    view.setStatus({ kind: "loading", message: "Loading transcript…" });
+    expect(status().textContent).toContain("Loading transcript…");
+    expect(status().classList.contains("transcript-status--hidden")).toBe(false);
+
+    view.setStatus({ kind: "error", message: "fetch failed (404) — retrying…" });
+    expect(status().textContent).toContain("404");
+    expect(status().classList.contains("transcript-status--error")).toBe(true);
+
+    view.setStatus({ kind: "empty", message: "No transcript session found." });
+    expect(status().textContent).toContain("No transcript session");
+    expect(status().classList.contains("transcript-status--error")).toBe(false);
+
+    view.setStatus({ kind: "live" });
+    expect(status().classList.contains("transcript-status--hidden")).toBe(true);
+  });
 });

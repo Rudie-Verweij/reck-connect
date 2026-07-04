@@ -62,7 +62,10 @@ export function createTranscriptTail(opts: TranscriptTailOptions): TranscriptTai
     start() {
       if (running) return;
       running = true;
-      schedule(0);
+      // First poll runs immediately (no 0ms timer bounce) so a caller
+      // that starts a tail inside an async chain doesn't need an extra
+      // timer flush before the first fetch happens.
+      void poll();
     },
     stop() {
       running = false;

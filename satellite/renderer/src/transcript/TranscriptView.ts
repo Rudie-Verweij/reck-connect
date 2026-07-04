@@ -28,6 +28,12 @@ export interface TranscriptViewOptions {
   onClose(): void;
 }
 
+/** Visible overlay state. The overlay must never look silently dead:
+ *  loading/empty/error render a banner under the header; `live` hides it. */
+export type TranscriptStatus =
+  | { kind: "loading" | "empty" | "error"; message: string }
+  | { kind: "live" };
+
 export interface TranscriptViewHandle {
   /** `.transcript-view` — the positioned overlay root. */
   root: HTMLElement;
@@ -35,6 +41,8 @@ export interface TranscriptViewHandle {
   body: HTMLElement;
   /** (Re)render turns from `firstChanged` onward. */
   render(turns: readonly TranscriptTurn[], firstChanged: number): void;
+  /** Show/replace/hide the status banner. */
+  setStatus(status: TranscriptStatus): void;
   /** Route search-match fractions to the overlay scrollbar's ticks. */
   setMatches(fractions: readonly number[]): void;
   dispose(): void;
@@ -64,10 +72,14 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
   header.appendChild(title);
   header.appendChild(close);
 
+  const status = document.createElement("div");
+  status.className = "transcript-status transcript-status--hidden";
+
   const body = document.createElement("div");
   body.className = "transcript-body";
 
   root.appendChild(header);
+  root.appendChild(status);
   root.appendChild(body);
   opts.host.appendChild(root);
 
@@ -158,10 +170,23 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
     }
   }
 
+  function setStatus(s: TranscriptStatus): void {
+    if (s.kind === "live") {
+      status.classList.add("transcript-status--hidden");
+      status.classList.remove("transcript-status--error");
+      status.textContent = "";
+      return;
+    }
+    status.textContent = s.message;
+    status.classList.remove("transcript-status--hidden");
+    status.classList.toggle("transcript-status--error", s.kind === "error");
+  }
+
   return {
     root,
     body,
     render,
+    setStatus,
     setMatches: (fractions) => scrollbar.setMatches(fractions),
     dispose() {
       if (disposed) return;

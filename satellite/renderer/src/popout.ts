@@ -31,9 +31,7 @@ import { MarkdownSearchAdapter } from "./search/MarkdownSearchAdapter";
 import { createOverlayScrollbar } from "./search/OverlayScrollbar";
 import { terminalScrollSurface } from "./search/scrollSurfaces";
 import { ApiClient } from "@client-core/api/client";
-import { createTranscriptView, type TranscriptViewHandle } from "./transcript/TranscriptView";
-import { createTranscriptTail, type TranscriptTail } from "./transcript/TranscriptTail";
-import { TranscriptParser } from "./transcript/parseTranscript";
+import { createTranscriptController } from "./transcript/TranscriptController";
 import { resolveTranscriptSession } from "./transcript/resolveSession";
 
 const DEFAULT_LOCAL_PORT = 7315;
@@ -210,62 +208,44 @@ async function bootPopout(): Promise<void> {
   })();
 
   // Transcript "History" overlay (#51) — parity with the main window's
-  // per-pane toggle. The popout URL doesn't carry the pane's kind, so
-  // gate the button on whether a Claude session actually resolves for
-  // this pane (shell/codex popouts simply never get the button).
+  // per-pane toggle, driven by the same TranscriptController (visible
+  // loading/error/no-session states + `[transcript]` logging). The
+  // popout URL doesn't carry the pane's kind, so gate the button on
+  // whether a Claude session actually resolves for this pane
+  // (shell/codex popouts simply never get the button).
   const api = new ApiClient({
     baseUrl: resolved.baseUrl,
     token: resolved.token ?? undefined,
   });
   // Narrowed copies for the closures below — TS drops the `!info`
   // guard's narrowing inside nested functions.
+  const panePaneId = info.paneId;
   const paneProjectId = info.projectId;
   const paneTitle = info.title;
-  let transcriptOverlay: { view: TranscriptViewHandle; tail: TranscriptTail } | null = null;
-
-  function closeTranscript(): void {
-    if (!transcriptOverlay) return;
-    const overlay = transcriptOverlay;
-    transcriptOverlay = null;
-    overlay.tail.stop();
-    overlay.view.dispose();
-  }
-
-  function openTranscript(sessionId: string): void {
-    if (transcriptOverlay) {
-      closeTranscript();
-      return;
-    }
-    const view = createTranscriptView({
-      host: body,
+  const paneHost = info.host;
+  const transcripts = createTranscriptController({
+    resolvePane: () => ({
+      wrapper: body,
+      kind: "claude", // gated below: button only exists when a session resolves
+      host: paneHost,
       title: paneTitle || "Claude",
-      onClose: closeTranscript,
-    });
-    const parser = new TranscriptParser();
-    const tail = createTranscriptTail({
-      fetchChunk: (offset) => api.getTranscript(paneProjectId, sessionId, offset),
-      onChunk: (chunk) => {
-        const update = parser.push(chunk);
-        if (update) view.render(parser.turns, update.firstChanged);
-      },
-      onError: (e) => console.warn("[popout] transcript tail error:", e),
-    });
-    transcriptOverlay = { view, tail };
-    tail.start();
-  }
+    }),
+    projectId: () => paneProjectId,
+    api: () => api,
+  });
 
   void (async () => {
     try {
       const sessionId = await resolveTranscriptSession({
-        paneId: info.paneId,
-        listSessions: () => api.listSessions(info.projectId),
+        paneId: panePaneId,
+        listSessions: () => api.listSessions(paneProjectId),
       });
       if (!sessionId) return; // not a Claude pane (or no transcript yet)
       const historyBtn = document.createElement("button");
       historyBtn.type = "button";
       historyBtn.title = "Chat history — scroll & search the full transcript";
       historyBtn.textContent = "History";
-      historyBtn.addEventListener("click", () => openTranscript(sessionId));
+      historyBtn.addEventListener("click", () => void transcripts.toggle(panePaneId));
       actions.insertBefore(historyBtn, reattachBtn);
     } catch (e) {
       console.warn("[popout] history disabled:", e);
@@ -285,10 +265,11 @@ async function bootPopout(): Promise<void> {
       getActiveSearchSurface: () => {
         // An open History overlay owns ⌘F (#51) — search the whole
         // transcript rather than the terminal's visible rows.
-        if (transcriptOverlay) {
+        const overlay = transcripts.get(panePaneId);
+        if (overlay) {
           return new MarkdownSearchAdapter({
-            container: transcriptOverlay.view.root,
-            body: transcriptOverlay.view.body,
+            container: overlay.view.root,
+            body: overlay.view.body,
           });
         }
         return new TerminalSearchAdapter({
@@ -299,8 +280,9 @@ async function bootPopout(): Promise<void> {
         });
       },
       onMatchesChanged: (fractions) => {
-        if (transcriptOverlay) {
-          transcriptOverlay.view.setMatches(fractions);
+        const overlay = transcripts.get(panePaneId);
+        if (overlay) {
+          overlay.view.setMatches(fractions);
           return;
         }
         scrollbar.setMatches(fractions);
