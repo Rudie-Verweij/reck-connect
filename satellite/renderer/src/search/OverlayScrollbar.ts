@@ -8,17 +8,17 @@
 // measurement — it works the same in the Electron renderer and under
 // jsdom, and stays correct across resizes without a ResizeObserver.
 //
-// Two rendering modes, re-chosen on every frame from `surface.ownsScroll()`:
+// Two behaviours, chosen from `surface.ownsScroll()`:
 //
-//   • Truthful  (plain-shell terminal, markdown, CodeMirror): the thumb's
-//     size and position come from the real scroll metrics. Unchanged.
-//   • Simulated (mouse-tracking TUI — Claude Code, less, vim): the TUI grabs
-//     the wheel and repaints in place, so xterm's `viewportY` is frozen and
-//     the metrics are meaningless. We instead track CUMULATIVE WHEEL DELTA as
-//     a position proxy: each wheel-up raises the thumb, each wheel-down lowers
-//     it, clamped to a fixed `SIM_TRAVEL_PX` budget. This is a *rough
-//     indicator of how far you've scrolled back*, NOT a faithful mirror of the
-//     TUI's real position — there is no API to read that. See SIM_TRAVEL_PX.
+//   • Truthful  (plain-shell terminal, markdown, CodeMirror): the thumb's size
+//     and position come from the real scroll metrics, and the native wheel
+//     scrolls the surface. Unchanged.
+//   • TUI pane  (mouse-tracking TUI — Claude Code, less, vim): there is NO
+//     exact position to draw — the app runs on the alternate screen (no xterm
+//     scrollback) and grabs the wheel. We do NOT fake a thumb; we keep the bar
+//     hidden and translate the wheel into PgUp/PgDn keystrokes sent to the PTY
+//     (`surface.pageScroll`) so the app scrolls its own transcript. (Claude
+//     2.1.150+ ignores wheel-as-mouse for scroll; PgUp/PgDn works regardless.)
 
 import type { ScrollSurface } from "./scrollSurfaces";
 
@@ -47,18 +47,12 @@ export interface OverlayScrollbar {
 const DEFAULT_HIDE_DELAY_MS = 1400;
 const DEFAULT_MIN_THUMB_PCT = 8;
 
-// --- Simulated-mode tuning -------------------------------------------------
-// A mouse-tracking TUI exposes no scroll extent, so the simulated thumb maps a
-// fixed cumulative-wheel-delta budget onto the track. These are deliberate
-// guesses and the source of the mode's honest limits:
-//   • SIM_TRAVEL_PX too small → a long scroll-up pins the thumb at the top
-//     before you've reached the real top of the history.
-//   • SIM_TRAVEL_PX too large → a short history never drives the thumb up far.
-// They convey a *sense* of position, not an accurate one. Tune to taste.
-const SIM_TRAVEL_PX = 4000;
-const SIM_THUMB_PCT = 16;
-const WHEEL_LINE_PX = 16; // deltaMode === 1 (lines) → px
-const WHEEL_PAGE_PX = 800; // deltaMode === 2 (pages) → px
+// Wheel → PgUp/PgDn stepping for a mouse-tracking TUI pane. A TUI only scrolls
+// by whole pages (PgUp/PgDn), so we accumulate normalized wheel delta and emit
+// one page key per ~notch — a trackpad swipe pages a few times, not dozens.
+const PAGE_STEP_PX = 100;
+const WHEEL_LINE_PX = 16; // deltaMode 1 (lines) → px
+const WHEEL_PAGE_PX = 800; // deltaMode 2 (pages) → px
 
 export function createOverlayScrollbar(
   opts: OverlayScrollbarOptions,
@@ -79,19 +73,25 @@ export function createOverlayScrollbar(
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
   let dragging = false;
   let disposed = false;
-  // Simulated-mode position: px scrolled up from the bottom (0 = at bottom).
-  let simPos = 0;
+  // Accumulated normalized wheel delta for TUI-pane page stepping (px).
+  let wheelAcc = 0;
 
-  /** True when the surface owns scrolling (a mouse-tracking TUI) and the
-   *  truthful metrics are frozen. Re-evaluated every frame because Claude Code
-   *  toggles mouse tracking on launch/exit within a single long-lived pane. */
-  function isSimulated(): boolean {
+  /** True when the surface owns scrolling — a mouse-tracking TUI (Claude Code,
+   *  less, vim). Re-evaluated per call because Claude toggles mouse tracking on
+   *  launch/exit within a single long-lived pane. */
+  function isTuiPane(): boolean {
     return opts.surface.ownsScroll?.() === true;
   }
 
   function update(): void {
-    if (isSimulated()) renderSimulated();
-    else renderTruthful();
+    if (isTuiPane()) {
+      // No exact position exists (alt-screen, no xterm scrollback). Don't fake
+      // a thumb — scrolling is handled by wheel → PgUp/PgDn. Keep the bar out
+      // of the way.
+      track.classList.add("reck-scrollbar--disabled");
+      return;
+    }
+    renderTruthful();
   }
 
   // Truthful: size and position the thumb from the real scroll metrics, and
@@ -111,17 +111,6 @@ export function createOverlayScrollbar(
     const fraction = clamp01(m.scrollTop / scrollable);
     const topPct = fraction * (100 - heightPct);
     thumb.style.height = `${trim(heightPct)}%`;
-    thumb.style.top = `${trim(topPct)}%`;
-  }
-
-  // Simulated: a fixed-height thumb whose position is the cumulative wheel
-  // delta. Never disabled — the bar is the *only* scroll feedback the user
-  // gets in a TUI pane, so it stays mounted (it still auto-hides on idle).
-  function renderSimulated(): void {
-    track.classList.remove("reck-scrollbar--disabled");
-    const fraction = clamp01(simPos / SIM_TRAVEL_PX); // 0 = bottom, 1 = top
-    const topPct = (1 - fraction) * (100 - SIM_THUMB_PCT);
-    thumb.style.height = `${trim(SIM_THUMB_PCT)}%`;
     thumb.style.top = `${trim(topPct)}%`;
   }
 
@@ -150,29 +139,35 @@ export function createOverlayScrollbar(
   }
 
   function onWheel(e: WheelEvent): void {
-    if (isSimulated()) {
-      // The TUI owns scrolling and the metrics are frozen, so advance the
-      // simulated position by the wheel delta instead. wheel-up (deltaY < 0)
-      // raises simPos; wheel-down lowers it. preventDefault stops the browser
-      // from native-scrolling the (empty) xterm viewport under the redraw —
-      // it cancels the browser default action only, not xterm's own wheel
-      // handler, which still forwards the gesture to Claude Code.
-      simPos = clamp(simPos - wheelDeltaPx(e), 0, SIM_TRAVEL_PX);
+    if (isTuiPane()) {
+      // Claude 2.1.150+ turns the wheel into arrow keys, and the alt-screen has
+      // no scrollback to move. Drive the robust keyboard scroll instead: wheel
+      // → PgUp/PgDn into the PTY, accumulated so one notch ≈ one page (a
+      // trackpad swipe doesn't fly through). Swallow the event (capture phase)
+      // so xterm's broken wheel handler never runs.
+      const dy = wheelDeltaPx(e);
+      if (dy === 0) return; // horizontal / empty — leave it alone
+      wheelAcc += dy;
+      const dir = wheelAcc < 0 ? -1 : 1;
+      while (Math.abs(wheelAcc) >= PAGE_STEP_PX) {
+        opts.surface.pageScroll?.(dir);
+        wheelAcc -= dir * PAGE_STEP_PX;
+      }
       e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
     }
     // Truthful mode: do NOT preventDefault — the native scroll is what moves
-    // the viewport and fires onScroll. Recompute (clears `--disabled` once
-    // there's scrollback) and flash the bar into view.
+    // the viewport and fires onScroll. Recompute and flash the bar into view.
     update();
     flashShow();
   }
 
   function onPointerDown(e: Event): void {
     // Drag-to-drive is only meaningful in truthful mode. In a mouse-tracking
-    // pane the thumb is a passive indicator (driving the TUI would require
-    // injecting wheel sequences into the PTY — out of scope), so swallow the
-    // grab rather than seek to a meaningless fraction.
-    if (isSimulated()) return;
+    // pane the bar is hidden and the wheel pages via PgUp/PgDn, so there's
+    // nothing to drag — swallow the grab.
+    if (isTuiPane()) return;
     dragging = true;
     track.classList.add("reck-scrollbar--dragging");
     track.classList.add("visible");
@@ -247,13 +242,6 @@ export function createOverlayScrollbar(
 function clamp01(n: number): number {
   if (!Number.isFinite(n) || n < 0) return 0;
   if (n > 1) return 1;
-  return n;
-}
-
-function clamp(n: number, lo: number, hi: number): number {
-  if (!Number.isFinite(n)) return lo;
-  if (n < lo) return lo;
-  if (n > hi) return hi;
   return n;
 }
 

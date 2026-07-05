@@ -1055,6 +1055,7 @@ export async function boot(splash?: StartupSplashController) {
           host,
           surface: terminalScrollSurface(
             pane.getXterm() as unknown as Parameters<typeof terminalScrollSurface>[0],
+            (bytes) => pane.sendInput(bytes),
           ),
         });
         terminalScrollbars.set(pane, sb);

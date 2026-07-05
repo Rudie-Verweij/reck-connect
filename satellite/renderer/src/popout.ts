@@ -209,6 +209,7 @@ async function bootPopout(): Promise<void> {
       host: body,
       surface: terminalScrollSurface(
         term.getXterm() as unknown as Parameters<typeof terminalScrollSurface>[0],
+        (bytes) => term.sendInput(bytes),
       ),
     });
     initSearch({

@@ -25,6 +25,12 @@ export interface ScrollSurface {
    *  real position from metrics and falls back to a simulated (cumulative
    *  wheel-delta) thumb. Absent/false → the metrics are truthful. */
   ownsScroll?(): boolean;
+  /** Optional: page the surface by one screenful in `dir` (-1 = up, +1 =
+   *  down) and return true if handled. Used for mouse-tracking TUIs (Claude
+   *  Code, less, vim) whose transcript can't be scrolled from xterm at all —
+   *  we inject PgUp/PgDn into the PTY instead. DOM / plain-shell surfaces
+   *  leave this unset and scroll natively. */
+  pageScroll?(dir: -1 | 1): boolean;
   /** Optional: fires when the surface re-renders without a scroll (new
    *  output, in-place TUI redraw, font/size change). The scrollbar uses this
    *  to recompute geometry — e.g. clear its disabled state once scrollback
@@ -64,10 +70,21 @@ interface ScrollableTerminal {
   onRender?(cb: () => void): { dispose(): void };
 }
 
+// PTY key sequences that scroll a mouse-tracking TUI's own transcript. The
+// wheel-as-mouse path is unreliable (Claude 2.1.150+ turns it into arrow keys);
+// keyboard PgUp/PgDn works regardless of the terminal's mouse mode.
+const PGUP = "\x1b[5~";
+const PGDN = "\x1b[6~";
+
 /** An xterm terminal. Scroll position is line-based: `viewportY` is the
  *  top visible absolute line, `baseY` the max scroll-top (scrollback
- *  size), `length` the total buffer height, `rows` the viewport height. */
-export function terminalScrollSurface(term: ScrollableTerminal): ScrollSurface {
+ *  size), `length` the total buffer height, `rows` the viewport height.
+ *  `sendInput`, when provided, writes raw bytes to the PTY — used by
+ *  `pageScroll` to drive a mouse-tracking TUI via PgUp/PgDn. */
+export function terminalScrollSurface(
+  term: ScrollableTerminal,
+  sendInput?: (bytes: Uint8Array) => void,
+): ScrollSurface {
   return {
     getMetrics: () => ({
       scrollTop: term.buffer.active.viewportY,
@@ -78,11 +95,18 @@ export function terminalScrollSurface(term: ScrollableTerminal): ScrollSurface {
       const line = Math.round(clamp01(fraction) * term.buffer.active.baseY);
       term.scrollToLine(line);
     },
-    // A mouse-tracking TUI repaints in place and never moves `viewportY`, so
-    // the metrics above are frozen and a truthful thumb is impossible. Report
-    // that so the scrollbar switches to its simulated (wheel-delta) thumb.
-    // Default to "none" (truthful) when the terminal doesn't model modes.
+    // A mouse-tracking TUI (Claude Code, less, vim) grabs the mouse and runs on
+    // the alternate screen — no xterm scrollback, so a truthful thumb is
+    // impossible. Report that so the scrollbar hides its thumb and routes the
+    // wheel to `pageScroll` instead. Default "none" (truthful) when unmodelled.
     ownsScroll: () => (term.modes?.mouseTrackingMode ?? "none") !== "none",
+    // Wheel over such a pane → PgUp/PgDn into the PTY so the TUI scrolls its
+    // own transcript. No-op (returns false) when no PTY sink is wired.
+    pageScroll: (dir) => {
+      if (!sendInput) return false;
+      sendInput(new TextEncoder().encode(dir < 0 ? PGUP : PGDN));
+      return true;
+    },
     onScroll: (cb) => {
       const sub = term.onScroll(cb);
       return () => sub.dispose();
