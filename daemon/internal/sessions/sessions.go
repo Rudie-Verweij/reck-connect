@@ -396,6 +396,26 @@ func TranscriptPath(claudeProjectsDir, cwd, sessionID string) string {
 	return filepath.Join(claudeProjectsDir, EncodeCwd(cwd), sessionID+".jsonl")
 }
 
+// ResolveTranscriptCwd returns the first candidate cwd whose EncodeCwd()
+// folder actually holds sessionID's transcript. It is the read-side recovery
+// primitive for git-worktree sessions (issue #56): the caller passes the
+// project root plus its live git worktrees, and this reports the directory
+// Claude Code actually ran in — WITHOUT lossy-decoding a folder name back to a
+// path (EncodeCwd collapses '/', '.', '-' all to '-', so decode is ambiguous).
+//
+// candidateCwds is tried in order, so put the canonical (recorded) cwd first
+// to prefer it when a transcript exists under more than one candidate. Returns
+// ("", false) when no candidate holds the transcript (e.g. the worktree was
+// removed) — the caller must then NOT resume in the wrong cwd.
+func ResolveTranscriptCwd(claudeProjectsDir, sessionID string, candidateCwds []string) (string, bool) {
+	for _, cwd := range candidateCwds {
+		if st, err := os.Stat(TranscriptPath(claudeProjectsDir, cwd, sessionID)); err == nil && !st.IsDir() {
+			return cwd, true
+		}
+	}
+	return "", false
+}
+
 // FindTranscript locates a session's JSONL. It prefers the canonical path
 // (EncodeCwd(cwd)/<sid>.jsonl) but falls back to a glob across every project
 // dir when that misses: a session that ran in a git worktree or a subdir is

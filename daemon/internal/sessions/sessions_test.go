@@ -141,6 +141,75 @@ func TestList_keepsWorktreeSessionUnderSuffixedDir(t *testing.T) {
 	}
 }
 
+func TestResolveTranscriptCwd(t *testing.T) {
+	// #56 Layer B: given a set of candidate cwds (project root + its git
+	// worktrees), return the one whose EncodeCwd() folder actually holds the
+	// transcript. This recovers the real runtime cwd WITHOUT lossy-decoding a
+	// folder name, so a mis-recorded worktree session can be resumed in the
+	// directory Claude actually wrote to.
+	claudeDir := t.TempDir()
+	root := "/home/u/proj"
+	worktree := "/home/u/proj/.claude-worktrees/feat-x"
+	sid := NewUUID()
+
+	seed := func(cwd string) {
+		dir := filepath.Join(claudeDir, EncodeCwd(cwd))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, sid+".jsonl"), []byte(`{"type":"user"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("canonical candidate wins", func(t *testing.T) {
+		dir := t.TempDir()
+		encoded := filepath.Join(dir, EncodeCwd(root))
+		if err := os.MkdirAll(encoded, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(encoded, sid+".jsonl"), []byte(`x`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := ResolveTranscriptCwd(dir, sid, []string{root, worktree})
+		if !ok || got != root {
+			t.Fatalf("ResolveTranscriptCwd = (%q, %v), want (%q, true)", got, ok, root)
+		}
+	})
+
+	t.Run("worktree candidate recovered when canonical misses", func(t *testing.T) {
+		seed(worktree)
+		got, ok := ResolveTranscriptCwd(claudeDir, sid, []string{root, worktree})
+		if !ok || got != worktree {
+			t.Fatalf("ResolveTranscriptCwd = (%q, %v), want (%q, true)", got, ok, worktree)
+		}
+	})
+
+	t.Run("no candidate holds the transcript", func(t *testing.T) {
+		got, ok := ResolveTranscriptCwd(t.TempDir(), NewUUID(), []string{root, worktree})
+		if ok || got != "" {
+			t.Fatalf("ResolveTranscriptCwd = (%q, %v), want (\"\", false)", got, ok)
+		}
+	})
+
+	t.Run("first matching candidate wins", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, cwd := range []string{root, worktree} {
+			enc := filepath.Join(dir, EncodeCwd(cwd))
+			if err := os.MkdirAll(enc, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(enc, sid+".jsonl"), []byte(`x`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, _ := ResolveTranscriptCwd(dir, sid, []string{worktree, root})
+		if got != worktree {
+			t.Fatalf("ResolveTranscriptCwd first-match = %q, want %q", got, worktree)
+		}
+	})
+}
+
 func TestList_sortsByLastActiveDesc(t *testing.T) {
 	s, dir := newStore(t)
 	cwd := "/x/y"
