@@ -3701,6 +3701,32 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   margin-left: 6px;
 }
 
+/* Long user message clamp — height clip (NOT display:none) so the hidden text
+   stays in the DOM and the search bar can still find it. */
+.transcript-clampable {
+  position: relative;
+}
+.transcript-clampable--clamped .transcript-clamp-body {
+  max-height: 15em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 72%, transparent 100%);
+}
+.transcript-clamp-toggle {
+  margin-top: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-bg-raised);
+  color: var(--claude-orange);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  user-select: none;
+}
+.transcript-clamp-toggle:hover { border-color: var(--claude-orange); }
+
 /* Plan-approved chip — a slim confirmation, not the boilerplate result text. */
 .transcript-plan-approved {
   display: inline-flex;

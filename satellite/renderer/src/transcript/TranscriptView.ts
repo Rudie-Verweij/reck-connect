@@ -75,6 +75,12 @@ function isExternalHref(href: string): boolean {
   return /^[a-z][a-z0-9+.-]*:/i.test(href);
 }
 
+/** Threshold for clamping a user message behind "Show more" — a proxy for
+ *  "taller than a screenful" that's deterministic (jsdom has no layout). */
+function isLongText(text: string): boolean {
+  return text.length > 600 || text.split("\n").length > 12;
+}
+
 export function createTranscriptView(opts: TranscriptViewOptions): TranscriptViewHandle {
   // `reck-native-scroll` opts the overlay out of the pane wrapper's
   // TUI wheel→PgUp/PgDn remap (OverlayScrollbar capture listener) so
@@ -183,7 +189,10 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
     // the same `a.reck-internal-link` anchors the markdown renderer emits, so
     // the transcript's single delegated Cmd-click handler opens them too.
     wrapFreeTextPaths(el);
-    return el;
+    // A long user message (e.g. a pasted plan) is clamped behind "Show more"
+    // so it doesn't dominate — via a height clip, NOT display:none, so the
+    // search bar still finds the hidden text.
+    return isLongText(text) ? clampable(el) : el;
   }
 
   // A slash command (/clear, /model, …) the user ran — a slim chip, not a
@@ -272,6 +281,26 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
     el.className = "transcript-plan-approved";
     el.textContent = "✓ Plan approved";
     return el;
+  }
+
+  // Wrap a tall block in a height-clipped container + "Show more" toggle. The
+  // clip is CSS max-height/overflow (text stays in the DOM), so the search
+  // subsystem still walks and matches the hidden text.
+  function clampable(inner: HTMLElement): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "transcript-clampable transcript-clampable--clamped";
+    inner.classList.add("transcript-clamp-body");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "transcript-clamp-toggle";
+    btn.textContent = "Show more";
+    btn.addEventListener("click", () => {
+      const clamped = wrap.classList.toggle("transcript-clampable--clamped");
+      btn.textContent = clamped ? "Show more" : "Show less";
+    });
+    wrap.appendChild(inner);
+    wrap.appendChild(btn);
+    return wrap;
   }
 
   // One row inside the collapsed tool group: a labelled <pre> for a

@@ -258,6 +258,28 @@ describe("TranscriptView", () => {
     expect(chip?.textContent?.toLowerCase()).toContain("approved");
   });
 
+  it("clamps a long user turn behind Show more, keeping the full text in the DOM (searchable)", () => {
+    const long = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
+    view.render([{ role: "user", blocks: [{ kind: "text", text: long }] }], 0);
+    const t = view.body.querySelector(".transcript-turn--user") as HTMLElement;
+    const clampable = t.querySelector(".transcript-clampable") as HTMLElement;
+    expect(clampable).not.toBeNull();
+    expect(clampable.classList.contains("transcript-clampable--clamped")).toBe(true);
+    // Full text stays in the DOM (clipped, not display:none) so search finds it.
+    expect(t.textContent).toContain("line 29");
+    const btn = t.querySelector(".transcript-clamp-toggle") as HTMLButtonElement;
+    expect(btn.textContent).toBe("Show more");
+    btn.click();
+    expect(clampable.classList.contains("transcript-clampable--clamped")).toBe(false);
+    expect(btn.textContent).toBe("Show less");
+  });
+
+  it("does not clamp a short user turn", () => {
+    view.render([{ role: "user", blocks: [{ kind: "text", text: "just a short message" }] }], 0);
+    const t = view.body.querySelector(".transcript-turn--user") as HTMLElement;
+    expect(t.querySelector(".transcript-clampable")).toBeNull();
+  });
+
   it("exposes a cached markdown speak surface over the body, disposed with the view", () => {
     const surface = view.getSpeakSurface();
     expect(surface.kind).toBe("markdown");
