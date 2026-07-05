@@ -450,4 +450,108 @@ describe("Rail", () => {
       expect(dots[1].classList.contains("orange")).toBe(true);
     });
   });
+
+  describe("archive section", () => {
+    it("renders archived projects in the archive list, not the active list", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      r.setProjects([
+        mkProject("a", "Alpha", "gray"),
+        { ...mkProject("b", "Bravo", "gray"), archived: true },
+      ]);
+      const activeRows = root.querySelectorAll(".rail-list > .rail-item");
+      const archivedRows = root.querySelectorAll(".rail-archive-list > .rail-item");
+      expect(activeRows.length).toBe(1);
+      expect(activeRows[0].querySelector(".name")?.textContent).toBe("Alpha");
+      expect(archivedRows.length).toBe(1);
+      expect(archivedRows[0].querySelector(".name")?.textContent).toBe("Bravo");
+      expect(archivedRows[0].classList.contains("archived")).toBe(true);
+    });
+
+    it("always shows the archive section, with an empty-state when there are none", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      const section = root.querySelector<HTMLElement>("#rail-archive")!;
+      r.setProjects([mkProject("a", "Alpha", "gray")]);
+      // Visible even with zero archived, showing a placeholder + count 0.
+      expect(section.hidden).toBe(false);
+      expect(root.querySelector("#rail-archive-count")?.textContent).toBe("0");
+      expect(root.querySelector(".rail-archive-empty")?.textContent).toBe("Nothing in archive");
+      // With an archived project, the placeholder is gone and the row shows.
+      r.setProjects([
+        mkProject("a", "Alpha", "gray"),
+        { ...mkProject("b", "Bravo", "gray"), archived: true },
+      ]);
+      expect(section.hidden).toBe(false);
+      expect(root.querySelector("#rail-archive-count")?.textContent).toBe("1");
+      expect(root.querySelector(".rail-archive-empty")).toBeNull();
+      expect(root.querySelectorAll(".rail-archive-list > .rail-item").length).toBe(1);
+    });
+
+    it("moves a row between zones when its archived flag flips", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      r.setProjects([mkProject("a", "Alpha", "gray")]);
+      expect(root.querySelectorAll(".rail-list > .rail-item").length).toBe(1);
+      r.setProjects([{ ...mkProject("a", "Alpha", "gray"), archived: true }]);
+      expect(root.querySelectorAll(".rail-list > .rail-item").length).toBe(0);
+      expect(root.querySelectorAll(".rail-archive-list > .rail-item").length).toBe(1);
+      r.setProjects([mkProject("a", "Alpha", "gray")]);
+      expect(root.querySelectorAll(".rail-list > .rail-item").length).toBe(1);
+      expect(root.querySelectorAll(".rail-archive-list > .rail-item").length).toBe(0);
+    });
+
+    it("context menu shows Archive for an active project and calls onToggleArchive(true)", () => {
+      let toggled: { id: string; archived: boolean } | null = null;
+      const r = new Rail({
+        root,
+        onSelect: () => {},
+        onAddProject: () => {},
+        onToggleArchive: (id, archived) => {
+          toggled = { id, archived };
+        },
+      });
+      r.setProjects([mkProject("a", "Alpha", "gray")]);
+      const row = root.querySelector<HTMLElement>(".rail-item")!;
+      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 5, clientY: 5 }));
+      const btn = document.querySelector<HTMLButtonElement>(
+        '.rail-context-menu button[data-action="archive"]',
+      )!;
+      expect(btn.textContent).toBe("Archive");
+      btn.click();
+      expect(toggled).toEqual({ id: "a", archived: true });
+      document.querySelector(".rail-context-menu")?.remove();
+    });
+
+    it("context menu shows Unarchive for an archived project and calls onToggleArchive(false)", () => {
+      let toggled: { id: string; archived: boolean } | null = null;
+      const r = new Rail({
+        root,
+        onSelect: () => {},
+        onAddProject: () => {},
+        onToggleArchive: (id, archived) => {
+          toggled = { id, archived };
+        },
+      });
+      r.setProjects([{ ...mkProject("a", "Alpha", "gray"), archived: true }]);
+      const row = root.querySelector<HTMLElement>(".rail-archive-list .rail-item")!;
+      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 5, clientY: 5 }));
+      const btn = document.querySelector<HTMLButtonElement>(
+        '.rail-context-menu button[data-action="archive"]',
+      )!;
+      expect(btn.textContent).toBe("Unarchive");
+      btn.click();
+      expect(toggled).toEqual({ id: "a", archived: false });
+      document.querySelector(".rail-context-menu")?.remove();
+    });
+
+    it("toggles the archive list open/closed via the header", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      r.setProjects([{ ...mkProject("a", "Alpha", "gray"), archived: true }]);
+      const list = root.querySelector<HTMLElement>("#rail-archive-list")!;
+      const header = root.querySelector<HTMLElement>("#rail-archive-header")!;
+      expect(list.hidden).toBe(true); // collapsed by default
+      header.click();
+      expect(list.hidden).toBe(false);
+      header.click();
+      expect(list.hidden).toBe(true);
+    });
+  });
 });

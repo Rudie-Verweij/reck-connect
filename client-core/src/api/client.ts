@@ -16,6 +16,7 @@ import type {
   DismissSessionsRequest,
   DismissSessionsResponse,
   DockProjectResponse,
+  ArchiveProjectResponse,
   MissionControlStateResponse,
   MissionControlHistoryResponse,
   MissionControlChatRequest,
@@ -40,6 +41,19 @@ export class HttpError extends Error {
     super(`${status} ${statusText}: ${body}`);
     this.name = "HttpError";
   }
+}
+
+/**
+ * One offset-addressed slice of a Claude session's JSONL transcript
+ * (`GET /projects/:id/sessions/:sid/transcript`). Offsets are byte
+ * positions in the file on the daemon side — resume from `nextOffset`,
+ * and keep fetching immediately while `hasMore` (the daemon caps each
+ * response so a multi-MB catch-up is paged).
+ */
+export interface TranscriptChunk {
+  chunk: string;
+  nextOffset: number;
+  hasMore: boolean;
 }
 
 /**
@@ -199,6 +213,60 @@ export class ApiClient {
   }
 
   /**
+   * Fetch a slice of a Claude session's JSONL transcript starting at
+   * `offset` BYTES. The daemon streams raw JSONL (application/x-ndjson),
+   * so this bypasses the JSON-typed `fetch<T>` and reads the tailing
+   * metadata from response headers: X-Reck-Transcript-Offset is the
+   * next byte offset to poll and X-Reck-Transcript-More flags a capped
+   * chunk (keep fetching without a poll delay).
+   *
+   * Callers MUST advance using `nextOffset`, never `chunk.length` —
+   * JS string length counts UTF-16 code units, not bytes.
+   *
+   * `timeoutMs` defaults to 60s, NOT the client's 5s JSON default: a
+   * multi-MB transcript chunk over a station/Tailscale link routinely
+   * needs more than 5s, and a too-tight budget aborts mid-download with
+   * 'TimeoutError: signal timed out', stalling the tail on large chats.
+   */
+  async getTranscript(
+    projectId: string,
+    sessionId: string,
+    offset = 0,
+    timeoutMs = 60000,
+  ): Promise<TranscriptChunk> {
+    const headers: Record<string, string> = {};
+    if (this.config.token) {
+      headers["Authorization"] = "Bearer " + this.config.token;
+    }
+    const path =
+      `/projects/${encodeURIComponent(projectId)}` +
+      `/sessions/${encodeURIComponent(sessionId)}/transcript?offset=${offset}`;
+    const res = await fetch(this.config.baseUrl + path, {
+      headers,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      throw new HttpError(res.status, res.statusText, await res.text());
+    }
+    const rawOffset = res.headers.get("X-Reck-Transcript-Offset");
+    const nextOffset = rawOffset === null ? NaN : Number(rawOffset);
+    if (!Number.isFinite(nextOffset)) {
+      // A 2xx without the offset header is not our daemon talking —
+      // same intercepted-response class the JSON path guards against.
+      throw new HttpContentTypeError(
+        res.status,
+        res.headers.get("content-type"),
+        await res.text(),
+      );
+    }
+    return {
+      chunk: await res.text(),
+      nextOffset,
+      hasMore: res.headers.get("X-Reck-Transcript-More") === "1",
+    };
+  }
+
+  /**
    * Fetch the daemon-computed list of panes to offer for restore.
    *
    * `kinds`, when provided, negotiates which pane kinds the client
@@ -304,6 +372,20 @@ export class ApiClient {
   undockProject(projectId: string) {
     return this.fetch<DockProjectResponse>(
       `/projects/${encodeURIComponent(projectId)}/undock`,
+      { method: "POST" },
+    );
+  }
+
+  archiveProject(projectId: string) {
+    return this.fetch<ArchiveProjectResponse>(
+      `/projects/${encodeURIComponent(projectId)}/archive`,
+      { method: "POST" },
+    );
+  }
+
+  unarchiveProject(projectId: string) {
+    return this.fetch<ArchiveProjectResponse>(
+      `/projects/${encodeURIComponent(projectId)}/unarchive`,
       { method: "POST" },
     );
   }

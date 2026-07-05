@@ -11,6 +11,7 @@ import { CodeMirrorSearchAdapter } from "./CodeMirrorSearchAdapter";
 import { MarkdownSearchAdapter } from "./MarkdownSearchAdapter";
 import { createOverlayScrollbar, type OverlayScrollbar } from "./OverlayScrollbar";
 import { domScrollSurface } from "./scrollSurfaces";
+import { ensurePaneControls } from "../ui/paneControls";
 import type { SearchSurfaceAdapter } from "./SearchSurfaceAdapter";
 import type { EditorView } from "@codemirror/view";
 
@@ -28,9 +29,12 @@ export interface ViewerSearchHandle {
 }
 
 export function attachViewerSearch(t: ViewerSearchTarget): ViewerSearchHandle {
+  // The search bar mounts into the shared top-right control stack (alongside
+  // the TTS bar); the scrollbar still anchors to the root directly.
+  const controls = ensurePaneControls(t.root);
   const adapter: SearchSurfaceAdapter = t.view
-    ? new CodeMirrorSearchAdapter({ container: t.root, view: t.view })
-    : new MarkdownSearchAdapter({ container: t.root, body: t.body });
+    ? new CodeMirrorSearchAdapter({ container: controls, view: t.view })
+    : new MarkdownSearchAdapter({ container: controls, body: t.body });
 
   // CodeMirror scrolls inside its own scrollDOM; markdown scrolls the body.
   const scrollEl: HTMLElement = t.view ? t.view.scrollDOM : t.body;

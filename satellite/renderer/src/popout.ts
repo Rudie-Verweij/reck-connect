@@ -27,8 +27,14 @@ import { initTts } from "./tts/initTts";
 import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
 import { initSearch } from "./search/initSearch";
 import { TerminalSearchAdapter } from "./search/TerminalSearchAdapter";
+import { MarkdownSearchAdapter } from "./search/MarkdownSearchAdapter";
 import { createOverlayScrollbar } from "./search/OverlayScrollbar";
 import { terminalScrollSurface } from "./search/scrollSurfaces";
+import { ApiClient } from "@client-core/api/client";
+import { createTranscriptController } from "./transcript/TranscriptController";
+import { resolveTranscriptSession } from "./transcript/resolveSession";
+import { ensurePaneControls, ensureHistoryButton } from "./ui/paneControls";
+import { iconHistory } from "./ui/icons";
 
 const DEFAULT_LOCAL_PORT = 7315;
 
@@ -178,6 +184,10 @@ async function bootPopout(): Promise<void> {
     try {
       await initTts({
         getActiveSpeakSurface: () => {
+          // An open History overlay owns TTS for this pane (#51) — speak the
+          // rendered transcript, mirroring the ⌘F switch below.
+          const overlay = transcripts.get(panePaneId);
+          if (overlay) return overlay.view.getSpeakSurface();
           const xterm = term.getXterm();
           const xtermEl = (xterm.element as HTMLElement | undefined) ?? body;
           const dims = (xterm as unknown as {
@@ -192,7 +202,7 @@ async function bootPopout(): Promise<void> {
           return new TerminalPaneAdapter({
             term: xterm as unknown as ConstructorParameters<typeof TerminalPaneAdapter>[0]["term"],
             xtermEl,
-            containerEl: body,
+            containerEl: ensurePaneControls(body),
             cellWidth,
             cellHeight,
           });
@@ -203,23 +213,97 @@ async function bootPopout(): Promise<void> {
     }
   })();
 
+  // Transcript "History" overlay (#51) — parity with the main window's
+  // per-pane toggle, driven by the same TranscriptController (visible
+  // loading/error/no-session states + `[transcript]` logging). The
+  // popout URL doesn't carry the pane's kind, so gate the button on
+  // whether a Claude session actually resolves for this pane
+  // (shell/codex popouts simply never get the button).
+  const api = new ApiClient({
+    baseUrl: resolved.baseUrl,
+    token: resolved.token ?? undefined,
+  });
+  // Narrowed copies for the closures below — TS drops the `!info`
+  // guard's narrowing inside nested functions.
+  const panePaneId = info.paneId;
+  const paneProjectId = info.projectId;
+  const paneTitle = info.title;
+  const paneHost = info.host;
+  const transcripts = createTranscriptController({
+    resolvePane: () => ({
+      wrapper: body,
+      kind: "claude", // gated below: button only exists when a session resolves
+      host: paneHost,
+      title: paneTitle || "Claude",
+    }),
+    projectId: () => paneProjectId,
+    api: () => api,
+    // ⌘+click a path in the transcript → open it in the file viewer. Mirrors
+    // this popout's pane linkifier (above): pass the raw href + host and let
+    // main resolve it (the detached window has no project cwd to anchor with).
+    linkHandlers: () => ({
+      onLinkActivate: (href) => {
+        void window.reckAPI.files.openInViewer(href, {
+          sourceHost: paneHost,
+          originalText: href,
+        });
+      },
+    }),
+  });
+
+  void (async () => {
+    try {
+      const sessionId = await resolveTranscriptSession({
+        paneId: panePaneId,
+        listSessions: () => api.listSessions(paneProjectId),
+      });
+      if (!sessionId) return; // not a Claude pane (or no transcript yet)
+      // History (clock) lives in the top-right control stack, alongside
+      // search + TTS — same component as the main window.
+      ensureHistoryButton(body, {
+        icon: iconHistory,
+        onToggle: () => void transcripts.toggle(panePaneId),
+      });
+    } catch (e) {
+      console.warn("[popout] history disabled:", e);
+    }
+  })();
+
   // In-view search (⌘/Ctrl+F) + overlay scrollbar for the detached pane.
   try {
     const scrollbar = createOverlayScrollbar({
       host: body,
       surface: terminalScrollSurface(
         term.getXterm() as unknown as Parameters<typeof terminalScrollSurface>[0],
+        (bytes) => term.sendInput(bytes),
       ),
     });
     initSearch({
-      getActiveSearchSurface: () =>
-        new TerminalSearchAdapter({
-          container: body,
+      getActiveSearchSurface: () => {
+        // An open History overlay owns ⌘F (#51) — search the whole
+        // transcript rather than the terminal's visible rows.
+        const overlay = transcripts.get(panePaneId);
+        if (overlay) {
+          return new MarkdownSearchAdapter({
+            container: ensurePaneControls(overlay.view.root),
+            body: overlay.view.body,
+          });
+        }
+        return new TerminalSearchAdapter({
+          container: ensurePaneControls(body),
           term: term.getXterm() as unknown as ConstructorParameters<
             typeof TerminalSearchAdapter
           >[0]["term"],
-        }),
-      onMatchesChanged: (fractions) => scrollbar.setMatches(fractions),
+        });
+      },
+      onMatchesChanged: (fractions) => {
+        const overlay = transcripts.get(panePaneId);
+        if (overlay) {
+          overlay.view.setMatches(fractions);
+          return;
+        }
+        scrollbar.setMatches(fractions);
+      },
     });
   } catch (e) {
     console.warn("[popout] search disabled:", e);

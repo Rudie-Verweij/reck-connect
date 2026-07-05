@@ -32,7 +32,7 @@ export function isInternalLinkHref(href: string): boolean {
   return true;
 }
 
-function wrapFreeTextPaths(root: HTMLElement): void {
+export function wrapFreeTextPaths(root: HTMLElement): void {
   const skipAncestor = (node: Node): boolean => {
     let cur: Node | null = node.parentNode;
     while (cur && cur !== root) {

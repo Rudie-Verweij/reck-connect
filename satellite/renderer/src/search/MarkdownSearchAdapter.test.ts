@@ -88,3 +88,31 @@ describe("MarkdownSearchAdapter", () => {
     expect(() => adapter.dispose()).not.toThrow();
   });
 });
+
+/**
+ * Matches hidden inside collapsed <details> (transcript tool/thinking
+ * blocks, #51): the flat-text index includes their text, so navigation
+ * must REVEAL them — a closed details has no box, so scrollIntoView
+ * would silently do nothing.
+ */
+describe("MarkdownSearchAdapter — collapsed <details>", () => {
+  it("scrollToMatch opens every closed ancestor details", () => {
+    const container = document.createElement("div");
+    const body = document.createElement("div");
+    container.appendChild(body);
+    document.body.appendChild(container);
+    body.innerHTML =
+      "<p>intro</p>" +
+      "<details><summary>Tool: Bash</summary><details><summary>inner</summary><pre>needle output</pre></details></details>";
+    const adapter = new MarkdownSearchAdapter({ container, body });
+    const text = adapter.getText();
+    const start = text.indexOf("needle");
+    expect(start).toBeGreaterThan(-1);
+    adapter.scrollToMatch({ start, end: start + 6 });
+    const all = body.querySelectorAll("details");
+    expect(all[0].open).toBe(true);
+    expect(all[1].open).toBe(true);
+    adapter.dispose();
+    container.remove();
+  });
+});

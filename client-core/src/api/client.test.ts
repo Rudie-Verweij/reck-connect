@@ -146,6 +146,118 @@ describe("ApiClient", () => {
     expect(captured.method).toBe("GET");
   });
 
+  it("GETs the transcript with offset and parses tail headers", async () => {
+    const c = new ApiClient({ baseUrl: "http://x:7315", token: "sek" });
+    let captured = { url: "", method: "", auth: "" };
+    global.fetch = vi.fn(async (u, init) => {
+      captured = {
+        url: String(u),
+        method: String(init?.method ?? "GET"),
+        auth: ((init?.headers as Record<string, string>) ?? {})["Authorization"] ?? "",
+      };
+      return new Response('{"type":"user"}\n', {
+        status: 200,
+        headers: {
+          "Content-Type": "application/x-ndjson",
+          "X-Reck-Transcript-Offset": "1234",
+          "X-Reck-Transcript-More": "1",
+        },
+      });
+    }) as unknown as typeof fetch;
+    const resp = await c.getTranscript("foo", "sid-1", 42);
+    expect(captured.url).toBe(
+      "http://x:7315/projects/foo/sessions/sid-1/transcript?offset=42",
+    );
+    expect(captured.method).toBe("GET");
+    expect(captured.auth).toBe("Bearer sek");
+    expect(resp).toEqual({ chunk: '{"type":"user"}\n', nextOffset: 1234, hasMore: true });
+  });
+
+  it("getTranscript defaults offset to 0 and hasMore to false", async () => {
+    const c = new ApiClient({ baseUrl: "http://x:7315" });
+    let captured = { url: "" };
+    global.fetch = vi.fn(async (u) => {
+      captured = { url: String(u) };
+      return new Response("", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/x-ndjson",
+          "X-Reck-Transcript-Offset": "0",
+        },
+      });
+    }) as unknown as typeof fetch;
+    const resp = await c.getTranscript("foo", "sid-1");
+    expect(captured.url).toBe(
+      "http://x:7315/projects/foo/sessions/sid-1/transcript?offset=0",
+    );
+    expect(resp).toEqual({ chunk: "", nextOffset: 0, hasMore: false });
+  });
+
+  it("getTranscript throws on non-2xx", async () => {
+    const c = new ApiClient({ baseUrl: "http://x:7315" });
+    global.fetch = vi.fn(
+      async () => new Response("gone", { status: 404, statusText: "Not Found" }),
+    ) as unknown as typeof fetch;
+    await expect(c.getTranscript("foo", "sid-1")).rejects.toThrow(/404/);
+  });
+
+  it("getTranscript throws when the offset header is missing (intercepted response)", async () => {
+    const c = new ApiClient({ baseUrl: "http://x:7315" });
+    global.fetch = vi.fn(
+      async () =>
+        new Response("<html>portal</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        }),
+    ) as unknown as typeof fetch;
+    await expect(c.getTranscript("foo", "sid-1")).rejects.toThrow(HttpContentTypeError);
+  });
+
+  it("getTranscript uses a generous timeout (not the 5s JSON default) for bulk chunks", async () => {
+    // A 4MB transcript chunk over a station/Tailscale link can't arrive
+    // in the 5s tuned for small JSON calls — that produced
+    // 'TimeoutError: signal timed out' on large transcripts. Bulk
+    // fetches get their own long default, overridable per call.
+    const c = new ApiClient({ baseUrl: "http://x:7315", timeoutMs: 5000 });
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    global.fetch = vi.fn(
+      async () =>
+        new Response("", {
+          status: 200,
+          headers: {
+            "Content-Type": "application/x-ndjson",
+            "X-Reck-Transcript-Offset": "0",
+          },
+        }),
+    ) as unknown as typeof fetch;
+
+    await c.getTranscript("foo", "sid-1");
+    expect(spy).toHaveBeenLastCalledWith(60000);
+
+    await c.getTranscript("foo", "sid-1", 0, 12345);
+    expect(spy).toHaveBeenLastCalledWith(12345);
+    spy.mockRestore();
+  });
+
+  it("getTranscript URL-encodes project and session ids", async () => {
+    const c = new ApiClient({ baseUrl: "http://x:7315" });
+    let captured = { url: "" };
+    global.fetch = vi.fn(async (u) => {
+      captured = { url: String(u) };
+      return new Response("", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/x-ndjson",
+          "X-Reck-Transcript-Offset": "0",
+        },
+      });
+    }) as unknown as typeof fetch;
+    await c.getTranscript("a/b", "s#1");
+    expect(captured.url).toBe(
+      "http://x:7315/projects/a%2Fb/sessions/s%231/transcript?offset=0",
+    );
+  });
+
   it("forwards resume_session_id on createPane when given", async () => {
     const c = new ApiClient({ baseUrl: "http://x:7315" });
     let body = "";

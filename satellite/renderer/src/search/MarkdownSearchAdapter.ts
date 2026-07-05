@@ -90,6 +90,17 @@ export class MarkdownSearchAdapter implements SearchSurfaceAdapter {
     const target =
       domRange?.startContainer.parentElement ??
       (domRange?.startContainer as Element | null);
+    // Reveal matches hidden inside collapsed <details> (transcript tool/
+    // thinking blocks): a closed details gives the match no box, so
+    // scrollIntoView would silently do nothing. Open every closed
+    // ancestor before scrolling.
+    let ancestor: Element | null = target;
+    while (ancestor && ancestor !== this.body) {
+      if (ancestor instanceof HTMLDetailsElement && !ancestor.open) {
+        ancestor.open = true;
+      }
+      ancestor = ancestor.parentElement;
+    }
     try {
       target?.scrollIntoView?.({ block: "center", inline: "nearest" });
     } catch {
@@ -114,7 +125,23 @@ export class MarkdownSearchAdapter implements SearchSurfaceAdapter {
     const range = this.rangeFor({ start: offset, end: offset });
     if (!range) return null;
     try {
-      const rect = range.getBoundingClientRect();
+      let rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        // No box — the match is hidden inside a collapsed <details>
+        // (transcript tool/thinking blocks). Anchor the tick to the
+        // nearest ancestor that has a box (the details element itself)
+        // so it lands where the match actually lives in the document,
+        // instead of collapsing to a garbage position.
+        let el: Element | null = range.startContainer.parentElement;
+        while (el && el !== this.body) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 || r.height > 0) {
+            rect = r;
+            break;
+          }
+          el = el.parentElement;
+        }
+      }
       const bodyRect = this.body.getBoundingClientRect();
       const scrollHeight = this.body.scrollHeight;
       if (scrollHeight <= 0) return null;

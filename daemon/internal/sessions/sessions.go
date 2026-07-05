@@ -364,11 +364,11 @@ func (s *Store) List(projectID string, opts ListOptions) ([]Entry, error) {
 	}
 	claudeDir := opts.ClaudeProjectsDir
 	if claudeDir == "" {
-		home, err := os.UserHomeDir()
+		var err error
+		claudeDir, err = DefaultClaudeProjectsDir()
 		if err != nil {
 			return nil, err
 		}
-		claudeDir = filepath.Join(home, ".claude", "projects")
 	}
 	live := make([]Entry, 0, len(entries))
 	for _, e := range entries {
@@ -389,11 +389,46 @@ func (s *Store) List(projectID string, opts ListOptions) ([]Entry, error) {
 	return live, nil
 }
 
+// TranscriptPath returns Claude Code's on-disk JSONL transcript path for
+// (cwd, sessionID) under claudeProjectsDir. Shared by the liveness gate in
+// List and the HTTP transcript endpoint so the formula lives in one place.
+func TranscriptPath(claudeProjectsDir, cwd, sessionID string) string {
+	return filepath.Join(claudeProjectsDir, EncodeCwd(cwd), sessionID+".jsonl")
+}
+
+// FindTranscript locates a session's JSONL. It prefers the canonical path
+// (EncodeCwd(cwd)/<sid>.jsonl) but falls back to a glob across every project
+// dir when that misses: a session that ran in a git worktree or a subdir is
+// stored under the EncodeCwd() of its *actual* cwd, which differs from the
+// project's registered cwd. The session id is a globally-unique UUID, so the
+// glob is unambiguous. Callers MUST validate sessionID as a UUID first (the
+// HTTP handler does) so it can't smuggle glob metacharacters or path parts.
+func FindTranscript(claudeProjectsDir, cwd, sessionID string) (string, bool) {
+	direct := TranscriptPath(claudeProjectsDir, cwd, sessionID)
+	if _, err := os.Stat(direct); err == nil {
+		return direct, true
+	}
+	matches, err := filepath.Glob(filepath.Join(claudeProjectsDir, "*", sessionID+".jsonl"))
+	if err == nil && len(matches) > 0 {
+		return matches[0], true
+	}
+	return "", false
+}
+
+// DefaultClaudeProjectsDir returns the conventional Claude Code transcript
+// root (~/.claude/projects) for the current user.
+func DefaultClaudeProjectsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude", "projects"), nil
+}
+
 // transcriptExists reports whether Claude Code's JSONL for (cwd, sessionID)
 // is on disk under claudeProjectsDir.
 func transcriptExists(claudeProjectsDir, cwd, sessionID string) bool {
-	p := filepath.Join(claudeProjectsDir, EncodeCwd(cwd), sessionID+".jsonl")
-	st, err := os.Stat(p)
+	st, err := os.Stat(TranscriptPath(claudeProjectsDir, cwd, sessionID))
 	return err == nil && !st.IsDir()
 }
 

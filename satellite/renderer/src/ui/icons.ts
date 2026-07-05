@@ -50,3 +50,9 @@ export const iconDetach = base(
   `<path d="M9 3h4v4"/><path d="M13 3l-6 6"/><path d="M11 9.5V13a1 1 0 01-1 1H3a1 1 0 01-1-1V6a1 1 0 011-1h3.5"/>`,
 );
 
+// Clock glyph for the per-pane "History" action (#51) — opens the
+// Claude transcript overlay.
+export const iconHistory = base(
+  `<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2.2 1.6"/>`,
+);
+

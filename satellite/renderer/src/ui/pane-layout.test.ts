@@ -1372,3 +1372,119 @@ describe("Drag-to-split styles ", () => {
     expect(css).toMatch(/pointer-events:\s*none/);
   });
 });
+
+/**
+ * "History" button (#51) — opens the Claude-pane transcript overlay.
+ * Rendered only when the host wires `onHistoryPane` AND the active tab
+ * is a Claude pane (shell/codex panes have no session transcript).
+ */
+describe("PaneLayout history button", () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    MockTerminalPane.instances.length = 0;
+    (PaneLayout as unknown as { draggedTab: unknown }).draggedTab = null;
+  });
+
+  afterEach(() => {
+    root.remove();
+  });
+
+  function makeClaudeLeaf(id: string, tabs: string[]): LeafNode {
+    return {
+      kind: "leaf",
+      id,
+      activeTabId: tabs[0] ?? "",
+      tabs: tabs.map((tabId) => ({
+        id: tabId,
+        paneId: `pane-${tabId}`,
+        kind: "claude" as const,
+        title: tabId,
+        host: "local" as HostRef,
+      })),
+    };
+  }
+
+  it("appears on a claude tab and invokes onHistoryPane with paneId+leafId", () => {
+    const history = vi.fn();
+    const cb = makeCallbacks(root, makeController());
+    cb.onHistoryPane = history;
+    const layout = new PaneLayout(cb);
+    layout.setTree(makeClaudeLeaf("leafA", ["t1"]));
+    const btn = root.querySelector<HTMLButtonElement>(".pane-controls-history");
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(history).toHaveBeenCalledWith("pane-t1", "leafA");
+    layout.dispose();
+  });
+
+  it("is hidden for shell tabs", () => {
+    const cb = makeCallbacks(root, makeController());
+    cb.onHistoryPane = vi.fn();
+    const layout = new PaneLayout(cb);
+    layout.setTree(makeLeaf("leafA", ["t1"])); // makeLeaf builds shell tabs
+    expect(root.querySelector(".pane-controls-history")).toBeNull();
+    layout.dispose();
+  });
+
+  it("is hidden when the onHistoryPane callback is absent", () => {
+    const layout = new PaneLayout(makeCallbacks(root, makeController()));
+    layout.setTree(makeClaudeLeaf("leafA", ["t1"]));
+    expect(root.querySelector(".pane-controls-history")).toBeNull();
+    layout.dispose();
+  });
+});
+
+/**
+ * Clicking History must focus its leaf first (#51 follow-up): the
+ * toolbar swallows mousedown (stopPropagation), so without an explicit
+ * focus the ⌘F search subsystem resolves the previously-active pane and
+ * searches the terminal's ~40 painted rows instead of the transcript.
+ */
+describe("PaneLayout history button focuses its leaf", () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    MockTerminalPane.instances.length = 0;
+    (PaneLayout as unknown as { draggedTab: unknown }).draggedTab = null;
+  });
+
+  afterEach(() => {
+    root.remove();
+  });
+
+  it("calls focusLeaf with the button's leaf before the callback", () => {
+    const order: string[] = [];
+    const cb = makeCallbacks(root, makeController());
+    cb.onHistoryPane = () => order.push("history");
+    const layout = new PaneLayout(cb);
+    const focusSpy = vi
+      .spyOn(layout, "focusLeaf")
+      .mockImplementation(() => order.push("focus"));
+    layout.setTree({
+      kind: "leaf",
+      id: "leafA",
+      activeTabId: "t1",
+      tabs: [
+        {
+          id: "t1",
+          paneId: "pane-t1",
+          kind: "claude" as const,
+          title: "t1",
+          host: "local" as HostRef,
+        },
+      ],
+    });
+    focusSpy.mockClear();
+    order.length = 0;
+    const btn = root.querySelector<HTMLButtonElement>(".pane-controls-history");
+    btn!.click();
+    expect(focusSpy).toHaveBeenCalledWith("leafA");
+    expect(order).toEqual(["focus", "history"]);
+    layout.dispose();
+  });
+});

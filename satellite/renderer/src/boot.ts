@@ -35,6 +35,7 @@ import { effectiveStoplight as filterEffectiveStoplight } from "./ui/effective-s
 import { AppBar, type Theme } from "./ui/app-bar";
 import { PaneLayout } from "./ui/pane-layout";
 import { installPathLinkProvider } from "./viewer/PathLinkProvider";
+import { ensurePaneControls } from "./ui/paneControls";
 import { resolveActivatePath } from "./viewer/resolveActivatePath";
 import {
   setExtensionlessAllowlist,
@@ -56,15 +57,18 @@ import { installShortcuts } from "./ui/shortcuts";
 import { renderSettings } from "./ui/settings-view";
 import { addProjectFlow } from "./ui/add-project-dialog";
 import { confirmDeleteProject } from "./ui/delete-project-dialog";
+import { confirmRestoreProject } from "./ui/confirm-restore-dialog";
 import { initTts } from "./tts/initTts";
 import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
 import { initSearch } from "./search/initSearch";
 import { TerminalSearchAdapter } from "./search/TerminalSearchAdapter";
+import { MarkdownSearchAdapter } from "./search/MarkdownSearchAdapter";
 import {
   createOverlayScrollbar,
   type OverlayScrollbar,
 } from "./search/OverlayScrollbar";
 import { terminalScrollSurface } from "./search/scrollSurfaces";
+import { createTranscriptController } from "./transcript/TranscriptController";
 import type { TerminalPane } from "@client-core/terminal/terminal-pane";
 import {
   addTab,
@@ -681,7 +685,16 @@ export async function boot(splash?: StartupSplashController) {
 
   const rail = new Rail({
     root: document.getElementById("rail")!,
-    onSelect: (projectId) => void selectProject(projectId),
+    onSelect: (projectId) => {
+      // Clicking an archived project restores it (behind a confirm) rather
+      // than selecting an empty, panes-killed view.
+      const proj = currentProjects.find((p) => p.id === projectId);
+      if (proj?.archived) {
+        void requestUnarchive(projectId);
+        return;
+      }
+      void selectProject(projectId);
+    },
     onAddProject: () => void handleAddProject(),
     onRename: (projectId, newName) => {
       // Optimistic: paint the new name right away, then persist on the
@@ -742,6 +755,24 @@ export async function boot(splash?: StartupSplashController) {
         console.error("dock toggle failed", e);
       }
       // Next poll picks up the new `docked` flag and the rail re-renders.
+    },
+    onToggleArchive: async (projectId, archived) => {
+      if (!archived) {
+        // Unarchive (menu "Unarchive" or drag-out) goes through the same
+        // confirm-then-restore path as clicking an archived project.
+        await requestUnarchive(projectId);
+        return;
+      }
+      // Archive: kill the daemon's panes to free RAM, then — if this was
+      // the active project — tear down its renderer terminals and switch
+      // away. Its saved layout stays frozen for restore.
+      try {
+        await client.archiveProject(projectId);
+      } catch (e) {
+        console.error("archiveProject failed", e);
+        return;
+      }
+      switchAwayFromArchived(projectId);
     },
     // an earlier release — flatten the project's saved layout left-to-right so
     // the rail can reorder dots out of daemon creation order. Active
@@ -992,6 +1023,60 @@ export async function boot(splash?: StartupSplashController) {
   // GC'd with its pane (the pane drops its scroll listener on dispose).
   const terminalScrollbars = new WeakMap<TerminalPane, OverlayScrollbar>();
 
+  // --- Claude transcript "History" overlays (#51) ---------------------
+  // Owned by the TranscriptController: one overlay per pane, mounted in
+  // the pane's wrapper (the xterm keeps running underneath), tailing the
+  // session transcript from the pane's host daemon. The controller
+  // always shows a visible status (loading/error/no-session) instead of
+  // failing silently, and traces every decision with `[transcript]`
+  // console logs — set localStorage["reck-transcript-debug"]="1" for
+  // per-poll/per-render verbosity.
+  const transcripts = createTranscriptController({
+    resolvePane: (paneId) => {
+      const rec = layout.getTerminalRecordByPane(paneId);
+      if (!rec) return null;
+      return {
+        wrapper: rec.wrapper,
+        kind: rec.tab.kind,
+        host: rec.tab.host,
+        title: rec.tab.title ?? "",
+        sessionId: rec.tab.sessionId,
+      };
+    },
+    projectId: () => currentProjectId,
+    api: (host) => apiForHost(host),
+    // ⌘+click a path in the transcript → open it in the file viewer, reusing
+    // the exact resolve/open pipeline the pane linkifier uses (below). `host`
+    // is the pane's host, so `~/` and station-cwd translation route correctly.
+    // History only opens on a pane in the current layout/project, so the
+    // active project's cwd is the right anchor for relative paths.
+    linkHandlers: (host) => ({
+      onLinkActivate: (href) => {
+        const projectCwd =
+          currentProjects.find((p) => p.id === currentProjectId)?.cwd ?? null;
+        const target = resolveActivatePath(href, projectCwd);
+        console.log("[click:transcript] activate -> openInViewer", {
+          host,
+          projectCwd,
+          originalText: href,
+          target,
+        });
+        void window.reckAPI.files
+          .openInViewer(target, {
+            sourceHost: host,
+            originalText: href,
+            projectCwd: projectCwd ?? undefined,
+          })
+          .then((r) => {
+            if (!r || (r as { ok?: boolean }).ok !== true) {
+              console.warn("[click:transcript] openInViewer rejected", { href, target, r });
+            }
+          })
+          .catch((e) => console.warn("[click:transcript] openInViewer error", e));
+      },
+    }),
+  });
+
   const layout: PaneLayout = new PaneLayout({
     root: layoutRoot,
     // Phase 10: route each tab's WS through its own host's ApiClient.
@@ -1027,6 +1112,7 @@ export async function boot(splash?: StartupSplashController) {
           host,
           surface: terminalScrollSurface(
             pane.getXterm() as unknown as Parameters<typeof terminalScrollSurface>[0],
+            (bytes) => pane.sendInput(bytes),
           ),
         });
         terminalScrollbars.set(pane, sb);
@@ -1525,6 +1611,10 @@ export async function boot(splash?: StartupSplashController) {
       // in-app reattach button take the exact same code path.
       void window.reckAPI.windows.reattachPane(paneId);
     },
+    // "History" (#51): toggle the transcript overlay for a Claude pane.
+    onHistoryPane: (paneId) => {
+      void transcripts.toggle(paneId);
+    },
   });
   layout.setTheme(theme);
 
@@ -1942,6 +2032,11 @@ export async function boot(splash?: StartupSplashController) {
         getActiveSpeakSurface: () => {
           const rec = layout.getActiveTerminalRecord();
           if (!rec) return null;
+          // An open History overlay owns TTS for its pane (#51): speak the
+          // rendered transcript, not the terminal's visible rows — same
+          // switch as ⌘F below. Reuses the file-viewer's MarkdownSurfaceAdapter.
+          const overlay = transcripts.get(rec.tab.paneId);
+          if (overlay) return overlay.view.getSpeakSurface();
           // Wrap the active xterm pane in a TerminalPaneAdapter so the
           // TtsController treats it as a generic SpeakSurfaceAdapter,
           // identical to how the file-viewer popup wraps its markdown /
@@ -1961,7 +2056,7 @@ export async function boot(splash?: StartupSplashController) {
           return new TerminalPaneAdapter({
             term: term as unknown as ConstructorParameters<typeof TerminalPaneAdapter>[0]["term"],
             xtermEl,
-            containerEl: rec.wrapper,
+            containerEl: ensurePaneControls(rec.wrapper),
             cellWidth,
             cellHeight,
           });
@@ -1980,9 +2075,18 @@ export async function boot(splash?: StartupSplashController) {
       getActiveSearchSurface: () => {
         const rec = layout.getActiveTerminalRecord();
         if (!rec) return null;
+        // An open History overlay owns ⌘F for its pane (#51): search
+        // the whole transcript, not the terminal's visible rows.
+        const overlay = transcripts.get(rec.tab.paneId);
+        if (overlay) {
+          return new MarkdownSearchAdapter({
+            container: ensurePaneControls(overlay.view.root),
+            body: overlay.view.body,
+          });
+        }
         const term = rec.term.getXterm();
         return new TerminalSearchAdapter({
-          container: rec.wrapper,
+          container: ensurePaneControls(rec.wrapper),
           term: term as unknown as ConstructorParameters<
             typeof TerminalSearchAdapter
           >[0]["term"],
@@ -1990,11 +2094,62 @@ export async function boot(splash?: StartupSplashController) {
       },
       onMatchesChanged: (fractions) => {
         const rec = layout.getActiveTerminalRecord();
-        if (rec) terminalScrollbars.get(rec.term)?.setMatches(fractions);
+        if (!rec) return;
+        const overlay = transcripts.get(rec.tab.paneId);
+        if (overlay) {
+          overlay.view.setMatches(fractions);
+          return;
+        }
+        terminalScrollbars.get(rec.term)?.setMatches(fractions);
       },
     });
   } catch (e) {
     console.warn("[search] disabled:", e);
+  }
+
+  // Shared unarchive path for every entry point (rail click, drag-out,
+  // context-menu "Unarchive"). Confirm first — restoring can spin several
+  // heavy agent panes back up — then unarchive on the daemon and select the
+  // project so the frozen layout reconciles onto the respawned panes.
+  async function requestUnarchive(projectId: string): Promise<void> {
+    const proj = currentProjects.find((p) => p.id === projectId);
+    const name = proj?.name ?? projectId;
+    const savedTree = savedLayouts[projectId] ?? null;
+    const paneCount = savedTree ? allTabs(savedTree).length : 0;
+    const ok = await confirmRestoreProject(name, paneCount);
+    if (!ok) return;
+    try {
+      await client.unarchiveProject(projectId);
+    } catch (e) {
+      console.error("unarchiveProject failed", e);
+      return;
+    }
+    // UnarchiveProject respawns the panes synchronously before responding,
+    // so selecting now reconciles the frozen layout onto live panes.
+    await selectProject(projectId);
+  }
+
+  // The active project was just archived (its panes are being killed). Move
+  // focus off it: selecting another project disposes the archived project's
+  // TerminalPanes via setTree (freeing renderer RAM), and its saved layout
+  // stays frozen because onTreeChange only persists the current selection —
+  // which we're changing here.
+  function switchAwayFromArchived(projectId: string): void {
+    if (currentProjectId !== projectId) return;
+    const nextActive = currentProjects.find(
+      (p) => p.id !== projectId && !p.archived,
+    );
+    if (nextActive) {
+      void selectProject(nextActive.id);
+      return;
+    }
+    // Nothing else to show — clear the pane area (disposing the archived
+    // project's terminals) and deselect. Null currentProjectId first so
+    // onTreeChange doesn't persist the empty tree under the archived id.
+    currentProjectId = null;
+    rail.select(null);
+    layout.setTree(null, { persist: false });
+    renderStatus();
   }
 
   async function selectProject(projectId: string) {
@@ -2462,6 +2617,13 @@ export async function boot(splash?: StartupSplashController) {
     const ordered = applyProjectOrder(merged, projectOrder);
     const withOverrides = applyProjectOverrides(ordered);
     currentProjects = withOverrides;
+    // If the active project got archived (by this client or another), tear
+    // down its terminals and move focus off it. Idempotent — no-op once we
+    // are no longer on that project.
+    if (currentProjectId) {
+      const active = withOverrides.find((p) => p.id === currentProjectId);
+      if (active?.archived) switchAwayFromArchived(currentProjectId);
+    }
     trackStoplightTransitions(withOverrides);
     trackPaneStoplightTransitions(withOverrides, pollEpoch);
     renderRail();

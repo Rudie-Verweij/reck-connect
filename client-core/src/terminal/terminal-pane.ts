@@ -265,6 +265,17 @@ export class TerminalPane {
   }
 
   /**
+   * Inject raw bytes into the PTY as if the user had typed them. Used by the
+   * overlay scrollbar to translate a wheel gesture over a mouse-tracking TUI
+   * into PgUp/PgDn keystrokes: Claude Code 2.1.150+ repurposes the wheel to
+   * arrow keys and its alt-screen has no xterm scrollback, but keyboard
+   * PgUp/PgDn scrolls its transcript reliably.
+   */
+  public sendInput(bytes: Uint8Array): void {
+    this.ws.send({ type: "input", data: encodeBytes(bytes) });
+  }
+
+  /**
    * Return a shallow snapshot of this pane's xterm viewport/buffer state.
    * Matches the capture checklist from an earlier release so a developer with devtools
    * open can eyeball the numbers in one line without navigating

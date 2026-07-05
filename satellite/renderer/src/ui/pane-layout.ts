@@ -5,7 +5,8 @@ import type { PasteUploadResult } from "@client-core/terminal/terminal-pane";
 import type { PaneWSCloseInfo } from "@client-core/api/ws";
 import type { Stoplight } from "@proto/proto";
 import type { HostRef } from "../host";
-import { iconClose, iconSplitDown, iconSplitRight, iconDetach } from "./icons";
+import { iconClose, iconSplitDown, iconSplitRight, iconDetach, iconHistory } from "./icons";
+import { ensureHistoryButton } from "./paneControls";
 import { computeReorder } from "./reorder";
 import { HoverFocusController } from "./hover-focus-controller";
 
@@ -139,6 +140,12 @@ export interface PaneLayoutCallbacks {
    * here. Optional for the same reason as `onDetachPane`.
    */
   onReattachPane?: (paneId: string) => void;
+  /**
+   * Open the transcript "History" overlay for `paneId` (#51). Rendered
+   * only for Claude panes — shell/codex panes have no session
+   * transcript. Optional for the same reason as `onDetachPane`.
+   */
+  onHistoryPane?: (paneId: string, leafId: string) => void;
 }
 
 /**
@@ -285,6 +292,22 @@ export class PaneLayout {
     const record = view.terminals.get(tab.id);
     if (!record || record.kind !== "terminal") return null;
     return { term: record.term, wrapper: record.wrapper, tab: record.tab };
+  }
+
+  // Resolve any pane's terminal record by pane id, active or not. The
+  // transcript "History" overlay (#51) mounts into that pane's wrapper
+  // regardless of which leaf currently has focus.
+  getTerminalRecordByPane(
+    paneId: string,
+  ): { term: TerminalPane; wrapper: HTMLElement; tab: Tab } | null {
+    for (const view of this.views.values()) {
+      for (const record of view.terminals.values()) {
+        if (record.kind === "terminal" && record.tab.paneId === paneId) {
+          return { term: record.term, wrapper: record.wrapper, tab: record.tab };
+        }
+      }
+    }
+    return null;
   }
 
   focusLeaf(leafId: string) {
@@ -655,6 +678,18 @@ export class PaneLayout {
       // file paths in scrollback become Cmd+clickable (hover-driven — no
       // cost until the user hovers a line). Optional; a no-op when unset.
       this.cb.onPaneCreated?.(t.paneId, term);
+      // History (clock) toggle for Claude panes lives in the pane's top-right
+      // control stack (alongside search + TTS), not the tab bar. `wrapper` is
+      // the same anchor boot.ts mounts search/TTS into, so they share one stack.
+      if (this.cb.onHistoryPane && t.kind === "claude") {
+        ensureHistoryButton(wrapper, {
+          icon: iconHistory,
+          onToggle: () => {
+            this.focusLeaf(leaf.id);
+            this.cb.onHistoryPane?.(t.paneId, leaf.id);
+          },
+        });
+      }
       view.terminals.set(t.id, {
         kind: "terminal",
         tab: t,
@@ -989,6 +1024,8 @@ export class PaneLayout {
         : "Detach pane to its own window (⌘⇧O)";
       detachButtonHtml = `<button class="icon-btn" data-act="detach" title="${title}"${disabledAttr}>${iconDetach}</button>`;
     }
+    // "History" (#51) now lives in the pane's top-right control stack (created
+    // per Claude pane above), not the tab bar — see ensureHistoryButton.
     actions.innerHTML = `
       ${detachButtonHtml}
       <button class="icon-btn" data-act="split-right" title="Split right (⌘D)">${iconSplitRight}</button>

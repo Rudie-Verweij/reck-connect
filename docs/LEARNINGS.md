@@ -4,6 +4,219 @@ Append per feature/phase: **What we learned**, **Surprises**, **Decisions**.
 
 ---
 
+## Transcript view: TTS + Cmd-click + chat-start (follow-up to #51/#52, 2026-07-05)
+
+Bringing the History overlay to feature-parity with the terminal / popout /
+file-viewer by reusing existing components. Plan in
+`.claude/plans/claude-transcript-view-enhancements.md`.
+
+### Phase 1 — parser: harness-wrapper sanitization
+
+**What we learned**
+- A Claude session's opening is not "user prose → Claude reply". Real
+  transcripts inject non-conversational **`role:"user"` strings**: a
+  `<local-command-caveat>` preamble, `<task-notification>` background events,
+  `<system-reminder>` blocks, and slash commands as
+  `<command-name>…</command-name>` (sometimes with `<command-message>` /
+  `<command-args>` / `<local-command-stdout>` siblings). Verified live across 8
+  station transcripts: openings split ~PROSE 60, task-notification 13,
+  local-command-caveat 11, command-name 11, local-command-stdout 10,
+  system-reminder 8.
+- The parser now runs `sanitizeUserString()` on string user content: captures
+  the slash command as a slim `{ kind: "command", name }` block, strips every
+  known wrapper (closed *or* run-to-end-of-message), and keeps whatever prose
+  survives. A line that reduces to nothing is **skipped** — no phantom "You"
+  turn.
+
+**Surprises**
+- Slash commands often arrive **standalone** (`<command-name>/model</command-name>`
+  with no siblings), not as the combined `/clear`+message+args blob — so the
+  sanitizer can't assume the sibling wrappers are present.
+- A skipped noise line must **not** reset the open assistant turn. A mid-turn
+  `<task-notification>` would otherwise split Claude's single turn in two, so
+  the pure-noise path returns `null` *without* clearing `openAssistant`.
+
+**Decisions**
+- New `command` block kind (vs. dropping slash commands) so `/clear`, `/model`,
+  `/compact` stay visible as the "how the chat opens" signal — rendered as a
+  pill in Phase 2, not a prose bubble.
+- Wrapper stripping is deliberately tolerant: unknown tags pass through as text
+  (the JSONL schema is not a public API).
+
+### Phase 2 — view: session divider, command pills, user-turn linkify
+
+**What we learned**
+- The `a.reck-internal-link` anchor-wrapper the file viewer uses is a private
+  `wrapFreeTextPaths(root)` inside `MarkdownRenderer.ts`. Exporting it (vs.
+  re-deriving via the already-exported `detectPathsInLine`) lets user prose
+  turns get the *exact* same anchors — same class, same `⌘+click to open`
+  tooltip, same skip rules — so Phase 3's single delegated handler covers user
+  and assistant turns uniformly.
+- Command blocks render inline as a slim pill (`.transcript-command`), branched
+  in `renderTurn` before the tool-group fold — a `/clear` is user intent, not
+  tool activity, so it must not land in the `<details>` tool group.
+
+**Surprises**
+- Assistant turns were already visually linkified (the `wrapFreeTextPaths` pass
+  runs unconditionally inside `md.mount`), but user turns were raw `.textContent`
+  with no anchors at all — so "make paths clickable" needed a *view* change
+  (wrap user text), not just a click handler.
+
+**Decisions**
+- The start-of-session divider is a permanent first body child, hidden via
+  `--hidden` until the first turn renders (so a loading/empty overlay doesn't
+  claim a session began). Shows the short 8-char session id when provided.
+
+### Phase 3 — Cmd+click opens any path
+
+**What we learned**
+- One delegated `click` listener on `.transcript-body` (not per-turn handlers)
+  is the right seam: it survives incremental appends and dodges the
+  `MarkdownRenderer.mount()` detach — a single shared renderer keeps a live
+  listener only on the *last-mounted* turn, so relying on it would make only
+  the newest Claude turn clickable.
+- The handler matches **any** `a[href]`, not just `.reck-internal-link`, and
+  always `preventDefault()`s — otherwise a plain click on a file href would
+  navigate the Electron window. Opening requires ⌘, matching the terminal +
+  file-viewer linkifiers.
+- The controller stays free of reckAPI/cwd knowledge: it takes a
+  `linkHandlers(host)` dep and forwards the result to the view. boot.ts builds
+  the handler from the exact pane-linkifier pipeline (`resolveActivatePath` +
+  `openInViewer` with `sourceHost`/`projectCwd`); popout passes the raw href
+  and lets main resolve (a detached window has no project cwd).
+
+**Surprises**
+- The map agent reported markdown native links carry `reck-internal-link`; in
+  fact the `link_open` override adds the class **only for internal hrefs**
+  (`isInternalLinkHref`). External links are bare `<a>` — hence the broadened
+  `a[href]` selector.
+- There is **no** renderer-side reckAPI bridge to `shell.openExternal`, and the
+  file viewer itself never wires `onExternalActivate`. So external links are
+  preventDefaulted (no navigation) but not opened — consistent with the viewer.
+  `onExternalActivate` is left plumbed for a future preload bridge.
+
+### Phase 4 — TTS
+
+**What we learned**
+- `tts/MarkdownSurfaceAdapter` is drop-in: `TranscriptView.getSpeakSurface()`
+  lazily builds `new MarkdownSurfaceAdapter({ container: root, body })` — the
+  same (positioned container, scrollable markdown body) split the file viewer
+  speaks with — cached and disposed in the view's `dispose()`.
+- No second `initTts`: the main window already runs one TtsController
+  (`boot.ts`), so a second would double the control bar + shortcuts. Instead the
+  existing `getActiveSpeakSurface` closure gains a one-line switch — when
+  `transcripts.get(rec.tab.paneId)` is open, return its speak surface — the
+  exact mirror of the `initSearch` transcript switch already there. Same
+  one-liner in `popout.ts`.
+
+**Surprises**
+- `MarkdownSurfaceAdapter`'s constructor is trivial (stores container/body;
+  overlay + scroll listener are lazy), so it's jsdom-safe to unit-test the
+  surface directly.
+- In `popout.ts` the `initTts` closure is defined *before* the `transcripts`
+  const — fine because the closure only runs on a user speak action (long after
+  module init), and TS permits the forward reference from inside a function.
+
+**Decisions**
+- Surface is lazy: a History overlay that's never spoken carries no highlight
+  overlay or scroll listener.
+
+### Round 2 (2026-07-05) — polish pass from live use
+
+Second batch of requests after using the History view: "transcript not found"
+for some panes, questions/plans invisible, top-right control layout, styling.
+
+#### P1 — "transcript not found" for worktree/subdir sessions
+
+**What we learned**
+- Root cause (probed live on the Pi): a Claude session that ran in a **git
+  worktree** is written under `~/.claude/projects/<EncodeCwd(worktreeCwd)>/`,
+  e.g. `-home-strijders-projects-CyborgStudio--claude-worktrees-transcript-search-fts5/`,
+  NOT under the project's registered cwd dir. The daemon computed the path from
+  `detail.Cwd` (the project cwd) → wrong dir → 404. Same for any project that
+  never wrote a session.
+- Fix: `sessions.FindTranscript()` prefers the canonical path but falls back to
+  a `filepath.Glob(claudeDir/*/<sid>.jsonl)` — the session id is a
+  globally-unique UUID, so the match is unambiguous. Handler validates the UUID
+  first (already did), so no glob-metachar/traversal risk.
+
+**Surprises**
+- The worktree session's *internal* `"cwd"` field still reads the git root
+  (`…/CyborgStudio`), but Claude places the file under `EncodeCwd(process.cwd())`
+  = the worktree path. So trusting the recorded cwd wouldn't help — glob-by-id is
+  the reliable locator.
+
+#### P2/P3 — surfacing plans & questions
+
+**What we learned**
+- The invisible content was two tools (probed live): `AskUserQuestion` (116×)
+  and `ExitPlanMode` (51×) — both were folding into the collapsed `🔧 N tool
+  calls` group. The parser now special-cases them into first-class blocks:
+  `plan` (`input.plan` + `input.planFilePath`), `question` (`input.questions[]`
+  = `{question, header, options[{label,description}]}`), rendered as their own
+  cards outside the tool group. Everything else stays collapsed.
+- Plan approval is detectable: the ExitPlanMode tool_result content starts with
+  the literal `"User has approved your plan"`. That folds to a slim `✓ Plan
+  approved` chip. A decline surfaces as the next normal user turn (the user's
+  own words), so no special handling needed.
+- The plan card is deliberately compact: the plan **path is a ⌘-clickable
+  link**, the full markdown sits in a collapsed `<details>` — "visible but not
+  extensive," per the user.
+
+**Surprises**
+- Adding `plan_approved` broke the tool-result fold: `isToolResult` required
+  *every* block to be `tool_result`, but the approval is now a `plan_approved`
+  block — so the message was becoming a phantom user turn. Fixed by folding on
+  `tool_result || plan_approved`.
+
+**Decisions**
+- User turns get an orange accent (left border + faint tint); the
+  start-of-session divider is promoted to a real title. Regular tool calls stay
+  collapsed-by-default (unchanged) — only plans/questions are surfaced.
+
+#### P4 — clamp long user turns
+
+**What we learned**
+- The clamp must be a CSS `max-height`/`overflow` clip + fade mask, NOT
+  `<details>`/`display:none` — the search subsystem's `TreeWalker` only matches
+  text that's in layout, so `display:none` would hide it from search. The full
+  text stays in the DOM; "Show more" toggles the clip. Threshold is a text proxy
+  (>600 chars or >12 lines) because jsdom has no layout to measure height.
+
+#### P5/P6 — unified top-right control stack
+
+**What we learned**
+- There was no shared controls container: the search bar and TTS bar were each
+  independently `position:absolute` into `getContainerEl()` with hand-tuned
+  offsets (TTS `top:8px`, search `top:48px`), and History was a `.tab-actions`
+  button. New `ui/paneControls.ts` `ensurePaneControls(anchor)` is a find-or-
+  create `.pane-controls` flex column (top-right, `align-items:flex-end`), and
+  every mounter now routes through it: search + TTS pass
+  `ensurePaneControls(anchor)` as their container; History moved into the stack
+  via `ensureHistoryButton`. Order is fixed by CSS `order` (search 1, TTS 2,
+  history 3), so it holds no matter which is present or when it was inserted.
+- The anchor is the same element for all three: `wrapper.appendChild(term.container)`
+  means `pane.container.parentElement === rec.wrapper`, so History (created in
+  PaneLayout's record loop) and search/TTS (from boot's focus closures) resolve
+  the *same* stack. Reused across pane / popout / file-viewer / transcript
+  overlay by pointing `ensurePaneControls` at each surface's positioned root.
+
+**Surprises**
+- Making bars children of `.pane-controls` auto-neutralises the old
+  `.file-viewer-root > .tts-control-bar` overrides (they're no longer *direct*
+  children of the root), so no rules had to be deleted — only in-flow overrides
+  added under `.pane-controls > …`.
+- `getSpeakSurface()`'s container changed from `root` to the stack, breaking a
+  test asserting `getContainerEl() === root`; updated to the `.pane-controls`
+  child. Two pane-layout tests keyed on `.tab-actions [data-act=history]` moved
+  to `.pane-controls-history`.
+
+**Decisions**
+- `.pane-controls` sits at `z-index:31` (above the History overlay's 30) with
+  `pointer-events:none` on the box + `auto` on children, so empty gaps don't eat
+  surface clicks. Surfaces with a header (`.file-viewer-root`, `.transcript-view`)
+  push the stack down via a per-surface `top` override.
+
 ## Codex preamble via `developer_instructions` (follow-up to #33, 2026-07-01)
 
 Undeferred the #32 preamble for codex after web-researching the actual `codex` CLI.

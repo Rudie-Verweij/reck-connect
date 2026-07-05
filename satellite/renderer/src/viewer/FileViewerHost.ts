@@ -28,6 +28,7 @@ import { initTts, type TtsHandle } from "../tts/initTts";
 import { MarkdownSurfaceAdapter } from "../tts/MarkdownSurfaceAdapter";
 import { CodeMirrorSurfaceAdapter } from "../tts/CodeMirrorSurfaceAdapter";
 import type { SpeakSurfaceAdapter } from "../tts/SpeakSurfaceAdapter";
+import { ensurePaneControls } from "../ui/paneControls";
 import {
   attachViewerSearch,
   type ViewerSearchHandle,
@@ -1237,9 +1238,18 @@ function attachSpeakAndSearch(
   shell: ViewerShell,
   codeEditor: CodeEditorHandle | null,
 ): void {
+  // Route both surface adapters' control container through the shared
+  // top-right pane-controls stack (adopted from main's ui/paneControls),
+  // so the file-viewer search bar + TTS bar dock into the unified stack.
   const surface: SpeakSurfaceAdapter = codeEditor
-    ? new CodeMirrorSurfaceAdapter({ container: root, view: codeEditor.view })
-    : new MarkdownSurfaceAdapter({ container: root, body: shell.body });
+    ? new CodeMirrorSurfaceAdapter({
+        container: ensurePaneControls(root),
+        view: codeEditor.view,
+      })
+    : new MarkdownSurfaceAdapter({
+        container: ensurePaneControls(root),
+        body: shell.body,
+      });
   let ttsHandle: TtsHandle | null = null;
   void (async () => {
     try {

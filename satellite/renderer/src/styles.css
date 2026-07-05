@@ -397,6 +397,91 @@ html, body, #app {
   overflow-y: auto;
 }
 
+/* Active list doubles as an unarchive drop target while dragging an
+   archived row out of the Archive section. */
+.rail-list.drop-target {
+  box-shadow: inset 0 0 0 1px var(--claude-orange);
+  border-radius: var(--radius);
+}
+
+/* === Archive section === */
+
+.rail-archive {
+  flex-shrink: 0;
+  margin: 0.25rem 0.75rem 0;
+  border-top: 1px solid var(--app-border);
+}
+
+.rail-archive.drop-target {
+  background: var(--app-hover);
+  box-shadow: inset 0 0 0 1px var(--claude-orange);
+  border-radius: var(--radius);
+}
+
+.rail-archive-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.55rem 0.6rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  transition: color 0.2s var(--ease-smooth);
+}
+
+.rail-archive-header:hover { color: var(--app-text-dim); }
+
+.rail-archive-caret {
+  display: inline-block;
+  font-size: 0.7rem;
+  transition: transform 0.15s var(--ease-smooth);
+}
+
+.rail-archive:not(.collapsed) .rail-archive-caret { transform: rotate(90deg); }
+
+.rail-archive-title { flex: 1; text-align: left; }
+
+.rail-archive-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.rail-archive-list {
+  padding: 0 0.5rem 0.35rem;
+  /* Cap at ~4.5 rail rows then scroll — the half row makes it obvious there
+     is more below. A rail row is ~2.95rem tall (0.85rem padding × 2 plus a
+     0.95rem / 1.3 line). */
+  max-height: calc(2.95rem * 4.5);
+  overflow-y: auto;
+}
+
+.rail-archive-empty {
+  padding: 0.5rem 0.6rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  font-style: italic;
+  color: var(--app-text-muted);
+  opacity: 0.7;
+}
+
+/* Archived rows: dimmed + asleep; no live pane indicator. */
+.rail-item.archived {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+.rail-item.archived:hover { opacity: 0.85; }
+
+.rail-item.archived .pane-indicator { display: none; }
+
 .rail-add {
   display: inline-flex;
   align-items: center;
@@ -3512,3 +3597,348 @@ textarea.file-viewer-merge-pane {
 .file-viewer-root .cm-scroller::-webkit-scrollbar {
   display: none;
 }
+
+/* ---------- Claude transcript view — the "History" overlay (#51) ----------
+   Mounted over a Claude pane's terminal; the xterm keeps running
+   underneath. Own DOM scroll container → the truthful overlay scrollbar
+   and whole-chat search work exactly, at any pane width. */
+.transcript-view {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-rows: 34px auto 1fr;
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+.transcript-status {
+  padding: 6px 22px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--app-text-dim);
+}
+.transcript-status--error {
+  color: var(--claude-orange);
+}
+.transcript-status--hidden {
+  display: none;
+}
+.transcript-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--app-text-dim);
+}
+.transcript-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.transcript-close {
+  background: none;
+  border: none;
+  color: var(--app-text-dim);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 2px 6px;
+  border-radius: var(--radius);
+}
+.transcript-close:hover {
+  color: var(--app-text);
+  background: var(--app-hover);
+}
+.transcript-body {
+  position: relative;
+  overflow: auto;
+  padding: 16px 22px 24px;
+  line-height: 1.55;
+  /* Hide the native scrollbar — the themed OverlayScrollbar is the only
+     one we want. Two bars (grey native + themed overlay) looked doubled. */
+  scrollbar-width: none;
+}
+.transcript-body::-webkit-scrollbar { display: none; }
+.transcript-turn {
+  margin: 0 0 18px;
+}
+.transcript-role {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  margin-bottom: 4px;
+}
+.transcript-turn--user .transcript-role {
+  color: var(--claude-orange);
+}
+/* User turns are plain text (never parsed as markup) — preserve the
+   line breaks people actually typed. */
+.transcript-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+.transcript-md {
+  font-family: var(--font-body, sans-serif);
+  font-size: 0.9rem;
+}
+.transcript-md pre {
+  overflow-x: auto;
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+.transcript-md code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+/* One collapsed group per Claude turn, holding all its thinking + tool
+   calls + results. Text renders inline above it; this stays folded. */
+details.transcript-tools {
+  margin: 8px 0 2px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  background: var(--app-bg-raised);
+  font-size: 0.8rem;
+}
+details.transcript-tools > summary {
+  cursor: pointer;
+  padding: 5px 10px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  color: var(--app-text-dim);
+  user-select: none;
+}
+details.transcript-tools > summary:hover { color: var(--app-text); }
+.transcript-tool-label {
+  padding: 6px 10px 2px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  border-top: 1px solid var(--app-border);
+}
+.transcript-thinking > pre,
+.transcript-tool > pre,
+.transcript-tool-result > pre {
+  margin: 0;
+  padding: 2px 10px 8px;
+  overflow: auto;
+  max-height: 320px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--app-text-dim);
+}
+/* Start-of-session title — "Start of session" with the short id, so the top
+   of the History overlay reads as the beginning of the conversation. Rendered
+   as a prominent title (not a thin divider). */
+.transcript-session-start {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 24px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--app-text);
+}
+.transcript-session-start::before,
+.transcript-session-start::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--app-border);
+}
+.transcript-session-start--hidden { display: none; }
+.transcript-session-start-id {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  color: var(--app-text-dim);
+  opacity: 0.7;
+}
+/* Slash-command chip (/clear, /model) — a slim marker, not a prose bubble. */
+.transcript-command {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-bg-raised);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--claude-orange);
+}
+
+/* User messages get an orange accent so they stand out from Claude's turns. */
+.transcript-turn--user .transcript-text {
+  border-color: color-mix(in srgb, var(--claude-orange) 45%, var(--app-border));
+  border-left: 3px solid var(--claude-orange);
+  background: color-mix(in srgb, var(--claude-orange) 7%, var(--app-bg-raised));
+}
+
+/* Plan card (ExitPlanMode): compact — a header, the ⌘-clickable plan path, and
+   the full plan tucked in a collapsed <details> so it never dominates. */
+.transcript-plan {
+  margin: 8px 0 4px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--claude-orange) 40%, var(--app-border));
+  border-left: 3px solid var(--claude-orange);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--claude-orange) 5%, var(--app-bg-raised));
+}
+.transcript-plan-head {
+  font-weight: 600;
+  font-size: 0.82rem;
+  margin-bottom: 4px;
+}
+a.transcript-plan-path {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  margin-bottom: 4px;
+}
+details.transcript-plan-detail > summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  color: var(--app-text-dim);
+  user-select: none;
+}
+details.transcript-plan-detail > summary:hover { color: var(--app-text); }
+details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
+
+/* Question card (AskUserQuestion): question text + its options, surfaced. */
+.transcript-question {
+  margin: 8px 0 4px;
+  padding: 8px 12px;
+  border: 1px solid var(--app-border);
+  border-left: 3px solid var(--claude-orange-glow);
+  border-radius: var(--radius);
+  background: var(--app-bg-raised);
+}
+.transcript-question-header {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  margin-bottom: 2px;
+}
+.transcript-question-text {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+.transcript-question-options {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.8rem;
+}
+.transcript-question-options li { margin: 2px 0; }
+.transcript-question-option-label { font-weight: 600; }
+.transcript-question-option-desc {
+  color: var(--app-text-dim);
+  margin-left: 6px;
+}
+
+/* Long user message clamp — height clip (NOT display:none) so the hidden text
+   stays in the DOM and the search bar can still find it. */
+.transcript-clampable {
+  position: relative;
+}
+.transcript-clampable--clamped .transcript-clamp-body {
+  max-height: 15em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 72%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 72%, transparent 100%);
+}
+.transcript-clamp-toggle {
+  margin-top: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-bg-raised);
+  color: var(--claude-orange);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  user-select: none;
+}
+.transcript-clamp-toggle:hover { border-color: var(--claude-orange); }
+
+/* Plan-approved chip — a slim confirmation, not the boilerplate result text. */
+.transcript-plan-approved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #3fb950 14%, var(--app-bg-raised));
+  border: 1px solid color-mix(in srgb, #3fb950 45%, var(--app-border));
+  font-size: 0.76rem;
+  color: #3fb950;
+}
+
+/* ── Unified top-right control stack ──────────────────────────────────────
+   The search bar, TTS control bar, and History button all mount into one
+   `.pane-controls` box so they stack vertically and snap to the top-right,
+   never clipping. Whatever is present hugs the corner; History is always last.
+   The fixed order is enforced by CSS `order`, independent of insertion time. */
+.pane-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 31; /* above the History overlay (.transcript-view, z-index 30) */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none; /* the empty gaps must not eat clicks on the surface */
+}
+.pane-controls > * { pointer-events: auto; }
+/* Once a bar is a child of `.pane-controls`, its standalone absolute rules (and
+   the `.file-viewer-root > …` overrides) stop matching, so it lays out in-flow. */
+.pane-controls > .reck-search-bar {
+  position: static;
+  top: auto;
+  right: auto;
+  order: 1;
+}
+.pane-controls > .tts-control-bar {
+  position: static;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  order: 2;
+}
+.pane-controls > .pane-controls-history { order: 3; }
+/* Surfaces with a header push the stack below it. */
+.file-viewer-root > .pane-controls { top: 46px; right: 16px; }
+.transcript-view .pane-controls { top: 42px; right: 12px; }
