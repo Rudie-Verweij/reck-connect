@@ -16,6 +16,7 @@ import type {
   DismissSessionsRequest,
   DismissSessionsResponse,
   DockProjectResponse,
+  ArchiveProjectResponse,
   MissionControlStateResponse,
   MissionControlHistoryResponse,
   MissionControlChatRequest,
@@ -304,6 +305,20 @@ export class ApiClient {
   undockProject(projectId: string) {
     return this.fetch<DockProjectResponse>(
       `/projects/${encodeURIComponent(projectId)}/undock`,
+      { method: "POST" },
+    );
+  }
+
+  archiveProject(projectId: string) {
+    return this.fetch<ArchiveProjectResponse>(
+      `/projects/${encodeURIComponent(projectId)}/archive`,
+      { method: "POST" },
+    );
+  }
+
+  unarchiveProject(projectId: string) {
+    return this.fetch<ArchiveProjectResponse>(
+      `/projects/${encodeURIComponent(projectId)}/unarchive`,
       { method: "POST" },
     );
   }

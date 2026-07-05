@@ -971,6 +971,7 @@ func (m *Manager) Projects() []proto.Project {
 			PaneStoplights: m.paneStoplightsLocked(id),
 			PaneIDs:        m.paneIDsLocked(id),
 			Docked:         p.Docked,
+			Archived:       p.Archived,
 			DisplayName:    p.DisplayName,
 			Available:      p.Available,
 		})
@@ -1000,6 +1001,7 @@ func (m *Manager) DockedProjects() []proto.Project {
 			PaneStoplights: m.paneStoplightsLocked(id),
 			PaneIDs:        m.paneIDsLocked(id),
 			Docked:         true,
+			Archived:       p.Archived,
 			DisplayName:    p.DisplayName,
 			Available:      p.Available,
 		})
@@ -1033,6 +1035,111 @@ func (m *Manager) SetDocked(id string, docked bool) error {
 		m.mu.Unlock()
 		return fmt.Errorf("persist dock state: %w", err)
 	}
+	m.notifyStateChange()
+	return nil
+}
+
+// ArchiveProject puts a project to sleep. It kills every pane the project
+// has open — freeing the PTY subprocesses that hold the bulk of the RAM —
+// but, unlike DeletePane, it does NOT clear the session rows' was_live flag,
+// so UnarchiveProject (or a manual restore) can respawn exactly what was
+// running. The project stays registered with archived=true; its cwd is never
+// touched. Idempotent: a nil no-op when already archived. Returns an error
+// if the project doesn't exist.
+//
+// Ordering mirrors RemoveProject: persist the flag to disk FIRST so a crash
+// mid-teardown leaves disk authoritative, then tear down the live panes.
+func (m *Manager) ArchiveProject(id string) error {
+	m.mu.RLock()
+	p, ok := m.projects[id]
+	m.mu.RUnlock()
+	if !ok {
+		return errors.New("project not found")
+	}
+	if p.Archived {
+		return nil
+	}
+
+	if err := config.SetProjectArchived(m.configPath, id, true); err != nil {
+		return fmt.Errorf("persist archive state: %w", err)
+	}
+
+	// Flip the in-memory flag and detach the live panes atomically.
+	m.mu.Lock()
+	p = m.projects[id]
+	p.Archived = true
+	m.projects[id] = p
+	panes := append([]*Pane(nil), m.byProj[id]...)
+	m.byProj[id] = nil
+	for _, pane := range panes {
+		delete(m.byID, pane.ID)
+	}
+	m.mu.Unlock()
+
+	// Kill without clearing was_live — the one thing that separates archive
+	// from a graceful DeletePane.
+	for _, pane := range panes {
+		pane.Kill()
+	}
+
+	// Reap children against a single shared deadline (same rationale as
+	// RemoveProject: serialised per-pane waits would blow past launchd's
+	// SIGKILL deadline with many hung children).
+	timeout := m.removeProjectChildWaitTimeout
+	if timeout <= 0 {
+		timeout = defaultRemoveProjectChildWaitTimeout
+	}
+	if len(panes) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		var wg sync.WaitGroup
+		wg.Add(len(panes))
+		for _, pane := range panes {
+			go func(p *Pane) {
+				defer wg.Done()
+				if !p.WaitForExitCtx(ctx) {
+					slog.Warn("archive project: pane child did not exit within timeout",
+						"id", id, "pane", p.ID, "timeout", timeout)
+				}
+			}(pane)
+		}
+		wg.Wait()
+	}
+
+	m.recomputeAggregate(id)
+	m.notifyStateChange()
+	return nil
+}
+
+// UnarchiveProject wakes an archived project: it clears the archived flag and
+// respawns exactly the panes that were live when it was archived (their
+// was_live rows were left intact). cols/rows size the respawned PTYs; pass 0
+// to accept the store defaults — the client re-fits on attach, same as the
+// boot restore path. Clearing the flag is a no-op when the project isn't
+// archived; the restore walk still runs but skips panes that are already
+// live. Returns an error if the project doesn't exist.
+func (m *Manager) UnarchiveProject(id string, cols, rows int) error {
+	m.mu.RLock()
+	p, ok := m.projects[id]
+	m.mu.RUnlock()
+	if !ok {
+		return errors.New("project not found")
+	}
+
+	if p.Archived {
+		if err := config.SetProjectArchived(m.configPath, id, false); err != nil {
+			return fmt.Errorf("persist unarchive state: %w", err)
+		}
+		m.mu.Lock()
+		p = m.projects[id]
+		p.Archived = false
+		m.projects[id] = p
+		m.mu.Unlock()
+	}
+
+	res := m.RestoreProjectOrphans(id, p.Cwd, cols, rows)
+	slog.Info("unarchive project restore", "id", id,
+		"restored", res.Restored, "skipped", res.Skipped, "failed", res.Failed)
 	m.notifyStateChange()
 	return nil
 }
@@ -1590,8 +1697,28 @@ func (m *Manager) RestoreOrphans(cols, rows int) RestoreOrphansResult {
 	if m.sessions == nil {
 		return total
 	}
-	for _, proj := range m.Projects() {
-		r := m.restoreProjectOrphans(proj.ID, proj.Cwd, cols, rows)
+	// Snapshot (id, cwd) for non-hidden projects, flagging archived ones.
+	// Archived projects deliberately keep was_live=true rows so unarchive can
+	// respawn them on demand — the boot walk must NOT resurrect them, or
+	// archiving wouldn't survive a daemon restart.
+	type projRef struct {
+		id, cwd  string
+		archived bool
+	}
+	m.mu.RLock()
+	refs := make([]projRef, 0, len(m.projects))
+	for id, p := range m.projects {
+		if IsHiddenProjectID(id) {
+			continue
+		}
+		refs = append(refs, projRef{id: id, cwd: p.Cwd, archived: p.Archived})
+	}
+	m.mu.RUnlock()
+	for _, ref := range refs {
+		if ref.archived {
+			continue
+		}
+		r := m.restoreProjectOrphans(ref.id, ref.cwd, cols, rows)
 		total.Restored += r.Restored
 		total.Skipped += r.Skipped
 		total.Failed += r.Failed

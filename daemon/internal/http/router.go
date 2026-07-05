@@ -171,6 +171,8 @@ func (s *Server) Router() *chi.Mux {
 	r.Get("/projects/{id}", s.handleProjectDetail)
 	r.Post("/projects/{id}/dock", s.handleDockProject)
 	r.Post("/projects/{id}/undock", s.handleUndockProject)
+	r.Post("/projects/{id}/archive", s.handleArchiveProject)
+	r.Post("/projects/{id}/unarchive", s.handleUnarchiveProject)
 	r.Post("/projects/{id}/rename", s.handleRenameProject)
 	r.Post("/projects/{id}/panes", s.handleCreatePane)
 	r.Delete("/projects/{id}/panes/{pane_id}", s.handleDeletePane)
@@ -934,6 +936,47 @@ func (s *Server) handleUndockProject(w nethttp.ResponseWriter, r *nethttp.Reques
 		s.MC.NotifyStateChanged()
 	}
 	writeJSON(w, proto.DockProjectResponse{Docked: false})
+}
+
+// handleArchiveProject puts a project to sleep — kills its panes to free RAM
+// while keeping its session rows was_live so it can be restored later. Same
+// supervisor restriction as dock: putting a project to sleep is a
+// human-operator concern, and self-archiving would let the supervisor drop
+// its own workspace out from under itself.
+func (s *Server) handleArchiveProject(w nethttp.ResponseWriter, r *nethttp.Request) {
+	if ActorFromRequest(r) == "supervisor" {
+		nethttp.Error(w, "forbidden: supervisor cannot archive projects", nethttp.StatusForbidden)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.Manager.ArchiveProject(id); err != nil {
+		nethttp.Error(w, err.Error(), nethttp.StatusNotFound)
+		return
+	}
+	if s.MC != nil {
+		s.MC.NotifyStateChanged()
+	}
+	writeJSON(w, proto.ArchiveProjectResponse{Archived: true})
+}
+
+// handleUnarchiveProject wakes an archived project — clears the flag and
+// respawns exactly the panes that were live. cols/rows are left at 0 (the
+// sessions store default-sizes the PTYs; the client re-fits on attach, same
+// as the boot restore path). Symmetric supervisor restriction with archive.
+func (s *Server) handleUnarchiveProject(w nethttp.ResponseWriter, r *nethttp.Request) {
+	if ActorFromRequest(r) == "supervisor" {
+		nethttp.Error(w, "forbidden: supervisor cannot unarchive projects", nethttp.StatusForbidden)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.Manager.UnarchiveProject(id, 0, 0); err != nil {
+		nethttp.Error(w, err.Error(), nethttp.StatusNotFound)
+		return
+	}
+	if s.MC != nil {
+		s.MC.NotifyStateChanged()
+	}
+	writeJSON(w, proto.ArchiveProjectResponse{Archived: false})
 }
 
 func (s *Server) handleWS(w nethttp.ResponseWriter, r *nethttp.Request) {

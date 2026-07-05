@@ -114,6 +114,14 @@ export interface Project {
   /** True when the project is registered with Mission Control. */
   docked: boolean;
   /**
+   * True when the project is archived (asleep): its panes are killed to free
+   * RAM, its saved layout is frozen, and it renders in the rail's Archive
+   * section until restored. Optional on the wire — a daemon predating this
+   * feature omits the field entirely; the renderer treats `undefined` as
+   * "not archived" (same wire-compat convention as `available`).
+   */
+  archived?: boolean;
+  /**
    * User-given override. Empty/absent means no override — render `name`.
    * Persisted in projects.toml; shared across every client.
    */
@@ -390,6 +398,10 @@ export interface PaneUploadsListResponse {
 
 export interface DockProjectResponse {
   docked: boolean;
+}
+
+export interface ArchiveProjectResponse {
+  archived: boolean;
 }
 
 export interface MissionControlPane {

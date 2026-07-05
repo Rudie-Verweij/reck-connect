@@ -79,7 +79,7 @@ Optional auth: `Authorization: Bearer <DAEMON_TOKEN>` — enforced if `DAEMON_TO
 // makes this explicit so nobody switches the unit to nanoseconds
 // without reopening the drift discussion.
 interface HealthResponse { status: string; version: string; uptime_sec: number }
-interface Project { id: string; name: string; cwd: string; stoplight: Stoplight; pane_count: number; pane_stoplights?: Stoplight[]; pane_ids?: string[]; docked: boolean; display_name?: string; available?: boolean }
+interface Project { id: string; name: string; cwd: string; stoplight: Stoplight; pane_count: number; pane_stoplights?: Stoplight[]; pane_ids?: string[]; docked: boolean; archived?: boolean; display_name?: string; available?: boolean }
 // pane_stoplights — per-pane effective stoplight list, ordered by pane
 // creation (same order as ProjectDetail.panes). Older daemons omit the
 // field; clients fall back to broadcasting `stoplight` across
@@ -167,6 +167,7 @@ interface DismissSessionsResponse { dismissed: number }
 
 // --- Mission Control ---
 interface DockProjectResponse { docked: boolean }
+interface ArchiveProjectResponse { archived: boolean }
 interface MissionControlPane {
   pane_id: string;
   kind: PaneKind;

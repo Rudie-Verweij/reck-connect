@@ -14,6 +14,14 @@ export interface RailProps {
   onOpenInFinder?: (projectId: string) => void;
   onToggleDock?: (projectId: string, docked: boolean) => void;
   /**
+   * Toggle a project's archived state. `archived` is the DESIRED new state
+   * (mirrors onToggleDock): true to archive, false to unarchive. Invoked
+   * from the context menu and from drag-into / drag-out-of the Archive
+   * section. The confirm-before-restore prompt lives in the handler, not
+   * here — the rail only reports intent.
+   */
+  onToggleArchive?: (projectId: string, archived: boolean) => void;
+  /**
    * an earlier release — return paneIds in the project's saved layout order
    * (left-to-right, top-to-bottom for stacked splits, same flatten as
    * the tab bar uses). Returning `null` skips reorder for that project
@@ -39,6 +47,7 @@ interface RailRow {
   lastStoplightsKey: string;
   lastName: string;
   lastDocked: boolean;
+  lastArchived: boolean;
 }
 
 const MAX_INDICATOR_DOTS = 6;
@@ -160,10 +169,19 @@ function syncIndicatorDots(
 
 export class Rail {
   private listEl: HTMLElement;
+  private archiveSectionEl: HTMLElement;
+  private archiveListEl: HTMLElement;
+  private archiveCountEl: HTMLElement;
   private footerCountEl: HTMLElement;
   private rows = new Map<string, RailRow>();
   private orderedIds: string[] = [];
   private draggedId: string | null = null;
+  // Archived state of the row currently being dragged. Reorder only happens
+  // within a zone (active↔active); a cross-zone drag is an archive/unarchive
+  // intent handled by the list / archive drop zones instead.
+  private draggedArchived = false;
+  private archivedCount = 0;
+  private archiveCollapsed = true;
   private currentSelected: string | null = null;
 
   constructor(private props: RailProps) {
@@ -176,18 +194,35 @@ export class Rail {
       <div class="rail-header">Projects</div>
       <div class="rail-divider"></div>
       <div class="rail-list"></div>
+      <div class="rail-archive collapsed" id="rail-archive">
+        <button class="rail-archive-header" id="rail-archive-header" type="button" aria-expanded="false" title="Archived projects — asleep, using no memory. Click a project to restore it.">
+          <span class="rail-archive-caret" aria-hidden="true">▸</span>
+          <span class="rail-archive-title">Archive</span>
+          <span class="rail-archive-count" id="rail-archive-count">0</span>
+        </button>
+        <div class="rail-archive-list" id="rail-archive-list" hidden></div>
+      </div>
       <div class="rail-footer">
         <span id="rail-count">0 projects</span>
         <button class="rail-add" id="rail-add" title="Add project">${iconPlus}<span>Add</span></button>
       </div>
     `;
     this.listEl = this.props.root.querySelector(".rail-list") as HTMLElement;
+    this.archiveSectionEl = this.props.root.querySelector("#rail-archive") as HTMLElement;
+    this.archiveListEl = this.props.root.querySelector("#rail-archive-list") as HTMLElement;
+    this.archiveCountEl = this.props.root.querySelector("#rail-archive-count") as HTMLElement;
     this.footerCountEl = this.props.root.querySelector("#rail-count") as HTMLElement;
     (this.props.root.querySelector("#rail-add") as HTMLElement).addEventListener("click", () =>
       this.props.onAddProject(),
     );
     const mcEl = this.props.root.querySelector("#rail-mc") as HTMLElement;
     mcEl.addEventListener("click", () => this.props.onSelectMissionControl?.());
+    (this.props.root.querySelector("#rail-archive-header") as HTMLElement).addEventListener(
+      "click",
+      () => this.toggleArchiveCollapsed(),
+    );
+    this.wireArchiveDropZone();
+    this.wireActiveDropZone();
   }
 
   setMissionControlSelected(selected: boolean) {
@@ -202,9 +237,11 @@ export class Rail {
   }
 
   setProjects(projects: Project[]) {
+    const active = projects.filter((p) => !p.archived);
+    const archived = projects.filter((p) => p.archived);
     const nextIds = projects.map((p) => p.id);
 
-    // Remove rows for projects that went away
+    // Remove rows for projects that went away entirely.
     for (const [id, row] of this.rows) {
       if (!nextIds.includes(id)) {
         row.el.remove();
@@ -212,49 +249,30 @@ export class Rail {
       }
     }
 
-    // Ensure rows exist in the correct order; create missing, reorder if needed
-    for (let i = 0; i < projects.length; i++) {
-      const p = projects[i];
-      let row = this.rows.get(p.id);
-      if (!row) {
-        row = this.createRow(p);
-        this.rows.set(p.id, row);
-      }
+    this.renderZone(active, this.listEl);
+    // Drop any stale empty-state placeholder before positioning archived
+    // rows (renderZone indexes container.children), then render the rows.
+    this.archiveListEl.querySelector(".rail-archive-empty")?.remove();
+    this.renderZone(archived, this.archiveListEl);
 
-      // Update changed fields in place (no DOM destruction).
-      // Per-pane stoplights collapse the old (aggregate-color, pane-count)
-      // pair into a single join-comparable key — a flip from
-      // [green, orange] → [green, green] is a colour change, not a count
-      // change, but both are handled by the same diff now.
-      const layoutOrder = this.props.getLayoutPaneOrder?.(p.id) ?? null;
-      const stoplights = resolvePaneStoplights(p, layoutOrder);
-      const key = stoplights.join(",");
-      if (row.lastStoplightsKey !== key) {
-        syncIndicatorDots(row.indicatorEl, stoplights);
-        row.lastStoplightsKey = key;
-      }
-      if (row.lastName !== p.name) {
-        row.nameEl.textContent = p.name;
-        row.lastName = p.name;
-      }
-      if (row.lastDocked !== p.docked) {
-        row.el.classList.toggle("docked", p.docked);
-        if (p.docked) row.el.title = "Docked in Mission Control";
-        else row.el.removeAttribute("title");
-        row.lastDocked = p.docked;
-      }
-      row.el.classList.toggle("selected", p.id === this.currentSelected);
+    // Reorder acts on the whole set (active first, then archived) so an
+    // active↔active move never drops archived projects from the persisted
+    // order.
+    this.orderedIds = active.map((p) => p.id).concat(archived.map((p) => p.id));
 
-      // Ensure position in the list matches the target index
-      const expectedChild = this.listEl.children[i];
-      if (expectedChild !== row.el) {
-        this.listEl.insertBefore(row.el, expectedChild ?? null);
-      }
+    this.archivedCount = archived.length;
+    this.archiveCountEl.textContent = String(this.archivedCount);
+    // The Archive section is ALWAYS visible so it's a permanent drop target.
+    // When empty, a placeholder inside the (expandable) folder says so.
+    if (this.archivedCount === 0) {
+      const empty = document.createElement("div");
+      empty.className = "rail-archive-empty";
+      empty.textContent = "Nothing in archive";
+      this.archiveListEl.appendChild(empty);
     }
+    this.applyArchiveCollapsed();
 
-    this.orderedIds = nextIds;
-
-    const count = projects.length;
+    const count = active.length;
     this.footerCountEl.textContent = count === 1 ? "1 project" : `${count} projects`;
   }
 
@@ -265,11 +283,117 @@ export class Rail {
     }
   }
 
+  private renderZone(projects: Project[], container: HTMLElement) {
+    for (let i = 0; i < projects.length; i++) {
+      const p = projects[i];
+      let row = this.rows.get(p.id);
+      if (!row) {
+        row = this.createRow(p);
+        this.rows.set(p.id, row);
+      }
+      this.updateRow(row, p);
+
+      // Move the row into its zone if it just switched (active↔archived).
+      if (row.el.parentElement !== container) {
+        container.appendChild(row.el);
+      }
+      const expectedChild = container.children[i];
+      if (expectedChild !== row.el) {
+        container.insertBefore(row.el, expectedChild ?? null);
+      }
+    }
+  }
+
+  private updateRow(row: RailRow, p: Project) {
+    const layoutOrder = this.props.getLayoutPaneOrder?.(p.id) ?? null;
+    const stoplights = resolvePaneStoplights(p, layoutOrder);
+    const key = stoplights.join(",");
+    if (row.lastStoplightsKey !== key) {
+      syncIndicatorDots(row.indicatorEl, stoplights);
+      row.lastStoplightsKey = key;
+    }
+    if (row.lastName !== p.name) {
+      row.nameEl.textContent = p.name;
+      row.lastName = p.name;
+    }
+    if (row.lastDocked !== p.docked) {
+      row.el.classList.toggle("docked", p.docked);
+      row.lastDocked = p.docked;
+    }
+    const archived = p.archived ?? false;
+    if (row.lastArchived !== archived) {
+      row.el.classList.toggle("archived", archived);
+      row.lastArchived = archived;
+    }
+    // Title reflects the current state (archived wins over docked).
+    if (archived) row.el.title = "Archived — click to restore";
+    else if (p.docked) row.el.title = "Docked in Mission Control";
+    else row.el.removeAttribute("title");
+    row.el.classList.toggle("selected", p.id === this.currentSelected);
+  }
+
+  private toggleArchiveCollapsed() {
+    this.archiveCollapsed = !this.archiveCollapsed;
+    this.applyArchiveCollapsed();
+  }
+
+  private applyArchiveCollapsed() {
+    this.archiveListEl.hidden = this.archiveCollapsed;
+    this.archiveSectionEl.classList.toggle("collapsed", this.archiveCollapsed);
+    const header = this.props.root.querySelector("#rail-archive-header") as HTMLElement | null;
+    if (header) header.setAttribute("aria-expanded", String(!this.archiveCollapsed));
+  }
+
+  // Dragging an ACTIVE row onto the Archive section archives it.
+  private wireArchiveDropZone() {
+    const zone = this.archiveSectionEl;
+    zone.addEventListener("dragover", (e) => {
+      if (!this.draggedId || this.draggedArchived) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      zone.classList.add("drop-target");
+    });
+    zone.addEventListener("dragleave", (e) => {
+      if (!zone.contains(e.relatedTarget as Node)) zone.classList.remove("drop-target");
+    });
+    zone.addEventListener("drop", (e) => {
+      zone.classList.remove("drop-target");
+      if (!this.draggedId || this.draggedArchived) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.props.onToggleArchive?.(this.draggedId, true);
+    });
+  }
+
+  // Dragging an ARCHIVED row onto the active project list unarchives it.
+  private wireActiveDropZone() {
+    const zone = this.listEl;
+    zone.addEventListener("dragover", (e) => {
+      if (!this.draggedId || !this.draggedArchived) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      zone.classList.add("drop-target");
+    });
+    zone.addEventListener("dragleave", (e) => {
+      if (!zone.contains(e.relatedTarget as Node)) zone.classList.remove("drop-target");
+    });
+    zone.addEventListener("drop", (e) => {
+      zone.classList.remove("drop-target");
+      if (!this.draggedId || !this.draggedArchived) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.props.onToggleArchive?.(this.draggedId, false);
+    });
+  }
+
   private createRow(p: Project): RailRow {
+    const archived = p.archived ?? false;
     const el = document.createElement("div");
-    el.className = "rail-item" + (p.docked ? " docked" : "");
+    el.className =
+      "rail-item" + (p.docked ? " docked" : "") + (archived ? " archived" : "");
     el.setAttribute("data-project-id", p.id);
-    if (p.docked) el.title = "Docked in Mission Control";
+    if (archived) el.title = "Archived — click to restore";
+    else if (p.docked) el.title = "Docked in Mission Control";
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = p.name;
@@ -288,17 +412,21 @@ export class Rail {
       e.preventDefault();
       const row = this.rows.get(p.id);
       const docked = row?.lastDocked ?? p.docked;
-      const name = row?.lastName ?? p.name;
+      const isArchived = row?.lastArchived ?? archived;
+      const rowName = row?.lastName ?? p.name;
       showRailContextMenu(e.clientX, e.clientY, {
         docked,
+        archived: isArchived,
         onOpen: () => this.props.onOpenInFinder?.(p.id),
-        onDelete: () => this.props.onRequestDelete?.(p.id, name),
+        onDelete: () => this.props.onRequestDelete?.(p.id, rowName),
         onToggleDock: () => this.props.onToggleDock?.(p.id, !docked),
+        onToggleArchive: () => this.props.onToggleArchive?.(p.id, !isArchived),
       });
     });
     el.draggable = true;
     el.addEventListener("dragstart", (e) => {
       this.draggedId = p.id;
+      this.draggedArchived = this.rows.get(p.id)?.lastArchived ?? archived;
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/plain", p.id);
@@ -307,6 +435,10 @@ export class Rail {
     });
     el.addEventListener("dragover", (e) => {
       if (!this.draggedId || this.draggedId === p.id) return;
+      const targetArchived = this.rows.get(p.id)?.lastArchived ?? archived;
+      // Reorder only within the active zone; cross-zone drags are
+      // archive/unarchive intents handled by the drop zones.
+      if (this.draggedArchived || targetArchived) return;
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
       const rect = el.getBoundingClientRect();
@@ -322,6 +454,8 @@ export class Rail {
       const dragged = this.draggedId;
       el.classList.remove("drop-before", "drop-after");
       if (!dragged || dragged === p.id) return;
+      const targetArchived = this.rows.get(p.id)?.lastArchived ?? archived;
+      if (this.draggedArchived || targetArchived) return; // cross-zone → zone handler
       const rect = el.getBoundingClientRect();
       const before = e.clientY < rect.top + rect.height / 2;
       const newIds = computeReorder(this.orderedIds, dragged, p.id, before ? "before" : "after");
@@ -329,7 +463,10 @@ export class Rail {
     });
     el.addEventListener("dragend", () => {
       this.draggedId = null;
+      this.draggedArchived = false;
       el.classList.remove("dragging");
+      this.listEl.classList.remove("drop-target");
+      this.archiveSectionEl.classList.remove("drop-target");
       for (const row of this.rows.values()) {
         row.el.classList.remove("drop-before", "drop-after");
       }
@@ -340,7 +477,7 @@ export class Rail {
       e.stopPropagation();
       this.startRename(p.id, name);
     });
-    this.listEl.appendChild(el);
+    // NOTE: placement into the active/archive zone is done by renderZone.
     return {
       el,
       nameEl: name,
@@ -348,6 +485,7 @@ export class Rail {
       lastStoplightsKey: initialStoplights.join(","),
       lastName: p.name,
       lastDocked: p.docked,
+      lastArchived: archived,
     };
   }
 
@@ -403,9 +541,11 @@ function showRailContextMenu(
   y: number,
   handlers: {
     docked: boolean;
+    archived: boolean;
     onOpen: () => void;
     onDelete: () => void;
     onToggleDock: () => void;
+    onToggleArchive: () => void;
   },
 ) {
   const existing = document.querySelector(".rail-context-menu");
@@ -418,9 +558,11 @@ function showRailContextMenu(
   const dockLabel = handlers.docked
     ? "Undock from Mission Control"
     : "Dock in Mission Control";
+  const archiveLabel = handlers.archived ? "Unarchive" : "Archive";
   menu.innerHTML = `
     <button type="button" data-action="open">Open in Finder</button>
     <button type="button" data-action="dock">${dockLabel}</button>
+    <button type="button" data-action="archive">${archiveLabel}</button>
     <button type="button" data-action="delete" class="danger">Delete Project…</button>
   `;
   const close = () => {
@@ -438,6 +580,7 @@ function showRailContextMenu(
     const action = (e.target as HTMLElement).dataset.action;
     if (action === "open") handlers.onOpen();
     if (action === "dock") handlers.onToggleDock();
+    if (action === "archive") handlers.onToggleArchive();
     if (action === "delete") handlers.onDelete();
     close();
   });

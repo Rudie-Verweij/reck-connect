@@ -155,6 +155,12 @@ type Project struct {
 	// Docked projects appear as cards on the MC dashboard and are visible
 	// to the supervisor agent's tools.
 	Docked bool `json:"docked"`
+	// Archived is true when the user put the project to sleep: its panes
+	// are killed to free RAM while its session rows keep was_live=true, so
+	// the project can be restored on demand. Persisted in projects.toml.
+	// Always emitted (no omitempty) so TS clients can rely on it, matching
+	// the docked convention.
+	Archived bool `json:"archived"`
 	// DisplayName is the user-given override. Empty means no override —
 	// clients fall back to Name. Persisted in projects.toml so it survives
 	// daemon restart and is shared across every client (desktop, Mini).
@@ -439,6 +445,12 @@ type PaneUploadsListResponse struct {
 // Docked is the new state after the call.
 type DockProjectResponse struct {
 	Docked bool `json:"docked"`
+}
+
+// ArchiveProjectResponse confirms a project's new archived state after an
+// archive/unarchive call. Archived is the state after the call.
+type ArchiveProjectResponse struct {
+	Archived bool `json:"archived"`
 }
 
 // MissionControlCard is one project card on the Mission Control dashboard.
