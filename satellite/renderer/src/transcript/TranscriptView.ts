@@ -100,38 +100,50 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
   }
   document.addEventListener("keydown", onKeyDown);
 
-  function renderBlock(turnRole: TranscriptTurn["role"], block: TranscriptBlock): HTMLElement {
-    switch (block.kind) {
-      case "text": {
-        if (turnRole === "assistant") {
-          const el = document.createElement("div");
-          el.className = "transcript-md";
-          md.mount(el, md.render(block.text));
-          return el;
-        }
-        const el = document.createElement("div");
-        el.className = "transcript-text";
-        el.textContent = block.text;
-        return el;
-      }
-      case "thinking":
-        return foldedBlock("transcript-thinking", "Thinking", block.text);
-      case "tool_use":
-        return foldedBlock("transcript-tool", `Tool: ${block.name}`, block.input);
-      case "tool_result":
-        return foldedBlock("transcript-tool-result", "Result", block.text);
+  function textBlockEl(role: TranscriptTurn["role"], text: string): HTMLElement {
+    if (role === "assistant") {
+      const el = document.createElement("div");
+      el.className = "transcript-md";
+      md.mount(el, md.render(text));
+      return el;
     }
+    const el = document.createElement("div");
+    el.className = "transcript-text";
+    el.textContent = text;
+    return el;
   }
 
-  function foldedBlock(className: string, label: string, text: string): HTMLElement {
-    const details = document.createElement("details");
-    details.className = className;
-    const summary = document.createElement("summary");
-    summary.textContent = label;
+  // One row inside the collapsed tool group: a labelled <pre> for a
+  // thinking / tool_use / tool_result block.
+  function toolRow(className: string, label: string, text: string): HTMLElement {
+    const row = document.createElement("div");
+    row.className = className;
+    const head = document.createElement("div");
+    head.className = "transcript-tool-label";
+    head.textContent = label;
     const pre = document.createElement("pre");
     pre.textContent = text;
+    row.appendChild(head);
+    row.appendChild(pre);
+    return row;
+  }
+
+  function toolGroup(blocks: TranscriptBlock[]): HTMLElement {
+    const toolCount = blocks.filter((b) => b.kind === "tool_use").length;
+    const summaryText =
+      toolCount > 0
+        ? `🔧 ${toolCount} tool ${toolCount === 1 ? "call" : "calls"}`
+        : "Thinking";
+    const details = document.createElement("details");
+    details.className = "transcript-tools";
+    const summary = document.createElement("summary");
+    summary.textContent = summaryText;
     details.appendChild(summary);
-    details.appendChild(pre);
+    for (const b of blocks) {
+      if (b.kind === "thinking") details.appendChild(toolRow("transcript-thinking", "Thinking", b.text));
+      else if (b.kind === "tool_use") details.appendChild(toolRow("transcript-tool", `Tool: ${b.name}`, b.input));
+      else if (b.kind === "tool_result") details.appendChild(toolRow("transcript-tool-result", "Result", b.text));
+    }
     return details;
   }
 
@@ -142,8 +154,21 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
     label.className = "transcript-role";
     label.textContent = turn.role === "user" ? "You" : "Claude";
     el.appendChild(label);
+
+    // Text Claude/you actually said renders inline, in order. All the
+    // under-the-hood blocks (thinking / tool_use / tool_result) collapse
+    // into a single expandable group after the text, so a turn reads as
+    // prose with its tool calls tucked away.
+    const toolBlocks: TranscriptBlock[] = [];
     for (const block of turn.blocks) {
-      el.appendChild(renderBlock(turn.role, block));
+      if (block.kind === "text") {
+        el.appendChild(textBlockEl(turn.role, block.text));
+      } else {
+        toolBlocks.push(block);
+      }
+    }
+    if (toolBlocks.length > 0) {
+      el.appendChild(toolGroup(toolBlocks));
     }
   }
 

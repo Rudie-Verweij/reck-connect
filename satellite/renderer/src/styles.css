@@ -3497,7 +3497,11 @@ textarea.file-viewer-merge-pane {
   overflow: auto;
   padding: 16px 22px 24px;
   line-height: 1.55;
+  /* Hide the native scrollbar — the themed OverlayScrollbar is the only
+     one we want. Two bars (grey native + themed overlay) looked doubled. */
+  scrollbar-width: none;
 }
+.transcript-body::-webkit-scrollbar { display: none; }
 .transcript-turn {
   margin: 0 0 18px;
 }
@@ -3539,31 +3543,39 @@ textarea.file-viewer-merge-pane {
   font-family: var(--font-mono);
   font-size: 0.85em;
 }
-details.transcript-thinking,
-details.transcript-tool,
-details.transcript-tool-result {
-  margin: 6px 0;
+/* One collapsed group per Claude turn, holding all its thinking + tool
+   calls + results. Text renders inline above it; this stays folded. */
+details.transcript-tools {
+  margin: 8px 0 2px;
   border: 1px solid var(--app-border);
   border-radius: var(--radius);
   background: var(--app-bg-raised);
   font-size: 0.8rem;
 }
-details.transcript-thinking > summary,
-details.transcript-tool > summary,
-details.transcript-tool-result > summary {
+details.transcript-tools > summary {
   cursor: pointer;
   padding: 5px 10px;
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   color: var(--app-text-dim);
   user-select: none;
 }
-details.transcript-thinking > pre,
-details.transcript-tool > pre,
-details.transcript-tool-result > pre {
+details.transcript-tools > summary:hover { color: var(--app-text); }
+.transcript-tool-label {
+  padding: 6px 10px 2px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  border-top: 1px solid var(--app-border);
+}
+.transcript-thinking > pre,
+.transcript-tool > pre,
+.transcript-tool-result > pre {
   margin: 0;
-  padding: 8px 10px;
+  padding: 2px 10px 8px;
   overflow: auto;
   max-height: 320px;
   white-space: pre-wrap;
@@ -3571,5 +3583,4 @@ details.transcript-tool-result > pre {
   font-family: var(--font-mono);
   font-size: 0.78rem;
   color: var(--app-text-dim);
-  border-top: 1px solid var(--app-border);
 }

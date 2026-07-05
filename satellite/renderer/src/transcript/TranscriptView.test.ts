@@ -57,24 +57,44 @@ describe("TranscriptView", () => {
     expect(turns[0].textContent).toContain("more");
   });
 
-  it("renders tool_use and thinking as collapsed details", () => {
+  it("groups thinking/tool_use/tool_result into ONE collapsed group after the text", () => {
     view.render(
       [
         {
           role: "assistant",
           blocks: [
+            { kind: "text", text: "Working on it." },
             { kind: "thinking", text: "hmm" },
             { kind: "tool_use", name: "Bash", input: '{"cmd":"ls"}' },
             { kind: "tool_result", text: "out" },
+            { kind: "tool_use", name: "Read", input: "{}" },
+            { kind: "tool_result", text: "file" },
           ],
         },
       ],
       0,
     );
-    const details = view.body.querySelectorAll("details");
-    expect(details).toHaveLength(3);
-    for (const d of details) expect(d.open).toBe(false);
-    expect(details[1].querySelector("summary")?.textContent).toContain("Bash");
+    const turn = view.body.querySelector(".transcript-turn") as HTMLElement;
+    // The text renders inline; the tool activity collapses into ONE group.
+    expect(turn.querySelector(".transcript-md")?.textContent).toContain("Working on it.");
+    const groups = turn.querySelectorAll("details.transcript-tools");
+    expect(groups).toHaveLength(1);
+    const group = groups[0] as HTMLDetailsElement;
+    expect(group.open).toBe(false);
+    // Summary counts the tool_use blocks (2), not results/thinking.
+    expect(group.querySelector("summary")?.textContent).toContain("2 tool calls");
+    expect(group.textContent).toContain("Bash");
+    expect(group.textContent).toContain("Read");
+    // The text block is NOT inside the collapsed group.
+    expect(group.querySelector(".transcript-md")).toBeNull();
+  });
+
+  it("renders a user turn as plain text with no tool group", () => {
+    view.render([{ role: "user", blocks: [{ kind: "text", text: "hello" }] }], 0);
+    const turn = view.body.querySelector(".transcript-turn") as HTMLElement;
+    expect(turn.classList.contains("transcript-turn--user")).toBe(true);
+    expect(turn.querySelector("details")).toBeNull();
+    expect(turn.textContent).toContain("hello");
   });
 
   it("follows the bottom only when already near it", () => {

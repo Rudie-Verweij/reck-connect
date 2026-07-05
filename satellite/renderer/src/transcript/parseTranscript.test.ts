@@ -89,13 +89,50 @@ describe("TranscriptParser", () => {
     expect(p.turns).toHaveLength(1);
   });
 
-  it("extracts tool_use and tool_result blocks", () => {
+  it("folds a tool_use + its tool_result into ONE assistant turn (not a user turn)", () => {
     const p = new TranscriptParser();
     p.push(assistantToolUse("Bash") + userToolResult("file1\nfile2"));
-    expect(p.turns).toHaveLength(2);
+    // The tool_result arrives as role:user but is NOT the user speaking.
+    expect(p.turns).toHaveLength(1);
+    expect(p.turns[0].role).toBe("assistant");
     expect(p.turns[0].blocks[0]).toMatchObject({ kind: "tool_use", name: "Bash" });
     expect((p.turns[0].blocks[0] as { input: string }).input).toContain('"cmd"');
-    expect(p.turns[1].blocks[0]).toEqual({ kind: "tool_result", text: "file1\nfile2" });
+    expect(p.turns[0].blocks[1]).toEqual({ kind: "tool_result", text: "file1\nfile2" });
+  });
+
+  it("groups a full user→claude turn: text + multiple tool round-trips = one assistant turn", () => {
+    const p = new TranscriptParser();
+    p.push(
+      userLine("do the thing", "q1") +
+        assistantText("On it.", "m1") +
+        assistantToolUse("Bash", "m1") +
+        userToolResult("out1") +
+        assistantText("Now the next step.", "m2") +
+        assistantToolUse("Read", "m2") +
+        userToolResult("out2") +
+        userLine("thanks", "q2"),
+    );
+    // Exactly: YOU, CLAUDE, YOU — no phantom user turns from tool results.
+    expect(p.turns.map((t) => t.role)).toEqual(["user", "assistant", "user"]);
+    const claude = p.turns[1];
+    expect(claude.blocks.map((b) => b.kind)).toEqual([
+      "text",
+      "tool_use",
+      "tool_result",
+      "text",
+      "tool_use",
+      "tool_result",
+    ]);
+    expect(p.turns[0].blocks[0]).toEqual({ kind: "text", text: "do the thing" });
+    expect(p.turns[2].blocks[0]).toEqual({ kind: "text", text: "thanks" });
+  });
+
+  it("a real user message after tool activity opens a fresh assistant turn", () => {
+    const p = new TranscriptParser();
+    p.push(userLine("a", "q1") + assistantText("x", "m1") + userToolResult("r"));
+    p.push(userLine("b", "q2") + assistantText("y", "m2"));
+    expect(p.turns.map((t) => t.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(p.turns[3].blocks).toEqual([{ kind: "text", text: "y" }]);
   });
 
   it("handles tool_result content given as an array of text parts", () => {

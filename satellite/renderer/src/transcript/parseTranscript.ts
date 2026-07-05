@@ -10,9 +10,14 @@
 // become turns; every other shape (custom-title, mode, system,
 // attachment, file-history-snapshot, unknown future types, unparseable
 // garbage) is skipped. Sidechain lines (subagent traffic) are skipped
-// too. One important real-world shape: Claude Code writes one JSONL
-// line per completed assistant content block, all sharing the same
-// `message.id` — those lines merge into a single assistant turn.
+// too.
+//
+// Turn grouping mirrors the conversation, not the wire: a REAL user
+// message opens a "user" turn; everything after it until the next real
+// user message — the assistant's text and tool_use lines, PLUS the
+// tool_result lines (which Claude Code writes as role:"user"!) — folds
+// into a single "assistant" turn. Without this, every tool result would
+// render as a phantom "you" turn between Claude's actions.
 
 export type TranscriptBlock =
   | { kind: "text"; text: string }
@@ -34,8 +39,10 @@ export interface ParseUpdate {
 export class TranscriptParser {
   readonly turns: TranscriptTurn[] = [];
   private remainder = "";
-  /** message.id of the turn at the tail of `turns`, when assistant. */
-  private lastAssistantId: string | null = null;
+  /** The assistant turn currently accumulating (text + tool calls +
+   *  tool results) until the next real user message. When set it is
+   *  always the last element of `turns`. */
+  private openAssistant: TranscriptTurn | null = null;
 
   /** Feed the next raw slice; returns which turns changed, if any. */
   push(chunk: string): ParseUpdate | null {
@@ -76,20 +83,35 @@ export class TranscriptParser {
     const blocks = blocksFromContent(m.content);
     if (blocks.length === 0) return null;
     const timestamp = typeof rec.timestamp === "string" ? rec.timestamp : undefined;
-    const msgId = typeof m.id === "string" ? m.id : null;
 
-    // Merge: another block of the assistant message already at the tail.
-    if (role === "assistant" && msgId !== null && msgId === this.lastAssistantId) {
-      const turn = this.turns[this.turns.length - 1];
-      const seen = new Set(turn.blocks.map((b) => JSON.stringify(b)));
-      const fresh = blocks.filter((b) => !seen.has(JSON.stringify(b)));
-      if (fresh.length === 0) return null;
-      turn.blocks.push(...fresh);
+    // A role:"user" line whose content is only tool_result(s) is NOT the
+    // user speaking — it's tool output being fed back to Claude. Fold it
+    // into the open assistant turn instead of starting a user turn.
+    const isToolResult =
+      role === "user" && blocks.every((b) => b.kind === "tool_result");
+
+    if (role === "user" && !isToolResult) {
+      this.turns.push({ role: "user", blocks, ...(timestamp ? { timestamp } : {}) });
+      this.openAssistant = null; // the next assistant activity starts fresh
       return this.turns.length - 1;
     }
 
-    this.turns.push({ role, blocks, ...(timestamp ? { timestamp } : {}) });
-    this.lastAssistantId = role === "assistant" ? msgId : null;
+    // Assistant text/tool_use, or a tool_result carrier → accumulate into
+    // the current assistant turn (opening one if needed).
+    if (this.openAssistant === null) {
+      this.openAssistant = { role: "assistant", blocks: [], ...(timestamp ? { timestamp } : {}) };
+      this.turns.push(this.openAssistant);
+    }
+    const turn = this.openAssistant; // always the last turn while open
+    const before = turn.blocks.length;
+    for (const b of blocks) {
+      // Light dedup: skip a block identical to the one just appended
+      // (guards against a re-written partial line) without needing ids.
+      const last = turn.blocks[turn.blocks.length - 1];
+      if (last && JSON.stringify(last) === JSON.stringify(b)) continue;
+      turn.blocks.push(b);
+    }
+    if (turn.blocks.length === before) return null; // nothing new added
     return this.turns.length - 1;
   }
 }
