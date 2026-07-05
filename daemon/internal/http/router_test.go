@@ -1263,6 +1263,46 @@ func TestCreatePane_resumeSessionID_happyPath(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
+// TestCreatePane_resumeSessionID_worktreeGone_409 — #56: resuming a Claude
+// session whose transcript survives under a removed git worktree is refused
+// with 409 Conflict (not 400/500), so the Satellite can distinguish "can't
+// resume, view it read-only" from a malformed request. Resuming in the project
+// root would fork a fresh transcript, which the daemon deliberately avoids.
+func TestCreatePane_resumeSessionID_worktreeGone_409(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	s, store, projectCwd := newServerWithSessions(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	// Transcript on disk under a worktree-suffixed folder with no live
+	// worktree (projectCwd is not a git repo, so none can be enumerated).
+	gone := filepath.Join(fakeHome, ".claude", "projects", sessions.EncodeCwd(projectCwd)+"--claude-worktrees-removed")
+	if err := os.MkdirAll(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := sessions.NewUUID()
+	if err := os.WriteFile(filepath.Join(gone, sid+".jsonl"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := store.Upsert("p1", sessions.Entry{
+		Kind: proto.PaneKindClaude, SessionID: sid, Name: "p1/gone", Cwd: projectCwd,
+		CreatedAt: now, LastActiveAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(proto.CreatePaneRequest{Kind: proto.PaneKindClaude, ResumeSessionID: sid})
+	r, err := nethttp.Post(srv.URL+"/projects/p1/panes", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.StatusCode != nethttp.StatusConflict {
+		t.Fatalf("status = %d, want 409 Conflict for a gone-worktree resume", r.StatusCode)
+	}
+}
+
 // TestRestoreCandidates_includesShellEntries covers the Scope B
 // widening of /restore-candidates: both Claude (SessionID) and shell
 // (SlotID) entries appear in one group, with Kind propagated so the

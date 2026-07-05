@@ -548,6 +548,15 @@ func (s *Server) handleCreatePane(w nethttp.ResponseWriter, r *nethttp.Request) 
 			nethttp.Error(w, err.Error(), nethttp.StatusConflict)
 			return
 		}
+		// ErrResumeWorktreeGone (#56): the session's git worktree was
+		// removed, so `--resume` can't run in the directory its transcript
+		// lives under. Resuming in the project root would fork a fresh
+		// transcript, so we refuse — semantically a conflict. The Satellite
+		// can still open the transcript read-only via the history view.
+		if errors.Is(err, pty.ErrResumeWorktreeGone) {
+			nethttp.Error(w, err.Error(), nethttp.StatusConflict)
+			return
+		}
 		nethttp.Error(w, err.Error(), nethttp.StatusBadRequest)
 		return
 	}
