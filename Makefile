@@ -8,9 +8,10 @@ help:
 	@echo "  make vet         Run go vet across the daemon"
 	@echo "  make typecheck   Run TypeScript typecheck on the satellite"
 	@echo "  make dist        Build a packaged Satellite .app + .dmg installer"
-	@echo "  make dist-dir    Build the .app bundle only (skips DMG packaging)"
-	@echo "                   — required on macOS 26+ where dmg-builder hits"
-	@echo "                     a libexpat ABI clash and python-symlink issues"
+	@echo "                   (DMG step fails on macOS 26+ — use dist-dir there)"
+	@echo "  make dist-dir    Build the .app bundle only (no DMG) — the"
+	@echo "                   reliable path on macOS 26+ where dmg-builder hits"
+	@echo "                   a libexpat ABI clash and python-symlink issues"
 	@echo "  make clean       Remove build artefacts"
 	@echo "  make cross       Cross-compile the daemon for Linux ARM64 (Raspberry Pi, no cgo)"
 	@echo "  make install-linux  Install the station on a Linux/Pi host (run on the Pi)"
@@ -39,13 +40,13 @@ dist:
 # upstream issues clear, this is the supported build path on macOS 26+.
 # Result is a working unsigned .app you can run directly.
 #
-# `--` separates pnpm's own flags from arguments forwarded to the
-# underlying `dist` script (which ends in `electron-builder --mac
-# --publish never`). Without `--`, pnpm would consume `--dir` as a
-# pnpm-CLI flag (cwd override) and electron-builder would still build
-# the DMG.
+# Uses the satellite's `package` script (`electron-builder --mac --dir
+# --publish never`), which places `--dir` in the right position. Do NOT
+# use `pnpm dist -- --dir`: on pnpm 11 the `--` is forwarded verbatim,
+# so electron-builder sees a bare `-- --dir`, ignores it, and still
+# builds the DMG (which then fails on macOS 26).
 dist-dir:
-	cd satellite && pnpm install && pnpm dist -- --dir
+	cd satellite && pnpm install && pnpm package
 
 clean:
 	rm -rf satellite/dist satellite/release

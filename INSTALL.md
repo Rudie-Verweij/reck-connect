@@ -361,9 +361,12 @@ Commands:
 #    sees an unsigned binary.)
 #    `VITE_RECK_STATION_ROOT` is required at build time — Vite inlines
 #    the value into the renderer bundle.
+#    `pnpm package` builds the .app only (no DMG) — all `cp` needs, and
+#    the only path that works on macOS 26 (Tahoe), where the `pnpm dist`
+#    DMG step fails on a libexpat/python clash.
 cd ~/claude-code/reck-connect/satellite
 VITE_RECK_STATION_ROOT=/Users/reck-connect/projects pnpm install
-VITE_RECK_STATION_ROOT=/Users/reck-connect/projects pnpm dist
+VITE_RECK_STATION_ROOT=/Users/reck-connect/projects pnpm package
 cp -R "release/mac-arm64/Reck Connect Satellite.app" /Applications/
 
 # 2. Daemon answers /health with the bearer token.
@@ -430,6 +433,10 @@ first-launch dialog (`--write-settings` does it for you).
 
 ## Updating
 
+> **Just rebuilding the Satellite?** The standalone build/reinstall flow lives in
+> [`INSTALL-SATELLITE.md`](INSTALL-SATELLITE.md). On macOS 26 (Tahoe), build with
+> `pnpm package` (`.app`-only) — `pnpm dist` builds a DMG that fails on Tahoe.
+
 To pick up a new release:
 
 ```bash
@@ -452,9 +459,10 @@ cd ..
 
 # Rebuild + install the .app bundle. Vite needs the station root at
 # build time so it can inline the value into the renderer bundle.
+# `pnpm package` builds the .app only (no DMG); the DMG step fails on macOS 26.
 cd satellite && \
   VITE_RECK_STATION_ROOT=/Users/reck-connect/projects pnpm install && \
-  VITE_RECK_STATION_ROOT=/Users/reck-connect/projects pnpm dist
+  VITE_RECK_STATION_ROOT=/Users/reck-connect/projects pnpm package
 osascript -e 'tell application "Reck Connect Satellite" to quit' >/dev/null 2>&1 || true
 rm -rf "/Applications/Reck Connect Satellite.app"
 cp -R "release/mac-arm64/Reck Connect Satellite.app" /Applications/
