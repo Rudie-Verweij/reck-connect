@@ -391,11 +391,26 @@ html, body, #app {
   flex-direction: column;
 }
 
+/* Non-scrolling positioned wrapper — the host the themed OverlayScrollbar
+   mounts into. The inner .rail-list is the actual scroller (a bar mounted into
+   the scroller itself would scroll away with the content). */
+.rail-list-scroll {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
 .rail-list {
   padding: 0 0.5rem;
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  /* Native gutter hidden — the OverlayScrollbar is the single affordance. */
+  scrollbar-width: none;
 }
+.rail-list::-webkit-scrollbar { display: none; }
 
 /* Active list doubles as an unarchive drop target while dragging an
    archived row out of the Archive section. */
@@ -453,14 +468,23 @@ html, body, #app {
   opacity: 0.7;
 }
 
+/* Positioned host for the archive folder's overlay scrollbar (see
+   .rail-list-scroll). Sized by its content up to the list's max-height. */
+.rail-archive-scroll {
+  position: relative;
+}
+
 .rail-archive-list {
   padding: 0 0.5rem 0.35rem;
-  /* Cap at ~4.5 rail rows then scroll — the half row makes it obvious there
+  /* Cap at ~3.5 rail rows then scroll — the half row makes it obvious there
      is more below. A rail row is ~2.95rem tall (0.85rem padding × 2 plus a
      0.95rem / 1.3 line). */
-  max-height: calc(2.95rem * 4.5);
+  max-height: calc(2.95rem * 3.5);
   overflow-y: auto;
+  /* Native gutter hidden — the OverlayScrollbar is the single affordance. */
+  scrollbar-width: none;
 }
+.rail-archive-list::-webkit-scrollbar { display: none; }
 
 .rail-archive-empty {
   padding: 0.5rem 0.6rem 0.6rem;
@@ -3858,6 +3882,30 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   order: 2;
 }
 .pane-controls > .pane-controls-history { order: 3; }
+/* History (clock) button — the primary per-pane affordance that opens the
+   transcript overlay. Unlike the other icon-btns it does NOT shift shade on
+   hover; it holds its resting fill/ink and instead blooms a soft orange halo
+   around itself, and sits 25% larger so it reads as the lead action. */
+.pane-controls-history {
+  /* 28px .icon-btn base × 1.25. */
+  width: 35px;
+  height: 35px;
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth),
+    border-color 0.15s var(--ease-smooth), box-shadow 0.2s var(--ease-smooth);
+}
+.pane-controls-history svg {
+  /* 16px base × 1.25. */
+  width: 20px;
+  height: 20px;
+}
+.pane-controls-history:hover {
+  /* Hold the resting fill/ink (no shade change) — the only hover cue is the
+     orange ring + glow around the button. */
+  background: transparent;
+  color: var(--claude-mid);
+  border-color: var(--claude-orange);
+  box-shadow: 0 0 0 1px rgba(212, 104, 58, 0.55), 0 0 14px 3px rgba(232, 135, 92, 0.5);
+}
 /* Surfaces with a header push the stack below it. */
 .file-viewer-root > .pane-controls { top: 46px; right: 16px; }
 .transcript-view .pane-controls { top: 42px; right: 12px; }

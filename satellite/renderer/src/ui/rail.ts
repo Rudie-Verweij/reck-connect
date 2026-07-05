@@ -2,6 +2,8 @@ import type { Project, Stoplight } from "@proto/proto";
 import { stoplightSeverity } from "@proto/proto";
 import { iconPlus } from "./icons";
 import { computeReorder } from "./reorder";
+import { createOverlayScrollbar, type OverlayScrollbar } from "../search/OverlayScrollbar";
+import { domScrollSurface } from "../search/scrollSurfaces";
 
 export interface RailProps {
   root: HTMLElement;
@@ -183,6 +185,12 @@ export class Rail {
   private archivedCount = 0;
   private archiveCollapsed = true;
   private currentSelected: string | null = null;
+  // Themed auto-hiding overlay scrollbars — the same reusable orange fade-bar
+  // the terminal / markdown / transcript panes use — so the sidebar's projects
+  // list and Archive folder scroll with the app-consistent affordance instead
+  // of the OS-native gutter.
+  private listScrollbar: OverlayScrollbar;
+  private archiveScrollbar: OverlayScrollbar;
 
   constructor(private props: RailProps) {
     this.props.root.classList.add("rail");
@@ -193,14 +201,18 @@ export class Rail {
       </div>
       <div class="rail-header">Projects</div>
       <div class="rail-divider"></div>
-      <div class="rail-list"></div>
+      <div class="rail-list-scroll">
+        <div class="rail-list"></div>
+      </div>
       <div class="rail-archive collapsed" id="rail-archive">
         <button class="rail-archive-header" id="rail-archive-header" type="button" aria-expanded="false" title="Archived projects — asleep, using no memory. Click a project to restore it.">
           <span class="rail-archive-caret" aria-hidden="true">▸</span>
           <span class="rail-archive-title">Archive</span>
           <span class="rail-archive-count" id="rail-archive-count">0</span>
         </button>
-        <div class="rail-archive-list" id="rail-archive-list" hidden></div>
+        <div class="rail-archive-scroll">
+          <div class="rail-archive-list" id="rail-archive-list" hidden></div>
+        </div>
       </div>
       <div class="rail-footer">
         <span id="rail-count">0 projects</span>
@@ -221,6 +233,18 @@ export class Rail {
       "click",
       () => this.toggleArchiveCollapsed(),
     );
+    // Mount the overlay onto the non-scrolling wrapper (host) and drive it from
+    // the inner scroller (surface). An absolutely-positioned bar mounted INTO
+    // the scroller would scroll away with the content, so the host must be the
+    // wrapper — the same split TranscriptView / the file viewer use.
+    this.listScrollbar = createOverlayScrollbar({
+      host: this.props.root.querySelector(".rail-list-scroll") as HTMLElement,
+      surface: domScrollSurface(this.listEl),
+    });
+    this.archiveScrollbar = createOverlayScrollbar({
+      host: this.props.root.querySelector(".rail-archive-scroll") as HTMLElement,
+      surface: domScrollSurface(this.archiveListEl),
+    });
     this.wireArchiveDropZone();
     this.wireActiveDropZone();
   }
@@ -274,6 +298,11 @@ export class Rail {
 
     const count = active.length;
     this.footerCountEl.textContent = count === 1 ? "1 project" : `${count} projects`;
+
+    // Rows just changed the scroll extent; recompute both thumbs (no scroll or
+    // resize event fires on a pure content change, so update() must be manual).
+    this.listScrollbar.update();
+    this.archiveScrollbar.update();
   }
 
   select(projectId: string | null) {
@@ -342,6 +371,8 @@ export class Rail {
     this.archiveSectionEl.classList.toggle("collapsed", this.archiveCollapsed);
     const header = this.props.root.querySelector("#rail-archive-header") as HTMLElement | null;
     if (header) header.setAttribute("aria-expanded", String(!this.archiveCollapsed));
+    // Expanding/collapsing changes whether the archive list is scrollable.
+    this.archiveScrollbar.update();
   }
 
   // Dragging an ACTIVE row onto the Archive section archives it.
