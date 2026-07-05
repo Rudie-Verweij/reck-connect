@@ -700,14 +700,15 @@ func TestCreatePaneWith_resume_recoversWorktreeCwdAndSelfHeals(t *testing.T) {
 
 	// Match the transcript against the path git actually reports (macOS
 	// resolves /var symlinks) so EncodeCwd lines up with recovery.
+	worktrees, _ := gitWorktreePaths(root)
 	var wtPath string
-	for _, p := range gitWorktreePaths(root) {
+	for _, p := range worktrees {
 		if strings.Contains(p, "feat-x") {
 			wtPath = p
 		}
 	}
 	if wtPath == "" {
-		t.Fatalf("worktree not enumerated: %v", gitWorktreePaths(root))
+		t.Fatalf("worktree not enumerated: %v", worktrees)
 	}
 
 	claudeDir := filepath.Join(dir, "claude-projects")
@@ -758,14 +759,16 @@ func TestCreatePaneWith_resume_recoversWorktreeCwdAndSelfHeals(t *testing.T) {
 	}
 }
 
-// TestCreatePaneWith_resume_worktreeGoneRefused — when a worktree session's
-// transcript is still on disk but the worktree itself is gone (can't be mapped
-// to a cwd), resume is refused with ErrResumeWorktreeGone rather than launched
-// in the project root (which would fork a fresh transcript). The session stays
+// TestCreatePaneWith_resume_gitUnavailableRefused — when a worktree session's
+// transcript survives under a suffixed folder but git can't confirm the
+// worktree set (here: the project isn't a git repo, so `git worktree list`
+// fails), resume is refused with ErrResumeWorktreeGone rather than relocating
+// the transcript. Refusing on an unconfirmed worktree set avoids stranding a
+// still-live worktree session on a transient git failure. The session stays
 // viewable read-only; the restore path clears was_live on this error.
-func TestCreatePaneWith_resume_worktreeGoneRefused(t *testing.T) {
+func TestCreatePaneWith_resume_gitUnavailableRefused(t *testing.T) {
 	dir := t.TempDir()
-	root := filepath.Join(dir, "proj") // deliberately NOT a git repo
+	root := filepath.Join(dir, "proj") // deliberately NOT a git repo → git fails
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -801,6 +804,80 @@ func TestCreatePaneWith_resume_worktreeGoneRefused(t *testing.T) {
 	_, err = mgr.CreatePaneWith("p1", proto.PaneKindClaude, 80, 24, CreatePaneOptions{ResumeSessionID: sid})
 	if !errors.Is(err, ErrResumeWorktreeGone) {
 		t.Fatalf("CreatePaneWith resume err = %v, want ErrResumeWorktreeGone", err)
+	}
+}
+
+// TestCreatePaneWith_resume_goneWorktreeMigratesToProjectRoot — #56, the "jerry"
+// case: the session's git worktree was permanently removed (git runs fine and
+// simply doesn't list it), but its transcript survives under the suffixed
+// folder. Rather than fork a fresh chat, the daemon relocates the transcript
+// into the project-root folder and resumes there — same session id, full
+// history — and self-heals Entry.Cwd to the project root.
+func TestCreatePaneWith_resume_goneWorktreeMigratesToProjectRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	root := filepath.Join(dir, "proj")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, root, "init", "-q") // a real repo, but with NO matching worktree
+
+	claudeDir := filepath.Join(dir, "claude-projects")
+	gone := filepath.Join(claudeDir, sessions.EncodeCwd(root)+"--claude-worktrees-removed")
+	if err := os.MkdirAll(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := sessions.NewUUID()
+	orphan := filepath.Join(gone, sid+".jsonl")
+	if err := os.WriteFile(orphan, []byte(`{"type":"user","text":"the real history"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := sessions.NewStore(filepath.Join(dir, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := store.Upsert("p1", sessions.Entry{
+		Kind: proto.PaneKindClaude, SessionID: sid, Name: "p1/jerry", Cwd: root,
+		CreatedAt: now, LastActiveAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManagerFromConfig(ManagerConfig{
+		Projects:          []config.Project{{ID: "p1", Name: "P1", Cwd: root, Shell: []string{"/bin/sh"}}},
+		ClaudeCmd:         []string{"/bin/echo"},
+		ConfigPath:        filepath.Join(dir, "projects.toml"),
+		Sessions:          store,
+		ClaudeProjectsDir: claudeDir,
+	})
+	pane, err := mgr.CreatePaneWith("p1", proto.PaneKindClaude, 80, 24, CreatePaneOptions{ResumeSessionID: sid})
+	if err != nil {
+		t.Fatalf("CreatePaneWith resume (gone worktree) = %v, want migrate+resume", err)
+	}
+	defer mgr.DeletePane("p1", pane.ID)
+
+	// Same session id — not a fresh spawn.
+	if pane.SessionID != sid {
+		t.Errorf("pane.SessionID = %q, want the original %q", pane.SessionID, sid)
+	}
+	// Transcript relocated into the project-root folder (move, not copy).
+	dest := sessions.TranscriptPath(claudeDir, root, sid)
+	if _, err := os.Stat(dest); err != nil {
+		t.Errorf("transcript not relocated to project root %q: %v", dest, err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("orphaned transcript should have been moved, still at %q (err=%v)", orphan, err)
+	}
+	// Entry.Cwd self-healed to the project root.
+	e, ok, err := store.Get("p1", sid)
+	if err != nil || !ok {
+		t.Fatalf("store.Get ok=%v err=%v", ok, err)
+	}
+	if e.Cwd != root {
+		t.Errorf("Entry.Cwd = %q, want the project root %q", e.Cwd, root)
 	}
 }
 

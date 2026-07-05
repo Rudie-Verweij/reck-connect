@@ -36,7 +36,10 @@ func TestGitWorktreePaths(t *testing.T) {
 	wt := filepath.Join(root, ".claude-worktrees", "feat-x")
 	gitRun(t, root, "worktree", "add", "-q", "-b", "feat-x", wt)
 
-	got := gitWorktreePaths(root)
+	got, ok := gitWorktreePaths(root)
+	if !ok {
+		t.Fatalf("gitWorktreePaths(%q) reported git failure on a real repo", root)
+	}
 
 	real := func(p string) string {
 		r, err := filepath.EvalSymlinks(p)
@@ -57,7 +60,8 @@ func TestGitWorktreePaths(t *testing.T) {
 }
 
 func TestGitWorktreePaths_notARepo(t *testing.T) {
-	if got := gitWorktreePaths(t.TempDir()); got != nil {
-		t.Fatalf("gitWorktreePaths on a non-repo = %v, want nil", got)
+	got, ok := gitWorktreePaths(t.TempDir())
+	if got != nil || ok {
+		t.Fatalf("gitWorktreePaths on a non-repo = (%v, %v), want (nil, false)", got, ok)
 	}
 }

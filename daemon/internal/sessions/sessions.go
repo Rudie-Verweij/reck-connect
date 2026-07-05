@@ -480,9 +480,25 @@ func transcriptExists(claudeProjectsDir, cwd, sessionID string) bool {
 // output is [A-Za-z0-9-]*, so the pattern carries no glob metacharacters;
 // callers still pass UUID sessionIDs.
 func TranscriptExistsUnderProject(claudeProjectsDir, cwd, sessionID string) bool {
+	_, ok := FindTranscriptUnderProject(claudeProjectsDir, cwd, sessionID)
+	return ok
+}
+
+// FindTranscriptUnderProject returns the on-disk path of sessionID's transcript
+// when it lives anywhere under cwd's project subtree — the canonical
+// <EncodeCwd(cwd)> folder or a worktree-suffixed sibling
+// (<EncodeCwd(cwd)>--claude-worktrees-*). It's how the gone-worktree recovery
+// locates a transcript that must be relocated into the project-root folder so
+// `claude --resume` can continue it (issue #56). Same project-scoped,
+// metacharacter-free glob as TranscriptExistsUnderProject; returns the first
+// match (a UUID sessionID is unique, so at most one is expected).
+func FindTranscriptUnderProject(claudeProjectsDir, cwd, sessionID string) (string, bool) {
 	pattern := filepath.Join(claudeProjectsDir, EncodeCwd(cwd)+"*", sessionID+".jsonl")
 	matches, err := filepath.Glob(pattern)
-	return err == nil && len(matches) > 0
+	if err != nil || len(matches) == 0 {
+		return "", false
+	}
+	return matches[0], true
 }
 
 // EncodeCwd mirrors Claude Code's on-disk encoding: every non-alphanumeric

@@ -4,6 +4,51 @@ Append per feature/phase: **What we learned**, **Surprises**, **Decisions**.
 
 ---
 
+## Gone-worktree sessions: migrate + resume, not read-only (issue #56 follow-up, 2026-07-05)
+
+Field-testing the complete #56 fix on the Pi (real "jerry" session) exposed that
+"preserve read-only" isn't what the user wants for a *deleted* worktree — and
+that the read-only state was being masked anyway.
+
+**What we learned**
+- Ground truth from the station: `e0030f80` (jerry) had a **2.75 MB** transcript
+  under `…CyborgStudio--claude-worktrees-transcript-search-fts5/`, `was_live`
+  cleared (my read-only path fired correctly), and its worktree was **gone**.
+  Two 1268-byte **decoys** (`8e89099a`, `41e3352f`) sat at the project-root
+  folder — fresh sessions the satellite spawned to fill the orphaned tab
+  *before* the fix deployed. So "jerry starts fresh" was the satellite showing a
+  decoy, while the real jerry sat preserved-but-invisible.
+- **Claude Code changed its worktree layout** mid-flight: jerry (2026-07-02) used
+  `<root>/.claude-worktrees/<name>` (flat, encodes with `--`); current Claude
+  uses `<root>/.claude/worktrees/<name>` (nested). Recovery must not assume a
+  fixed layout — `git worktree list` is the only reliable enumerator.
+- Read-only preservation is a dead end UX-wise: the satellite fills the orphaned
+  tab with a fresh session regardless. Better to make the session **resumable**:
+  since the worktree is gone, the project root is its natural home, so
+  **relocate the transcript into the project-root folder and `--resume` there**.
+  Same id, full history, live — exactly "the session comes back."
+- The migration must be gated on git *confirming* the worktree is gone
+  (`gitWorktreePaths` now returns an ok flag). On a transient `git` failure we
+  refuse (read-only, retry next boot) rather than relocate — otherwise a flaky
+  git call would strand a still-live worktree session in the project root.
+
+**Surprises**
+- The decoys carried jerry's **display name** (names aren't unique; the id is the
+  identity). Two rows both named "transcriptions-searchable-jerry" — only the
+  session id disambiguates, which is exactly what `--resume` keys on.
+- `List` (visibility gate) and `resolveResumeCwd` (recovery) resolved transcripts
+  under *different* roots when `ClaudeProjectsDir` was set — harmless in prod
+  (both default to `~/.claude/projects`) but a real inconsistency; restore now
+  threads `m.claudeProjectsDir` into `List` so the two always agree.
+
+**Decisions**
+- **Migrate + resume** is the default for a git-confirmed gone worktree; the
+  read-only refusal (`ErrResumeWorktreeGone`, 409) is now only the *unconfirmed*
+  fallback. The transcript is **moved, never truncated**, so history can't be
+  lost even if a later step fails.
+- Leave the pre-fix decoy sessions in place (user's call) — the real session
+  reappears in the picker and comes back live when opened.
+
 ## Git-worktree Claude sessions dropped on restore (issue #56, 2026-07-05)
 
 A Claude session run in a git worktree vanished from its project on every daemon

@@ -1780,31 +1780,51 @@ func (m *Manager) RestoreOrphans(cols, rows int) RestoreOrphansResult {
 	return total
 }
 
+// claudeProjectsDirOrDefault returns the configured Claude transcript root, or
+// the conventional ~/.claude/projects when unset. Empty string means "couldn't
+// resolve" (no HOME) — callers treat that as "can't inspect the disk".
+func (m *Manager) claudeProjectsDirOrDefault() string {
+	if m.claudeProjectsDir != "" {
+		return m.claudeProjectsDir
+	}
+	d, err := sessions.DefaultClaudeProjectsDir()
+	if err != nil {
+		return ""
+	}
+	return d
+}
+
 // resolveResumeCwd returns the directory `claude --resume <sessionID>` must
 // launch in to rehydrate the existing transcript rather than fork a fresh one,
 // and self-heals a mis-recorded worktree cwd along the way (issue #56).
 //
-// recordedCwd is the session entry's stored cwd (the pane's launch cwd). When
-// the transcript is already at its canonical location that cwd is returned
-// unchanged — the fast path for normal sessions, which never shell out to git.
-// Otherwise the session ran in a git worktree, so its transcript lives under a
-// suffixed folder: enumerate the project's live worktrees and return the one
-// whose encoded folder holds the transcript. ok=false means the transcript
-// can't be located under any candidate (the worktree was removed) — the caller
-// must refuse the resume rather than launch Claude in the wrong directory.
+// recordedCwd is the session entry's stored cwd (the pane's launch cwd). The
+// resolution order:
+//
+//  1. Canonical: the transcript is already at recordedCwd's (or the project
+//     root's) encoded folder — a plain stat, so normal sessions never touch git.
+//  2. Live worktree: the session ran in a git worktree that still exists —
+//     return that worktree cwd so the resume continues there.
+//  3. Gone worktree (git confirmed): the transcript survives under a
+//     worktree-suffixed folder but the worktree was removed. Relocate the
+//     transcript into the project-root folder and resume there, so the session
+//     comes back live with its full history instead of forking a fresh one.
+//  4. No transcript anywhere: nothing to orphan — resume in the recorded cwd
+//     (legacy behaviour preserved).
+//
+// ok=false means the resume must be refused (ErrResumeWorktreeGone): the
+// transcript is present but git couldn't confirm the worktree is gone (git
+// unavailable / transient failure), so relocating could strand a still-live
+// worktree session. The caller keeps it read-only and retries on the next boot.
 func (m *Manager) resolveResumeCwd(projectRoot, recordedCwd, sessionID string) (string, bool) {
-	dir := m.claudeProjectsDir
+	dir := m.claudeProjectsDirOrDefault()
 	if dir == "" {
-		d, err := sessions.DefaultClaudeProjectsDir()
-		if err != nil {
-			// Can't check the disk — trust the recorded cwd rather than
-			// block an otherwise-valid resume.
-			return recordedCwd, true
-		}
-		dir = d
+		// Can't inspect the disk — trust the recorded cwd rather than block
+		// an otherwise-valid resume.
+		return recordedCwd, true
 	}
-	// Canonical candidates first (a plain stat) so a normal session pays no
-	// git cost. projectRoot is included in case a row references a subdir
+	// (1) Canonical candidates first (a plain stat) so a normal session pays
+	// no git cost. projectRoot is included in case a row references a subdir
 	// whose transcript actually landed at the root.
 	canonical := []string{recordedCwd}
 	if recordedCwd != projectRoot {
@@ -1813,22 +1833,35 @@ func (m *Manager) resolveResumeCwd(projectRoot, recordedCwd, sessionID string) (
 	if cwd, ok := sessions.ResolveTranscriptCwd(dir, sessionID, canonical); ok {
 		return cwd, true
 	}
-	// Miss → the session ran in a git worktree. Recover its real cwd by
-	// matching the transcript against the project's registered worktrees.
-	if cwd, ok := sessions.ResolveTranscriptCwd(dir, sessionID, gitWorktreePaths(projectRoot)); ok {
+	// (2) Live worktree — match the transcript against the project's registered
+	// worktrees. gitOK reports whether git actually ran (vs. missing/failed).
+	worktrees, gitOK := gitWorktreePaths(projectRoot)
+	if cwd, ok := sessions.ResolveTranscriptCwd(dir, sessionID, worktrees); ok {
 		return cwd, true
 	}
-	// Neither the canonical folder nor a live worktree holds it. Two cases:
-	//   - a transcript IS on disk under a worktree-suffixed folder, but the
-	//     worktree was removed so we can't map it to a cwd → refuse, so the
-	//     caller keeps the session read-only instead of forking a fresh
-	//     transcript by resuming in the wrong directory.
-	//   - no transcript anywhere → nothing to orphan; fall back to the
-	//     recorded cwd so a bare/legacy resume still proceeds as before.
-	if sessions.TranscriptExistsUnderProject(dir, recordedCwd, sessionID) {
+	// The transcript isn't at the canonical path or any live worktree.
+	orphan, present := sessions.FindTranscriptUnderProject(dir, projectRoot, sessionID)
+	if !present {
+		// (4) No transcript anywhere → nothing to orphan; resume as before.
+		return recordedCwd, true
+	}
+	if !gitOK {
+		// Transcript present but git couldn't confirm the worktree set. Don't
+		// relocate — a transient git failure must not strand a live worktree
+		// session. Refuse; the caller keeps it read-only and retries next boot.
 		return "", false
 	}
-	return recordedCwd, true
+	// (3) Gone worktree, git-confirmed: relocate the transcript into the
+	// project-root folder and resume there.
+	dest := sessions.TranscriptPath(dir, projectRoot, sessionID)
+	if err := migrateTranscript(orphan, dest); err != nil {
+		slog.Warn("resume: migrate orphaned worktree transcript failed — keeping read-only",
+			"err", err, "session", shortSessionID(sessionID), "from", orphan, "to", dest)
+		return "", false
+	}
+	slog.Info("resume: relocated orphaned worktree transcript to project root",
+		"session", shortSessionID(sessionID), "from", orphan, "to", dest)
+	return projectRoot, true
 }
 
 // RestoreProjectOrphans drains the sessions-store orphans for a single
@@ -1876,7 +1909,11 @@ func (m *Manager) restoreProjectOrphans(projectID, projectCwd string, cols, rows
 	if !m.ProjectExists(projectID) {
 		return result
 	}
-	entries, err := m.sessions.List(projectID, sessions.ListOptions{})
+	// List gates claude entries on transcriptExists; use the same projects
+	// dir the resume path (resolveResumeCwd) will use, so the visibility gate
+	// and the recovery agree. Empty → List defaults to ~/.claude/projects,
+	// which is exactly what resolveResumeCwd defaults to as well.
+	entries, err := m.sessions.List(projectID, sessions.ListOptions{ClaudeProjectsDir: m.claudeProjectsDir})
 	if err != nil {
 		slog.Warn("restore-orphans: list failed", "err", err, "project", projectID)
 		return result

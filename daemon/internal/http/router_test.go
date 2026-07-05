@@ -1264,10 +1264,13 @@ func TestCreatePane_resumeSessionID_happyPath(t *testing.T) {
 }
 
 // TestCreatePane_resumeSessionID_worktreeGone_409 — #56: resuming a Claude
-// session whose transcript survives under a removed git worktree is refused
-// with 409 Conflict (not 400/500), so the Satellite can distinguish "can't
-// resume, view it read-only" from a malformed request. Resuming in the project
-// root would fork a fresh transcript, which the daemon deliberately avoids.
+// session whose transcript survives under a worktree-suffixed folder that git
+// can't confirm is gone (here the project isn't a git repo) is refused with 409
+// Conflict (not 400/500), so the Satellite can distinguish "can't resume right
+// now" from a malformed request. Resuming in the project root would fork a fresh
+// transcript; relocating without git-confirmation could strand a live worktree
+// — so the daemon refuses instead. (When git IS available, a genuinely removed
+// worktree is migrated + resumed rather than 409'd.)
 func TestCreatePane_resumeSessionID_worktreeGone_409(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)

@@ -3,6 +3,7 @@ package pty
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -308,13 +309,14 @@ func TestRestoreProjectOrphans_selfHealedWorktreeCwdSurvivesGuard(t *testing.T) 
 	}
 }
 
-// TestRestoreProjectOrphans_deletedWorktreeKeptReadOnly — #56: a worktree
-// session whose transcript is intact but whose worktree was removed can't be
-// resumed in the right cwd. Restore must NOT respawn it in the project root
-// (that would fork a fresh transcript); it clears was_live, counts it read-only,
-// and leaves the transcript viewable.
-func TestRestoreProjectOrphans_deletedWorktreeKeptReadOnly(t *testing.T) {
-	mgr, store, projectCwd := newManagerWithStore(t) // projectCwd is not a git repo
+// TestRestoreProjectOrphans_gitUnconfirmedKeptReadOnly — #56: a worktree
+// session whose transcript is intact but whose worktree set git can't confirm
+// (here the project isn't a git repo, so `git worktree list` fails) must NOT be
+// relocated + respawned — a transient git failure must not strand a live
+// worktree session. Restore keeps it read-only: clears was_live, counts it
+// read-only, leaves the transcript untouched and viewable.
+func TestRestoreProjectOrphans_gitUnconfirmedKeptReadOnly(t *testing.T) {
+	mgr, store, projectCwd := newManagerWithStore(t) // projectCwd is not a git repo → git fails
 
 	// Transcript under a worktree-suffixed folder with no live worktree.
 	home, _ := os.UserHomeDir()
@@ -354,6 +356,76 @@ func TestRestoreProjectOrphans_deletedWorktreeKeptReadOnly(t *testing.T) {
 	if e.WasLive {
 		t.Errorf("WasLive should be cleared for a read-only (deleted-worktree) session; entry=%+v", e)
 	}
+}
+
+// TestRestoreProjectOrphans_goneWorktreeMigratesAndResumes — #56, the "jerry"
+// case at the auto-restore layer: the project is a git repo, the session's
+// worktree was removed (git lists no match), but its transcript survives. On
+// restart the daemon relocates the transcript into the project-root folder and
+// resumes it (Restored, not ReadOnly) — the session comes back live with its
+// history and keeps was_live.
+func TestRestoreProjectOrphans_goneWorktreeMigratesAndResumes(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	root := filepath.Join(dir, "proj")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, root, "init", "-q") // real repo, no matching worktree
+	configPath := filepath.Join(dir, "projects.toml")
+	if err := os.WriteFile(configPath, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sessions.NewStore(filepath.Join(dir, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeDir := filepath.Join(dir, "claude-projects")
+	gone := filepath.Join(claudeDir, sessions.EncodeCwd(root)+"--claude-worktrees-removed")
+	if err := os.MkdirAll(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := sessions.NewUUID()
+	orphan := filepath.Join(gone, sid+".jsonl")
+	if err := os.WriteFile(orphan, []byte(`{"type":"user"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := store.Upsert("p1", sessions.Entry{
+		Kind: proto.PaneKindClaude, SessionID: sid, Name: "p1/jerry", Cwd: root,
+		CreatedAt: now, LastActiveAt: now, LastPaneID: "p_old", WasLive: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManagerFromConfig(ManagerConfig{
+		Projects:          []config.Project{{ID: "p1", Name: "P1", Cwd: root, Shell: []string{"/bin/sh"}}},
+		ClaudeCmd:         []string{"/bin/echo"},
+		ConfigPath:        configPath,
+		Sessions:          store,
+		ClaudeProjectsDir: claudeDir,
+	})
+
+	r := mgr.RestoreProjectOrphans("p1", root, 80, 24)
+	if r.Restored != 1 || r.ReadOnly != 0 {
+		t.Fatalf("restore = %+v, want gone-worktree session migrated + resumed (Restored=1, ReadOnly=0)", r)
+	}
+	if _, err := os.Stat(sessions.TranscriptPath(claudeDir, root, sid)); err != nil {
+		t.Errorf("transcript not relocated to project root: %v", err)
+	}
+	e, ok, err := store.Get("p1", sid)
+	if err != nil || !ok {
+		t.Fatalf("entry missing post-restore: ok=%v err=%v", ok, err)
+	}
+	if !e.WasLive {
+		t.Errorf("WasLive should remain true for a resumed session; entry=%+v", e)
+	}
+	for _, p := range mgr.PanesInProject("p1") {
+		_ = mgr.DeletePane("p1", p.ID)
+	}
+	time.Sleep(50 * time.Millisecond)
 }
 
 func TestRestoreOrphans_emptyStoreNoop(t *testing.T) {
