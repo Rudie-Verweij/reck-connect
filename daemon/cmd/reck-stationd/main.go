@@ -447,11 +447,12 @@ func main() {
 	//
 	// CreatePaneWith is goroutine-safe; the call is fast (no per-pane
 	// wait beyond the spawn syscall).
-	if r := mgr.RestoreOrphans(0, 0); r.Restored+r.Failed > 0 {
+	if r := mgr.RestoreOrphans(0, 0); r.Restored+r.Failed+r.ReadOnly > 0 {
 		logger.Info("restore-orphans complete",
 			"restored", r.Restored,
 			"failed", r.Failed,
 			"skipped", r.Skipped,
+			"read_only", r.ReadOnly,
 		)
 	}
 

@@ -1155,7 +1155,7 @@ func (m *Manager) UnarchiveProject(id string, cols, rows int) error {
 
 	res := m.RestoreProjectOrphans(id, p.Cwd, cols, rows)
 	slog.Info("unarchive project restore", "id", id,
-		"restored", res.Restored, "skipped", res.Skipped, "failed", res.Failed)
+		"restored", res.Restored, "skipped", res.Skipped, "failed", res.Failed, "read_only", res.ReadOnly)
 	m.notifyStateChange()
 	return nil
 }
@@ -1696,6 +1696,30 @@ type RestoreOrphansResult struct {
 	Restored int
 	Skipped  int
 	Failed   int
+	// ReadOnly counts Claude sessions kept but not respawned because their
+	// git worktree is gone (issue #56): the transcript is intact and stays
+	// viewable, but resuming in the wrong cwd would fork a fresh one, so
+	// was_live is cleared and the session is left read-only. Distinct from
+	// Failed (an actual respawn error) so the boot summary is honest.
+	ReadOnly int
+}
+
+// isWithinProject reports whether cwd is the project root itself or a directory
+// nested under it — the test the restore guard uses to tell a legitimate
+// worktree/subdir cwd (allow) from a foreign path left by a reused project ID
+// (skip). Uses filepath.Rel so ".." traversal and shared-prefix siblings
+// (/a/projX vs /a/proj) are correctly rejected.
+func isWithinProject(cwd, projectRoot string) bool {
+	c := filepath.Clean(cwd)
+	r := filepath.Clean(projectRoot)
+	if c == r {
+		return true
+	}
+	rel, err := filepath.Rel(r, c)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // RestoreOrphans is the daemon-startup auto-restore path for issue
@@ -1751,6 +1775,7 @@ func (m *Manager) RestoreOrphans(cols, rows int) RestoreOrphansResult {
 		total.Restored += r.Restored
 		total.Skipped += r.Skipped
 		total.Failed += r.Failed
+		total.ReadOnly += r.ReadOnly
 	}
 	return total
 }
@@ -1870,16 +1895,21 @@ func (m *Manager) restoreProjectOrphans(projectID, projectCwd string, cols, rows
 			continue
 		}
 		// Cwd-mismatch guard (Codex adversarial review finding).
-		// If the stored row references a different cwd than the
-		// project currently registered under this ID, the row
-		// belongs to a prior incarnation of the ID and must NOT
-		// be respawned under the new registration. Clear was_live
-		// so the row stops resurfacing each boot, then skip.
+		// If the stored row references a cwd outside the project
+		// currently registered under this ID, the row belongs to a
+		// prior incarnation of the ID and must NOT be respawned under
+		// the new registration. Clear was_live so the row stops
+		// resurfacing each boot, then skip.
+		//
+		// A cwd *within* the project (the root or a nested git
+		// worktree) is legitimate — #56 self-heals worktree sessions
+		// to their worktree cwd, a descendant of the root — so the
+		// check allows descendants and only rejects foreign paths.
 		// projectCwd == "" disables the check (boot path uses
 		// proj.Cwd from m.Projects() which is always populated;
 		// programmatic callers passing "" opt out deliberately).
 		if wantCwd != "" {
-			if filepath.Clean(e.Cwd) != wantCwd {
+			if !isWithinProject(e.Cwd, wantCwd) {
 				slog.Warn("restore-orphans: cwd mismatch — skipping + clearing was_live",
 					"project", projectID,
 					"kind", e.Kind,
@@ -1924,17 +1954,34 @@ func (m *Manager) restoreProjectOrphans(projectID, projectCwd string, cols, rows
 		}
 		pane, err := m.CreatePaneWith(projectID, e.Kind, cols, rows, opts)
 		if err != nil {
-			slog.Warn("restore-orphans: respawn failed",
-				"err", err,
-				"project", projectID,
-				"kind", e.Kind,
-				"identity", shortSessionID(identity),
-			)
+			// #56: the session's git worktree is gone, so it can't be
+			// resumed in the right cwd. This is expected, not a failure —
+			// keep the transcript viewable read-only and stop retrying by
+			// clearing was_live. Distinguished from a real respawn error
+			// so the boot summary and logs stay honest.
+			readOnly := errors.Is(err, ErrResumeWorktreeGone)
+			if readOnly {
+				slog.Info("restore-orphans: worktree gone — keeping session read-only",
+					"project", projectID,
+					"identity", shortSessionID(identity),
+				)
+			} else {
+				slog.Warn("restore-orphans: respawn failed",
+					"err", err,
+					"project", projectID,
+					"kind", e.Kind,
+					"identity", shortSessionID(identity),
+				)
+			}
 			if cerr := m.sessions.SetLive(projectID, identity, false); cerr != nil {
 				slog.Warn("restore-orphans: clear was_live failed",
 					"err", cerr, "project", projectID, "identity", shortSessionID(identity))
 			}
-			result.Failed++
+			if readOnly {
+				result.ReadOnly++
+			} else {
+				result.Failed++
+			}
 			continue
 		}
 		// Partial-success guard: CreatePaneWith logs-and-continues
