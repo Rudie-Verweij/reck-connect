@@ -177,6 +177,27 @@ function createWindow() {
     void tickMount();
   });
 
+  // Dev observability: surface the renderer's `[transcript]` decision
+  // logs (and any error-level console output) to the main-process
+  // stdout so they appear in the `pnpm dev` terminal alongside the
+  // daemon logs. Renderer `console.*` otherwise only reaches DevTools,
+  // which makes headless diagnosis of the History overlay impossible.
+  // Dev-only; production renderers stay quiet on the main log.
+  if (isDev) {
+    mainWindow.webContents.on(
+      "console-message",
+      (_e, level, message, line, sourceId) => {
+        // level: 0=log 1=warning 2=error 3=info(verbose). Forward the
+        // transcript trail always; forward warnings/errors from anywhere.
+        const isTranscript = message.includes("[transcript]");
+        const isProblem = level >= 1;
+        if (!isTranscript && !isProblem) return;
+        const src = sourceId ? ` (${sourceId}:${line})` : "";
+        console.log(`[renderer] ${message}${src}`);
+      },
+    );
+  }
+
   // an earlier release: when the main window closes, tear down every detached
   // pane popout and quit the app — closing a popout's last sibling
   // (i.e. main) is the standard macOS "I'm done" gesture, and leaving
