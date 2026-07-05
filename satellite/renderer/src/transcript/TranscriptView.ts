@@ -16,9 +16,9 @@
 
 import {
   createMarkdownRenderer,
-  wrapFreeTextPaths,
   type MarkdownRenderer,
 } from "../viewer/MarkdownRenderer";
+import { wrapFreeTextPaths } from "../viewer/renderedDom";
 import { createOverlayScrollbar, type OverlayScrollbar } from "../search/OverlayScrollbar";
 import { domScrollSurface } from "../search/scrollSurfaces";
 import { MarkdownSurfaceAdapter } from "../tts/MarkdownSurfaceAdapter";

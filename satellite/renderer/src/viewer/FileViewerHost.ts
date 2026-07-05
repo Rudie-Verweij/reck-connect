@@ -7,6 +7,16 @@
 // arrives in P3; editing + conflict UI arrives in P4.
 
 import { createMarkdownRenderer } from "./MarkdownRenderer";
+import { createHtmlRenderer } from "./HtmlRenderer";
+import {
+  countBlockedExternalRefs,
+  restoreExternalRefs,
+} from "./externalRefs";
+import {
+  isRenderablePath,
+  pickViewerMode,
+  type PersistedRenderMode,
+} from "./pickViewerMode";
 import { mountCodeEditor, type CodeEditorHandle } from "./CodeEditor";
 import { installCodeMirrorPathLinkifier } from "./CodeMirrorPathLinkifier";
 import {
@@ -199,10 +209,6 @@ function renderCreateBanner(opts: CreateBannerOptions): void {
   opts.body.appendChild(banner);
 }
 
-function isMarkdownPath(p: string): boolean {
-  return /\.(md|markdown)$/i.test(p);
-}
-
 /**
  * Round 5 Phase V — banner shown above the editor when the file is
  * read-only on disk (POSIX W_OK fails). Combined with mounting
@@ -215,6 +221,43 @@ function mountReadOnlyBanner(parent: HTMLElement): void {
   banner.textContent =
     "⚠ Read-only on disk (no write permission). Edit elsewhere with elevated permissions.";
   parent.appendChild(banner);
+}
+
+/**
+ * Email-client-style "load external data" consent banner for the static-HTML
+ * preview. The HtmlRenderer neutralizes every external sub-resource reference
+ * (remote images, remote CSS) before the markup mounts, so nothing fetches on
+ * render. This banner tells the user how many refs were blocked and, on click,
+ * restores them (`onLoad`) and removes itself.
+ *
+ * Mounted as a sibling immediately BEFORE `shell.body` (not inside it) so the
+ * TTS engine and search scanner — which walk `shell.body` — never see the
+ * banner text.
+ */
+function mountExternalDataBanner(
+  shell: ViewerShell,
+  count: number,
+  onLoad: () => void,
+): void {
+  const banner = document.createElement("div");
+  banner.className = "file-viewer-ext-banner";
+
+  const label = document.createElement("span");
+  label.className = "file-viewer-ext-banner-label";
+  label.textContent = `⚠ This page tried to load ${count} external resource(s) (images/styles).`;
+  banner.appendChild(label);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "file-viewer-ext-banner-button";
+  button.textContent = "Load external data";
+  button.addEventListener("click", () => {
+    onLoad();
+    banner.remove();
+  });
+  banner.appendChild(button);
+
+  shell.body.insertAdjacentElement("beforebegin", banner);
 }
 
 interface RenderOptions {
@@ -912,10 +955,11 @@ async function renderStationRemote(
   // config key as renderForPath). Both modes are now editable via
   // SSH-backed writeStation; source mode is the keystroke-edit path,
   // rendered mode falls through to the toggle for actual editing.
-  const isMd = isMarkdownPath(filePath);
-  const markdownMode: MarkdownMode = isMd
+  const renderable = isRenderablePath(filePath);
+  const persisted: PersistedRenderMode | undefined = renderable
     ? await readMarkdownMode(filePath)
-    : "source";
+    : undefined;
+  const mode = pickViewerMode(filePath, persisted);
   let codeEditor: CodeEditorHandle | null = null;
   let baseline: FileBaseline = result.baseline;
 
@@ -985,9 +1029,11 @@ async function renderStationRemote(
     },
   });
 
-  if (isMd) {
-    mountModeToggle(shell.modeToggleSlot, markdownMode, async () => {
-      const next: MarkdownMode = markdownMode === "rendered" ? "source" : "rendered";
+  if (renderable) {
+    // persisted is always defined inside this branch; ?? "rendered" only satisfies the type.
+    const currentMode: MarkdownMode = persisted ?? "rendered";
+    mountModeToggle(shell.modeToggleSlot, currentMode, async () => {
+      const next: MarkdownMode = currentMode === "rendered" ? "source" : "rendered";
       await writeMarkdownMode(filePath, next);
       // Round 5 Phase W — when the user clicked "Edit source" to
       // jump out of rendered mode, the intent is clearly to edit.
@@ -1002,7 +1048,7 @@ async function renderStationRemote(
     shell.modeToggleSlot.innerHTML = "";
   }
 
-  if (isMd && markdownMode === "rendered") {
+  if (mode === "markdown-rendered") {
     const md = createMarkdownRenderer({
       onLinkActivate: (href) => {
         // Resolve relative hrefs against the station path. The
@@ -1034,6 +1080,41 @@ async function renderStationRemote(
       },
     });
     md.mount(shell.body, md.render(result.content));
+  } else if (mode === "html-static") {
+    const html = createHtmlRenderer({
+      onLinkActivate: (href) => {
+        const target = href.startsWith("/")
+          ? href
+          : window.reckAPI.paths.resolveAgainst(filePath, href);
+        const ctx: ClickContext = {
+          surface: "popup-markdown",
+          href,
+          opener: filePath,
+          target,
+          sourceHost: "station",
+          projectCwd: renderOpts.projectCwd,
+        };
+        void openInViewerWithToast({
+          ctx,
+          openInViewer: () =>
+            window.reckAPI.files.openInViewer(target, {
+              sourceHost: "station",
+              opener: filePath,
+              originalText: href,
+              projectCwd: renderOpts.projectCwd,
+            }) as Promise<{ ok?: boolean; code?: string; error?: string } | undefined>,
+          showToast: (msg, o) =>
+            showToast(shell.body, msg, { durationMs: o?.ttl, kind: o?.kind }),
+        });
+      },
+    });
+    html.mount(shell.body, html.render(result.content));
+    const blocked = countBlockedExternalRefs(shell.body);
+    if (blocked > 0) {
+      mountExternalDataBanner(shell, blocked, () =>
+        restoreExternalRefs(shell.body),
+      );
+    }
   } else {
     // Source mode (markdown source OR non-markdown code) — EDITABLE
     // CodeMirror. mountCodeEditor's onChange feeds autoSave.markDirty
@@ -1126,39 +1207,7 @@ async function renderStationRemote(
   // to plans on the station is a real workflow. Mounts the same
   // adapter pair as renderForPath; no write coupling because station
   // popups stay read-only.
-  const surface: SpeakSurfaceAdapter = codeEditor
-    ? new CodeMirrorSurfaceAdapter({
-        container: ensurePaneControls(root),
-        view: codeEditor.view,
-      })
-    : new MarkdownSurfaceAdapter({
-        container: ensurePaneControls(root),
-        body: shell.body,
-      });
-  let ttsHandle: TtsHandle | null = null;
-  void (async () => {
-    try {
-      ttsHandle = await initTts({
-        getActiveSpeakSurface: () => surface,
-      });
-    } catch (e) {
-      console.warn("[file-viewer] TTS disabled:", e);
-    }
-  })();
-  speakHandles.set(root, {
-    surface,
-    dispose: () => {
-      ttsHandle?.dispose();
-      surface.dispose();
-    },
-  });
-
-  // Search bar + auto-hiding overlay scrollbar for this viewer. CodeMirror
-  // source mode searches the editor; rendered markdown searches the body.
-  searchHandles.set(
-    root,
-    attachViewerSearch({ root, body: shell.body, view: codeEditor?.view ?? null }),
-  );
+  attachSpeakAndSearch(root, shell, codeEditor);
 }
 
 // Per-host state for the active Speak handle so re-renders (auto-reload,
@@ -1174,6 +1223,53 @@ const speakHandles = new WeakMap<HTMLElement, SpeakHandle>();
 // Per-host search handle (bar + overlay scrollbar), torn down on re-render
 // alongside the speak handle.
 const searchHandles = new WeakMap<HTMLElement, ViewerSearchHandle>();
+
+/**
+ * Attach the unified TTS engine + search bar to whichever surface the
+ * viewer just mounted. When a CodeMirror editor exists we speak/search the
+ * editor; otherwise we speak/search the rendered DOM in `shell.body`
+ * (markdown today, static HTML in Phase A — both are plain DOM, so the
+ * MarkdownSurfaceAdapter (search via attachViewerSearch) handles them
+ * unchanged).
+ * Registers per-root handles so the next render's teardown disposes them.
+ */
+function attachSpeakAndSearch(
+  root: HTMLElement,
+  shell: ViewerShell,
+  codeEditor: CodeEditorHandle | null,
+): void {
+  // Route both surface adapters' control container through the shared
+  // top-right pane-controls stack (adopted from main's ui/paneControls),
+  // so the file-viewer search bar + TTS bar dock into the unified stack.
+  const surface: SpeakSurfaceAdapter = codeEditor
+    ? new CodeMirrorSurfaceAdapter({
+        container: ensurePaneControls(root),
+        view: codeEditor.view,
+      })
+    : new MarkdownSurfaceAdapter({
+        container: ensurePaneControls(root),
+        body: shell.body,
+      });
+  let ttsHandle: TtsHandle | null = null;
+  void (async () => {
+    try {
+      ttsHandle = await initTts({ getActiveSpeakSurface: () => surface });
+    } catch (e) {
+      console.warn("[file-viewer] TTS disabled:", e);
+    }
+  })();
+  speakHandles.set(root, {
+    surface,
+    dispose: () => {
+      ttsHandle?.dispose();
+      surface.dispose();
+    },
+  });
+  searchHandles.set(
+    root,
+    attachViewerSearch({ root, body: shell.body, view: codeEditor?.view ?? null }),
+  );
+}
 
 async function renderForPath(
   root: HTMLElement,
@@ -1310,13 +1406,16 @@ async function renderForPath(
   // user can toggle to "source" via the header button (mounts CodeMirror
   // with markdown grammar; all P4 auto-save + conflict-banner plumbing
   // re-runs). Code files don't show the toggle.
-  const isMd = isMarkdownPath(filePath);
-  const markdownMode: MarkdownMode = isMd
+  const renderable = isRenderablePath(filePath);
+  const persisted: PersistedRenderMode | undefined = renderable
     ? await readMarkdownMode(result.resolvedPath)
-    : "source";
-  if (isMd) {
-    mountModeToggle(shell.modeToggleSlot, markdownMode, async () => {
-      const next: MarkdownMode = markdownMode === "rendered" ? "source" : "rendered";
+    : undefined;
+  const mode = pickViewerMode(filePath, persisted);
+  if (renderable) {
+    // persisted is always defined inside this branch; ?? "rendered" only satisfies the type.
+    const currentMode: MarkdownMode = persisted ?? "rendered";
+    mountModeToggle(shell.modeToggleSlot, currentMode, async () => {
+      const next: MarkdownMode = currentMode === "rendered" ? "source" : "rendered";
       await writeMarkdownMode(result.resolvedPath, next);
       // Re-enter the render path so the new mode mounts with all the
       // associated machinery (auto-save in source mode, link interception
@@ -1333,7 +1432,7 @@ async function renderForPath(
     shell.modeToggleSlot.innerHTML = "";
   }
 
-  if (isMd && markdownMode === "rendered") {
+  if (mode === "markdown-rendered") {
     const md = createMarkdownRenderer({
       onLinkActivate: (href) => {
         // Resolve relative hrefs against the file we're currently viewing.
@@ -1383,6 +1482,42 @@ async function renderForPath(
       },
     });
     md.mount(shell.body, md.render(result.content));
+  } else if (mode === "html-static") {
+    const html = createHtmlRenderer({
+      onLinkActivate: (href) => {
+        const target = href.startsWith("/")
+          ? href
+          : window.reckAPI.paths.resolveAgainst(result.resolvedPath, href);
+        void window.reckAPI.files
+          .openInViewer(target, {
+            opener: result.resolvedPath,
+            originalText: href,
+            projectCwd: renderOpts.projectCwd,
+          })
+          .then((r) => {
+            const res = r as
+              | { ok?: boolean; code?: string; error?: string }
+              | undefined;
+            if (!res || res.ok !== true) {
+              showToast(
+                shell.body,
+                res?.error ? `Could not open: ${res.error}` : "Could not open file.",
+                3500,
+              );
+            }
+          })
+          .catch(() => {
+            /* openInViewer failures surface via the toast above */
+          });
+      },
+    });
+    html.mount(shell.body, html.render(result.content));
+    const blocked = countBlockedExternalRefs(shell.body);
+    if (blocked > 0) {
+      mountExternalDataBanner(shell, blocked, () =>
+        restoreExternalRefs(shell.body),
+      );
+    }
   } else {
     // P4: editable CodeMirror surface. `onChange` feeds the auto-save
     // coordinator, which debounces and flushes to `file:write`.
@@ -1455,44 +1590,9 @@ async function renderForPath(
     void lockBannerRef;
   }
 
-  // Phase 1 (linkifier-followups): install the unified TTS subsystem
-  // with a surface adapter matching the active viewer kind. Same
-  // engine, same control bar, same shortcuts as terminal panes —
-  // including per-word highlighting via the adapter's own decoration
-  // path. Disposing this handle tears down the engine + bar + listeners.
-  const surface: SpeakSurfaceAdapter = codeEditor
-    ? new CodeMirrorSurfaceAdapter({
-        container: ensurePaneControls(root),
-        view: codeEditor.view,
-      })
-    : new MarkdownSurfaceAdapter({
-        container: ensurePaneControls(root),
-        body: shell.body,
-      });
-  let ttsHandle: TtsHandle | null = null;
-  void (async () => {
-    try {
-      ttsHandle = await initTts({
-        getActiveSpeakSurface: () => surface,
-      });
-    } catch (e) {
-      console.warn("[file-viewer] TTS disabled:", e);
-    }
-  })();
-  speakHandles.set(root, {
-    surface,
-    dispose: () => {
-      ttsHandle?.dispose();
-      surface.dispose();
-    },
-  });
-
-  // Search bar + auto-hiding overlay scrollbar for this viewer. CodeMirror
-  // source mode searches the editor; rendered markdown searches the body.
-  searchHandles.set(
-    root,
-    attachViewerSearch({ root, body: shell.body, view: codeEditor?.view ?? null }),
-  );
+  // Attach TTS + search to the surface we just mounted (shared with the
+  // station path). Disposed by the next render's teardown.
+  attachSpeakAndSearch(root, shell, codeEditor);
 
   // P4: watch the file on disk. When the viewer is clean we silently
   // reload; when it's dirty (CodeMirror content has diverged from

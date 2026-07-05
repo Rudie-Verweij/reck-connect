@@ -143,6 +143,26 @@ describe("mountFileViewer", () => {
     );
   });
 
+  it("renders a sanitized static preview (no CodeMirror) for .html files", async () => {
+    files.read.mockResolvedValue({
+      ok: true,
+      resolvedPath: "/safe/page.html",
+      content: '<div class="card">hello <script>alert(1)</script></div>',
+      baseline: { mtimeMs: 1, sha256: "abc", size: 40 },
+    });
+    await mountFileViewer({
+      root,
+      params: new URLSearchParams("path=/safe/page.html"),
+    });
+    expect(files.read).toHaveBeenCalledWith("/safe/page.html");
+    expect(root.querySelector(".file-viewer-code-editor")).toBeNull();
+    expect(root.querySelector("div.card")).not.toBeNull();
+    expect(root.textContent).toContain("hello");
+    // DOMPurify strips <script> — confirms the sanitized renderer mounted,
+    // not raw content.
+    expect(root.querySelector("script")).toBeNull();
+  });
+
   it("renders an error banner when files.read fails", async () => {
     files.read.mockResolvedValue({
       ok: false,
