@@ -228,3 +228,57 @@ describe("TranscriptParser — harness-wrapper sanitization", () => {
     expect(p.turns[1].blocks).toEqual([{ kind: "command", name: "/clear" }]);
   });
 });
+
+const assistantExitPlan = (plan: string, path = ".claude/plans/x.md", id = "mp") =>
+  `{"parentUuid":"a1","isSidechain":false,"type":"assistant","message":{"id":"${id}","role":"assistant","content":[{"type":"tool_use","id":"toolu_p","name":"ExitPlanMode","input":{"plan":${JSON.stringify(plan)},"planFilePath":${JSON.stringify(path)}}}]},"uuid":"ap"}\n`;
+
+const assistantAskQuestion = (id = "mq") =>
+  `{"parentUuid":"a1","isSidechain":false,"type":"assistant","message":{"id":"${id}","role":"assistant","content":[{"type":"tool_use","id":"toolu_q","name":"AskUserQuestion","input":{"questions":[{"question":"Which approach?","header":"Approach","multiSelect":false,"options":[{"label":"A","description":"first"},{"label":"B","description":"second"}]}]}}]},"uuid":"aq"}\n`;
+
+const userPlanApproved = () =>
+  `{"parentUuid":"ap","isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_p","content":"User has approved your plan. You can now start coding."}]},"uuid":"upa"}\n`;
+
+describe("TranscriptParser — plans, questions, approvals", () => {
+  it("renders an ExitPlanMode tool call as a plan block (path + text), not a raw tool_use", () => {
+    const p = new TranscriptParser();
+    p.push(userLine("q") + assistantExitPlan("# My Plan\n\nDo the thing", ".claude/plans/x.md"));
+    const claude = p.turns[1];
+    expect(claude.blocks).toContainEqual({
+      kind: "plan",
+      text: "# My Plan\n\nDo the thing",
+      path: ".claude/plans/x.md",
+    });
+    expect(claude.blocks.some((b) => b.kind === "tool_use")).toBe(false);
+  });
+
+  it("renders an AskUserQuestion tool call as a structured question block", () => {
+    const p = new TranscriptParser();
+    p.push(userLine("q") + assistantAskQuestion());
+    const claude = p.turns[1];
+    const qb = claude.blocks.find((b) => b.kind === "question");
+    expect(qb).toBeTruthy();
+    expect(qb).toMatchObject({
+      kind: "question",
+      questions: [
+        {
+          question: "Which approach?",
+          header: "Approach",
+          options: [
+            { label: "A", description: "first" },
+            { label: "B", description: "second" },
+          ],
+        },
+      ],
+    });
+    expect(claude.blocks.some((b) => b.kind === "tool_use")).toBe(false);
+  });
+
+  it("folds the plan-approval tool_result into a compact plan_approved block (no phantom user turn)", () => {
+    const p = new TranscriptParser();
+    p.push(userLine("q") + assistantExitPlan("# P") + userPlanApproved());
+    expect(p.turns.map((t) => t.role)).toEqual(["user", "assistant"]);
+    const claude = p.turns[1];
+    expect(claude.blocks.some((b) => b.kind === "plan_approved")).toBe(true);
+    expect(claude.blocks.some((b) => b.kind === "tool_result")).toBe(false);
+  });
+});

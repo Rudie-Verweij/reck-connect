@@ -3584,18 +3584,18 @@ details.transcript-tools > summary:hover { color: var(--app-text); }
   font-size: 0.78rem;
   color: var(--app-text-dim);
 }
-/* Start-of-session divider — "⋯ Start of session ⋯" with the short id, so the
-   top of the History overlay reads as the beginning of the conversation. */
+/* Start-of-session title — "Start of session" with the short id, so the top
+   of the History overlay reads as the beginning of the conversation. Rendered
+   as a prominent title (not a thin divider). */
 .transcript-session-start {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 2px 0 20px;
-  font-family: var(--font-mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--app-text-muted);
+  gap: 12px;
+  margin: 4px 0 24px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--app-text);
 }
 .transcript-session-start::before,
 .transcript-session-start::after {
@@ -3606,7 +3606,10 @@ details.transcript-tools > summary:hover { color: var(--app-text); }
 }
 .transcript-session-start--hidden { display: none; }
 .transcript-session-start-id {
-  font-size: 0.6rem;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 400;
   letter-spacing: 0.06em;
   color: var(--app-text-dim);
   opacity: 0.7;
@@ -3623,4 +3626,90 @@ details.transcript-tools > summary:hover { color: var(--app-text); }
   font-family: var(--font-mono);
   font-size: 0.74rem;
   color: var(--claude-orange);
+}
+
+/* User messages get an orange accent so they stand out from Claude's turns. */
+.transcript-turn--user .transcript-text {
+  border-color: color-mix(in srgb, var(--claude-orange) 45%, var(--app-border));
+  border-left: 3px solid var(--claude-orange);
+  background: color-mix(in srgb, var(--claude-orange) 7%, var(--app-bg-raised));
+}
+
+/* Plan card (ExitPlanMode): compact — a header, the ⌘-clickable plan path, and
+   the full plan tucked in a collapsed <details> so it never dominates. */
+.transcript-plan {
+  margin: 8px 0 4px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--claude-orange) 40%, var(--app-border));
+  border-left: 3px solid var(--claude-orange);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--claude-orange) 5%, var(--app-bg-raised));
+}
+.transcript-plan-head {
+  font-weight: 600;
+  font-size: 0.82rem;
+  margin-bottom: 4px;
+}
+a.transcript-plan-path {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  margin-bottom: 4px;
+}
+details.transcript-plan-detail > summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  color: var(--app-text-dim);
+  user-select: none;
+}
+details.transcript-plan-detail > summary:hover { color: var(--app-text); }
+details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
+
+/* Question card (AskUserQuestion): question text + its options, surfaced. */
+.transcript-question {
+  margin: 8px 0 4px;
+  padding: 8px 12px;
+  border: 1px solid var(--app-border);
+  border-left: 3px solid var(--claude-orange-glow);
+  border-radius: var(--radius);
+  background: var(--app-bg-raised);
+}
+.transcript-question-header {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--app-text-muted);
+  margin-bottom: 2px;
+}
+.transcript-question-text {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+.transcript-question-options {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.8rem;
+}
+.transcript-question-options li { margin: 2px 0; }
+.transcript-question-option-label { font-weight: 600; }
+.transcript-question-option-desc {
+  color: var(--app-text-dim);
+  margin-left: 6px;
+}
+
+/* Plan-approved chip — a slim confirmation, not the boilerplate result text. */
+.transcript-plan-approved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #3fb950 14%, var(--app-bg-raised));
+  border: 1px solid color-mix(in srgb, #3fb950 45%, var(--app-border));
+  font-size: 0.76rem;
+  color: #3fb950;
 }

@@ -205,6 +205,59 @@ describe("TranscriptView", () => {
     v.dispose();
   });
 
+  it("renders a plan block as a compact card: clickable path + collapsed full text", () => {
+    view.render(
+      [{ role: "assistant", blocks: [{ kind: "plan", text: "# Big Plan\n\nlots of detail", path: ".claude/plans/x.md" }] }],
+      0,
+    );
+    const t = view.body.querySelector(".transcript-turn") as HTMLElement;
+    const card = t.querySelector(".transcript-plan") as HTMLElement;
+    expect(card).not.toBeNull();
+    // The plan path is a ⌘-clickable internal link.
+    const link = card.querySelector("a.reck-internal-link");
+    expect(link?.getAttribute("href")).toBe(".claude/plans/x.md");
+    // The full plan text is collapsed (not shown "extensively"), but present.
+    const details = card.querySelector("details") as HTMLDetailsElement;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain("lots of detail");
+    // Never folded into the generic tool group.
+    expect(t.querySelector("details.transcript-tools")).toBeNull();
+  });
+
+  it("renders a question block with the question text and its options", () => {
+    view.render(
+      [
+        {
+          role: "assistant",
+          blocks: [
+            {
+              kind: "question",
+              questions: [
+                { question: "Which approach?", header: "Approach", options: [{ label: "A", description: "first" }, { label: "B" }] },
+              ],
+            },
+          ],
+        },
+      ],
+      0,
+    );
+    const card = view.body.querySelector(".transcript-question") as HTMLElement;
+    expect(card).not.toBeNull();
+    expect(card.textContent).toContain("Which approach?");
+    expect(card.textContent).toContain("A");
+    expect(card.textContent).toContain("first");
+    expect(card.textContent).toContain("B");
+    expect(view.body.querySelector("details.transcript-tools")).toBeNull();
+  });
+
+  it("renders a plan_approved block as a slim chip", () => {
+    view.render([{ role: "assistant", blocks: [{ kind: "plan_approved" }] }], 0);
+    const chip = view.body.querySelector(".transcript-plan-approved");
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent?.toLowerCase()).toContain("approved");
+  });
+
   it("exposes a cached markdown speak surface over the body, disposed with the view", () => {
     const surface = view.getSpeakSurface();
     expect(surface.kind).toBe("markdown");

@@ -19,12 +19,33 @@
 // into a single "assistant" turn. Without this, every tool result would
 // render as a phantom "you" turn between Claude's actions.
 
+export interface TranscriptQuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface TranscriptQuestion {
+  question: string;
+  header?: string;
+  options: TranscriptQuestionOption[];
+}
+
 export type TranscriptBlock =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string }
   | { kind: "tool_use"; name: string; input: string }
   | { kind: "tool_result"; text: string }
-  | { kind: "command"; name: string };
+  | { kind: "command"; name: string }
+  // A plan Claude presented via ExitPlanMode. `path` is the plan file
+  // (⌘-clickable); `text` is the full markdown (shown collapsed).
+  | { kind: "plan"; text: string; path?: string }
+  // A question Claude asked via AskUserQuestion.
+  | { kind: "question"; questions: TranscriptQuestion[] }
+  // The user's approval of a plan (folded from the ExitPlanMode tool_result).
+  | { kind: "plan_approved" };
+
+/** Prefix Claude Code writes into the ExitPlanMode tool_result on approval. */
+const PLAN_APPROVED_PREFIX = "User has approved your plan";
 
 export interface TranscriptTurn {
   role: "user" | "assistant";
@@ -85,11 +106,13 @@ export class TranscriptParser {
     if (blocks.length === 0) return null;
     const timestamp = typeof rec.timestamp === "string" ? rec.timestamp : undefined;
 
-    // A role:"user" line whose content is only tool_result(s) is NOT the
-    // user speaking — it's tool output being fed back to Claude. Fold it
+    // A role:"user" line whose content is only tool output — tool_result(s),
+    // or a plan approval derived from one — is NOT the user speaking. Fold it
     // into the open assistant turn instead of starting a user turn.
     const isToolResult =
-      role === "user" && blocks.every((b) => b.kind === "tool_result");
+      role === "user" &&
+      blocks.length > 0 &&
+      blocks.every((b) => b.kind === "tool_result" || b.kind === "plan_approved");
 
     if (role === "user" && !isToolResult) {
       // A user message's string content is often not the human speaking: the
@@ -147,16 +170,35 @@ function blocksFromContent(content: unknown): TranscriptBlock[] {
           out.push({ kind: "thinking", text: b.thinking });
         }
         break;
-      case "tool_use":
-        out.push({
-          kind: "tool_use",
-          name: typeof b.name === "string" ? b.name : "tool",
-          input: stringifyInput(b.input),
-        });
+      case "tool_use": {
+        const name = typeof b.name === "string" ? b.name : "tool";
+        // Two tools get first-class rendering instead of the collapsed tool
+        // group: plans (ExitPlanMode) and questions (AskUserQuestion).
+        if (name === "ExitPlanMode") {
+          out.push(planBlock(b.input));
+          break;
+        }
+        if (name === "AskUserQuestion") {
+          const q = questionBlock(b.input);
+          if (q) {
+            out.push(q);
+            break;
+          }
+        }
+        out.push({ kind: "tool_use", name, input: stringifyInput(b.input) });
         break;
-      case "tool_result":
-        out.push({ kind: "tool_result", text: toolResultText(b.content) });
+      }
+      case "tool_result": {
+        const text = toolResultText(b.content);
+        // The plan-approval result is a slim "✓ Plan approved" marker, not a
+        // block of boilerplate ("You can now start coding…").
+        if (text.startsWith(PLAN_APPROVED_PREFIX)) {
+          out.push({ kind: "plan_approved" });
+          break;
+        }
+        out.push({ kind: "tool_result", text });
         break;
+      }
       default:
         break; // unknown block type — skip, stay tolerant
     }
@@ -201,6 +243,46 @@ function stripWrapper(s: string, tag: string): string {
   const closed = new RegExp(`<${tag}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${tag}>`, "g");
   const openToEnd = new RegExp(`<${tag}(?:\\s[^>]*)?>[\\s\\S]*$`);
   return s.replace(closed, "").replace(openToEnd, "");
+}
+
+/** ExitPlanMode input → plan block: the markdown plan + its file path. */
+function planBlock(input: unknown): TranscriptBlock {
+  const rec = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  const text = typeof rec.plan === "string" ? rec.plan : stringifyInput(input);
+  const path =
+    typeof rec.planFilePath === "string" && rec.planFilePath !== "" ? rec.planFilePath : undefined;
+  return path ? { kind: "plan", text, path } : { kind: "plan", text };
+}
+
+/** AskUserQuestion input → question block, or null if it has no questions
+ *  (fall back to a generic tool_use so nothing is silently dropped). */
+function questionBlock(input: unknown): TranscriptBlock | null {
+  if (typeof input !== "object" || input === null) return null;
+  const rec = input as Record<string, unknown>;
+  if (!Array.isArray(rec.questions)) return null;
+  const questions: TranscriptQuestion[] = [];
+  for (const q of rec.questions) {
+    if (typeof q !== "object" || q === null) continue;
+    const qr = q as Record<string, unknown>;
+    const question = typeof qr.question === "string" ? qr.question : "";
+    if (question === "") continue;
+    const header = typeof qr.header === "string" ? qr.header : undefined;
+    const options: TranscriptQuestionOption[] = [];
+    if (Array.isArray(qr.options)) {
+      for (const o of qr.options) {
+        if (typeof o !== "object" || o === null) continue;
+        const or = o as Record<string, unknown>;
+        if (typeof or.label !== "string") continue;
+        options.push(
+          typeof or.description === "string"
+            ? { label: or.label, description: or.description }
+            : { label: or.label },
+        );
+      }
+    }
+    questions.push(header ? { question, header, options } : { question, options });
+  }
+  return questions.length > 0 ? { kind: "question", questions } : null;
 }
 
 function stringifyInput(input: unknown): string {

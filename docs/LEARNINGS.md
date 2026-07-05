@@ -146,6 +146,34 @@ for some panes, questions/plans invisible, top-right control layout, styling.
   = the worktree path. So trusting the recorded cwd wouldn't help — glob-by-id is
   the reliable locator.
 
+#### P2/P3 — surfacing plans & questions
+
+**What we learned**
+- The invisible content was two tools (probed live): `AskUserQuestion` (116×)
+  and `ExitPlanMode` (51×) — both were folding into the collapsed `🔧 N tool
+  calls` group. The parser now special-cases them into first-class blocks:
+  `plan` (`input.plan` + `input.planFilePath`), `question` (`input.questions[]`
+  = `{question, header, options[{label,description}]}`), rendered as their own
+  cards outside the tool group. Everything else stays collapsed.
+- Plan approval is detectable: the ExitPlanMode tool_result content starts with
+  the literal `"User has approved your plan"`. That folds to a slim `✓ Plan
+  approved` chip. A decline surfaces as the next normal user turn (the user's
+  own words), so no special handling needed.
+- The plan card is deliberately compact: the plan **path is a ⌘-clickable
+  link**, the full markdown sits in a collapsed `<details>` — "visible but not
+  extensive," per the user.
+
+**Surprises**
+- Adding `plan_approved` broke the tool-result fold: `isToolResult` required
+  *every* block to be `tool_result`, but the approval is now a `plan_approved`
+  block — so the message was becoming a phantom user turn. Fixed by folding on
+  `tool_result || plan_approved`.
+
+**Decisions**
+- User turns get an orange accent (left border + faint tint); the
+  start-of-session divider is promoted to a real title. Regular tool calls stay
+  collapsed-by-default (unchanged) — only plans/questions are surfaced.
+
 ## Codex preamble via `developer_instructions` (follow-up to #33, 2026-07-01)
 
 Undeferred the #32 preamble for codex after web-researching the actual `codex` CLI.

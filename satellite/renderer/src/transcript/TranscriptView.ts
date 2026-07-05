@@ -195,6 +195,85 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
     return el;
   }
 
+  // A plan Claude presented via ExitPlanMode. Compact by design: a header,
+  // the plan file path as a ⌘-clickable link, and the full markdown tucked in
+  // a collapsed <details> so it never dominates the chat.
+  function planCardEl(block: Extract<TranscriptBlock, { kind: "plan" }>): HTMLElement {
+    const card = document.createElement("div");
+    card.className = "transcript-plan";
+    const head = document.createElement("div");
+    head.className = "transcript-plan-head";
+    head.textContent = "📋 Plan";
+    card.appendChild(head);
+    if (block.path) {
+      const link = document.createElement("a");
+      link.className = "reck-internal-link transcript-plan-path";
+      link.setAttribute("href", block.path);
+      link.setAttribute("title", "⌘+click to open");
+      link.textContent = block.path;
+      card.appendChild(link);
+    }
+    if (block.text) {
+      const details = document.createElement("details");
+      details.className = "transcript-plan-detail";
+      const summary = document.createElement("summary");
+      summary.textContent = "Show plan";
+      details.appendChild(summary);
+      const bodyEl = document.createElement("div");
+      bodyEl.className = "transcript-md";
+      md.mount(bodyEl, md.render(block.text));
+      details.appendChild(bodyEl);
+      card.appendChild(details);
+    }
+    return card;
+  }
+
+  // A question Claude asked via AskUserQuestion — surfaced, not buried in the
+  // tool group. Question text + each option (label + description).
+  function questionCardEl(block: Extract<TranscriptBlock, { kind: "question" }>): HTMLElement {
+    const card = document.createElement("div");
+    card.className = "transcript-question";
+    for (const q of block.questions) {
+      if (q.header) {
+        const hd = document.createElement("div");
+        hd.className = "transcript-question-header";
+        hd.textContent = q.header;
+        card.appendChild(hd);
+      }
+      const qEl = document.createElement("div");
+      qEl.className = "transcript-question-text";
+      qEl.textContent = `❓ ${q.question}`;
+      card.appendChild(qEl);
+      if (q.options.length > 0) {
+        const list = document.createElement("ul");
+        list.className = "transcript-question-options";
+        for (const opt of q.options) {
+          const li = document.createElement("li");
+          const label = document.createElement("span");
+          label.className = "transcript-question-option-label";
+          label.textContent = opt.label;
+          li.appendChild(label);
+          if (opt.description) {
+            const desc = document.createElement("span");
+            desc.className = "transcript-question-option-desc";
+            desc.textContent = opt.description;
+            li.appendChild(desc);
+          }
+          list.appendChild(li);
+        }
+        card.appendChild(list);
+      }
+    }
+    return card;
+  }
+
+  function planApprovedEl(): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "transcript-plan-approved";
+    el.textContent = "✓ Plan approved";
+    return el;
+  }
+
   // One row inside the collapsed tool group: a labelled <pre> for a
   // thinking / tool_use / tool_result block.
   function toolRow(className: string, label: string, text: string): HTMLElement {
@@ -247,6 +326,12 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
         el.appendChild(textBlockEl(turn.role, block.text));
       } else if (block.kind === "command") {
         el.appendChild(commandPillEl(block.name));
+      } else if (block.kind === "plan") {
+        el.appendChild(planCardEl(block));
+      } else if (block.kind === "question") {
+        el.appendChild(questionCardEl(block));
+      } else if (block.kind === "plan_approved") {
+        el.appendChild(planApprovedEl());
       } else {
         toolBlocks.push(block);
       }
