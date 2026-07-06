@@ -4,8 +4,9 @@
 // what makes the scrollbar *exact*: the browser lays the turns out at
 // the pane's real width, so scrollHeight/clientHeight are true at any
 // size and the truthful OverlayScrollbar mode (thumb, drag-to-seek,
-// resize) works unchanged — no estimation anywhere. Shell mirrors the
-// file viewer's buildShell: positioned root → header + scrollable body.
+// resize) works unchanged — no estimation anywhere. Shell is a
+// positioned root → status banner + scrollable body (no header bar —
+// the pane's history clock toggles the overlay, Escape closes it).
 //
 // Rendering is incremental: one container element per turn, and
 // `render(turns, firstChanged)` only (re)paints from `firstChanged`,
@@ -29,11 +30,10 @@ import type { TranscriptTurn, TranscriptBlock } from "./parseTranscript";
 export interface TranscriptViewOptions {
   /** Positioned pane wrapper the overlay covers. */
   host: HTMLElement;
-  /** Header label — typically the pane title. */
-  title: string;
   /** Session UUID — shown (shortened) in the start-of-session divider. */
   sessionId?: string;
-  /** Invoked on the close button or Escape. Owner unmounts via dispose(). */
+  /** Invoked on Escape (or the pane's history-clock toggle). Owner unmounts
+   *  via dispose(). */
   onClose(): void;
   /** ⌘+click on an internal file-path link (relative/absolute/`~`). Same
    *  contract as the markdown renderer's onLinkActivate: `(href, event)`. */
@@ -89,20 +89,6 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
   const root = document.createElement("div");
   root.className = "transcript-view reck-native-scroll";
 
-  const header = document.createElement("div");
-  header.className = "transcript-header";
-  const title = document.createElement("div");
-  title.className = "transcript-title";
-  title.textContent = opts.title;
-  const close = document.createElement("button");
-  close.type = "button";
-  close.className = "transcript-close";
-  close.title = "Back to live terminal (Esc)";
-  close.textContent = "✕";
-  close.addEventListener("click", () => opts.onClose());
-  header.appendChild(title);
-  header.appendChild(close);
-
   const status = document.createElement("div");
   status.className = "transcript-status transcript-status--hidden";
 
@@ -129,7 +115,6 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
   }
   body.appendChild(sessionStart);
 
-  root.appendChild(header);
   root.appendChild(status);
   root.appendChild(body);
   opts.host.appendChild(root);

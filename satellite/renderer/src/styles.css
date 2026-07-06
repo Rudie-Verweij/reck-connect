@@ -3631,7 +3631,7 @@ textarea.file-viewer-merge-pane {
   inset: 0;
   z-index: 30;
   display: grid;
-  grid-template-rows: 34px auto 1fr;
+  grid-template-rows: auto 1fr;
   overflow: hidden;
   background: var(--app-bg);
   color: var(--app-text);
@@ -3649,38 +3649,6 @@ textarea.file-viewer-merge-pane {
 }
 .transcript-status--hidden {
   display: none;
-}
-.transcript-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--app-border);
-  background: var(--app-bg-raised);
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--app-text-dim);
-}
-.transcript-title {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.transcript-close {
-  background: none;
-  border: none;
-  color: var(--app-text-dim);
-  cursor: pointer;
-  font-size: 0.9rem;
-  padding: 2px 6px;
-  border-radius: var(--radius);
-}
-.transcript-close:hover {
-  color: var(--app-text);
-  background: var(--app-hover);
 }
 .transcript-body {
   position: relative;
@@ -3978,6 +3946,8 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   /* 16px base × 1.25. */
   width: 20px;
   height: 20px;
+  /* Slow enough to read as "winding", fast enough to not lag the overlay. */
+  transition: transform 0.5s var(--ease-smooth);
 }
 .pane-controls-history:hover {
   /* Hold the resting fill/ink (no shade change) — the only hover cue is the
@@ -3986,6 +3956,31 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   color: var(--claude-mid);
   border-color: var(--claude-orange);
   box-shadow: 0 0 0 1px rgba(212, 104, 58, 0.55), 0 0 14px 3px rgba(232, 135, 92, 0.5);
+}
+/* History mode — the state IS the hue. While the overlay is open the halo
+   that hover only previews stays lit and the clock's ink turns orange, so a
+   glance at the corner answers "am I in history or live?". Keyed off
+   aria-pressed (set by setHistoryButtonActive) so the semantics and the
+   styling can't drift apart. */
+.pane-controls-history[aria-pressed="true"] {
+  color: var(--claude-orange);
+  border-color: var(--claude-orange);
+  box-shadow: 0 0 0 1px rgba(212, 104, 58, 0.7), 0 0 10px 2px rgba(232, 135, 92, 0.35);
+}
+.pane-controls-history[aria-pressed="true"]:hover {
+  color: var(--claude-orange);
+  box-shadow: 0 0 0 1px rgba(212, 104, 58, 0.7), 0 0 14px 3px rgba(232, 135, 92, 0.5);
+}
+/* Entering history winds the clock one full turn backwards (rewinding time);
+   leaving spins it forward again. Full turns, so the glyph always lands
+   upright and only the motion carries the meaning. */
+.pane-controls-history[aria-pressed="true"] svg {
+  transform: rotate(-360deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane-controls-history svg {
+    transition: none;
+  }
 }
 /* Surfaces with a header push the stack below it. */
 .file-viewer-root > .pane-controls { top: 46px; right: 16px; }

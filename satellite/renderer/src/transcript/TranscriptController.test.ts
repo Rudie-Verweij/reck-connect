@@ -6,6 +6,7 @@ import {
   type TranscriptApi,
 } from "./TranscriptController";
 import { HttpError, type TranscriptChunk } from "@client-core/api/client";
+import { ensureHistoryButton } from "../ui/paneControls";
 import type { SessionsListResponse } from "@proto/proto";
 
 // Integration tests for the FULL open → resolve → tail → render flow,
@@ -97,6 +98,19 @@ describe("TranscriptController", () => {
     const status = d.wrapper.querySelector(".transcript-status") as HTMLElement;
     expect(status.classList.contains("transcript-status--hidden")).toBe(true);
     expect(c.isOpen("p_1")).toBe(true);
+  });
+
+  it("lights the pane's history clock while open and dims it on close", async () => {
+    const d = makeDeps({ sessionId: SID });
+    // The pane's control stack + clock exist before the overlay opens.
+    const btn = ensureHistoryButton(d.wrapper, { icon: "<svg></svg>", onToggle: () => {} });
+    const c = makeController(d);
+
+    await c.toggle("p_1");
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+
+    await c.toggle("p_1"); // toggle off
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("falls back to listSessions when the tab has no sessionId", async () => {

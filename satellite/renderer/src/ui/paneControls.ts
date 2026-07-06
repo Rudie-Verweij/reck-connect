@@ -29,6 +29,9 @@ export interface HistoryButtonOptions {
   onToggle(): void;
 }
 
+const HISTORY_TITLE_IDLE = "Chat history — scroll & search the full transcript";
+const HISTORY_TITLE_OPEN = "Back to live terminal (Esc)";
+
 /** Ensure a single History (clock) button lives in `anchor`'s control stack.
  *  Idempotent — repeated calls return the existing button. */
 export function ensureHistoryButton(
@@ -44,7 +47,12 @@ export function ensureHistoryButton(
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "icon-btn pane-controls-history";
-  btn.title = opts.title ?? "Chat history — scroll & search the full transcript";
+  // The clock doubles as the History-mode indicator: `aria-pressed` carries
+  // the open/closed state (toggled via setHistoryButtonActive) and CSS keys
+  // the persistent orange hue + rewind spin off it.
+  btn.setAttribute("aria-pressed", "false");
+  btn.dataset.idleTitle = opts.title ?? HISTORY_TITLE_IDLE;
+  btn.title = btn.dataset.idleTitle;
   btn.innerHTML = opts.icon;
   btn.addEventListener("click", (e) => {
     // Don't let the click reach the pane/tab beneath (focus/select handlers).
@@ -53,4 +61,19 @@ export function ensureHistoryButton(
   });
   stack.appendChild(btn);
   return btn;
+}
+
+/** Reflect the History overlay's open state on `anchor`'s clock button.
+ *  While open the clock holds the orange "lit" hue (CSS keys off
+ *  `aria-pressed`) and the tooltip flips to the way back. No-op when the
+ *  anchor has no History button (non-Claude panes, teardown races). The
+ *  `:scope >` selector deliberately skips nested control stacks (the
+ *  transcript overlay mounts its own inside the pane wrapper). */
+export function setHistoryButtonActive(anchor: HTMLElement, active: boolean): void {
+  const btn = anchor.querySelector<HTMLButtonElement>(
+    ":scope > .pane-controls > .pane-controls-history",
+  );
+  if (!btn) return;
+  btn.setAttribute("aria-pressed", active ? "true" : "false");
+  btn.title = active ? HISTORY_TITLE_OPEN : btn.dataset.idleTitle ?? HISTORY_TITLE_IDLE;
 }

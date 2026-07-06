@@ -13,6 +13,7 @@
 import { HttpError, type TranscriptChunk } from "@client-core/api/client";
 import type { SessionsListResponse } from "@proto/proto";
 import type { HostRef } from "../host";
+import { setHistoryButtonActive } from "../ui/paneControls";
 import { createTranscriptView, type TranscriptViewHandle } from "./TranscriptView";
 import { createTranscriptTail, type TranscriptTail } from "./TranscriptTail";
 import { TranscriptParser } from "./parseTranscript";
@@ -68,6 +69,8 @@ export interface TranscriptController {
 interface OpenEntry {
   view: TranscriptViewHandle;
   tail: TranscriptTail | null;
+  /** Pane wrapper hosting the clock button — its lit state mirrors ours. */
+  wrapper: HTMLElement;
 }
 
 export function createTranscriptController(
@@ -93,6 +96,7 @@ export function createTranscriptController(
     open.delete(paneId);
     entry.tail?.stop();
     entry.view.dispose();
+    setHistoryButtonActive(entry.wrapper, false);
     log(`closed pane=${paneId} reason=${reason}`);
   }
 
@@ -126,14 +130,14 @@ export function createTranscriptController(
     // visible feedback even when resolution needs a round-trip or fails.
     const view = createTranscriptView({
       host: pane.wrapper,
-      title: pane.title || "Claude",
       sessionId: pane.sessionId,
       onClose: () => close(paneId, "user"),
       ...(deps.linkHandlers ? deps.linkHandlers(pane.host) : {}),
     });
     view.setStatus({ kind: "loading", message: "Loading transcript…" });
-    const entry: OpenEntry = { view, tail: null };
+    const entry: OpenEntry = { view, tail: null, wrapper: pane.wrapper };
     open.set(paneId, entry);
+    setHistoryButtonActive(pane.wrapper, true);
 
     const via = pane.sessionId ? "tab" : "list";
     const sessionId = await resolveTranscriptSession({
