@@ -281,11 +281,14 @@ async function bootPopout(): Promise<void> {
     initSearch({
       getActiveSearchSurface: () => {
         // An open History overlay owns ⌘F (#51) — search the whole
-        // transcript rather than the terminal's visible rows.
+        // transcript rather than the terminal's visible rows. The bar
+        // mounts into the popout body's stack (with the history clock +
+        // TTS bar), not a nested one inside the overlay — one stack,
+        // History always at the bottom.
         const overlay = transcripts.get(panePaneId);
         if (overlay) {
           return new MarkdownSearchAdapter({
-            container: ensurePaneControls(overlay.view.root),
+            container: ensurePaneControls(body),
             body: overlay.view.body,
           });
         }

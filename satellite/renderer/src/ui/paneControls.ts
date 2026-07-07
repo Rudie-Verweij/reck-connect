@@ -67,8 +67,10 @@ export function ensureHistoryButton(
  *  While open the clock holds the orange "lit" hue (CSS keys off
  *  `aria-pressed`) and the tooltip flips to the way back. No-op when the
  *  anchor has no History button (non-Claude panes, teardown races). The
- *  `:scope >` selector deliberately skips nested control stacks (the
- *  transcript overlay mounts its own inside the pane wrapper). */
+ *  `:scope >` selector only matches `anchor`'s own stack, never one in a
+ *  nested surface. Every control — search bar, TTS bar, History clock,
+ *  in live AND History mode — mounts into this single stack, so the CSS
+ *  `order` (search → TTS → history) always holds. */
 export function setHistoryButtonActive(anchor: HTMLElement, active: boolean): void {
   const btn = anchor.querySelector<HTMLButtonElement>(
     ":scope > .pane-controls > .pane-controls-history",

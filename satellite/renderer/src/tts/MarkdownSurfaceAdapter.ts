@@ -112,6 +112,12 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
         const t = node as Text;
         const text = t.data;
         if (!text) continue;
+        // Speak what the user sees: skip text folded away inside a
+        // collapsed <details> (the transcript overlay tucks tool_use /
+        // tool_result / thinking payloads there — often hundreds of KB,
+        // which as one utterance stalls speech synthesis outright). The
+        // <summary> of a collapsed group stays visible, so it stays spoken.
+        if (isHiddenInCollapsedDetails(t, this.body)) continue;
         if (needsSeparator && cursor > 0) {
           parts.push("\n");
           cursor += 1;
@@ -290,6 +296,28 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
       this.onBodyScroll = null;
     }
   }
+}
+
+/**
+ * True when `node`'s text is hidden by a collapsed `<details>` ancestor
+ * within `root`. Text inside the collapsed group's own `<summary>` is
+ * visible (and therefore not hidden); a closed `<details>` nested inside
+ * another element hides everything below it, including nested summaries.
+ * Structural (attribute-based) rather than style-based so it behaves
+ * identically under jsdom, where layout/computed styles aren't real.
+ */
+function isHiddenInCollapsedDetails(node: Node, root: HTMLElement): boolean {
+  let el: Element | null = node.parentElement;
+  while (el && el !== root) {
+    const details = el.closest("details");
+    if (!details || !root.contains(details)) return false;
+    if (!details.hasAttribute("open")) {
+      const summary = details.querySelector(":scope > summary");
+      if (!summary || !summary.contains(node)) return true;
+    }
+    el = details.parentElement;
+  }
+  return false;
 }
 
 function locateAnchor(
