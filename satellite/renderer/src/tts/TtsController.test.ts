@@ -393,6 +393,53 @@ describe("TtsController.start — text resolution", () => {
   });
 });
 
+describe("TtsController.start — default voice resolution", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  function mkVoice(name: string, opts: { default?: boolean } = {}) {
+    return {
+      name,
+      lang: "en-US",
+      default: opts.default ?? false,
+      localService: true,
+      voiceURI: name,
+    } as SpeechSynthesisVoice;
+  }
+
+  // The Albert bug: with no voice configured the controller used to pass
+  // voice=null to the engine, letting Chromium pick its own default —
+  // which on macOS with a Siri system voice is the novelty voice Albert.
+  it("resolves an explicit default when no voice is configured", async () => {
+    const albert = mkVoice("Albert", { default: true });
+    const zoe = mkVoice("Zoe (Premium)");
+    const pane = fakePane({ bufferLines: ["alpha"] });
+    const engine = new StubEngine();
+    const barFactoryWrap = makeBarFactory();
+    const ctl = new TtsController({
+      engine: engine as unknown as ConstructorParameters<typeof TtsController>[0]["engine"],
+      barFactory: barFactoryWrap.factory as unknown as ConstructorParameters<
+        typeof TtsController
+      >[0]["barFactory"],
+      theme: TTS_THEME_LIGHT,
+      settings: DEFAULT_SETTINGS,
+      saveSettings: async () => undefined,
+      getActiveSurface: () => pane,
+      getLastMousePoint: () => ({ pixelX: 0, pixelY: 0 }),
+      voicesProvider: async () => [albert, zoe],
+    });
+    // Let the constructor's async voice preload settle.
+    await new Promise((r) => setTimeout(r, 0));
+    ctl.start();
+    expect(engine.startCalls).toHaveLength(1);
+    expect(engine.startCalls[0].voice?.name).toBe("Zoe (Premium)");
+    // The bar shows a compact label for the actually-resolved voice.
+    expect(barFactoryWrap.last?.voices).toContain("EN (Zoe)");
+    ctl.dispose();
+  });
+});
+
 describe("TtsController.start — UI side effects", () => {
   afterEach(() => {
     document.body.innerHTML = "";

@@ -10,6 +10,8 @@ import {
 } from "./SpeakControlBar";
 import type { TtsTheme } from "./ttsTheme";
 import type { TtsSettings } from "./ttsSettings";
+import { resolveDefaultVoice, formatVoiceLabel } from "./defaultVoice";
+import type { VoiceOption } from "./SpeakControlBar";
 import type { SpeakSurfaceAdapter } from "./SpeakSurfaceAdapter";
 
 export interface TtsControllerOptions {
@@ -22,10 +24,13 @@ export interface TtsControllerOptions {
       onResume(): void;
       onStop(): void;
       onRateChange(rate: number): void;
+      onVoiceChange?(name: string | null): void;
     };
     theme: TtsTheme;
     initialRate?: number;
     voiceName?: string;
+    selectedVoice?: string | null;
+    getVoiceOptions?: () => Promise<VoiceOption[]>;
   }) => SpeakControlBar;
   theme: TtsTheme;
   settings: TtsSettings;
@@ -76,7 +81,14 @@ export class TtsController {
       this.currentSurface.clearHighlight();
     }
 
-    const voice = this.findVoice(this.settings.voice);
+    // No voice configured (or the configured one vanished) → resolve an
+    // explicit default rather than leaving the utterance voiceless.
+    // Chromium's own fallback is unreliable on macOS: with a Siri system
+    // voice (not exposed to the Web Speech API) it lands on the novelty
+    // voice "Albert" regardless of the `default` flag in getVoices().
+    const voice =
+      this.findVoice(this.settings.voice) ??
+      resolveDefaultVoice(this.voicesCache);
     this.opts.engine.start(chunk, { voice, rate: this.settings.rate });
     this.state = "playing";
     this.currentSurface = surface;
@@ -88,7 +100,7 @@ export class TtsController {
     this.currentBar?.show();
     this.currentBar?.setState("playing");
     this.currentBar?.setRate(this.settings.rate);
-    this.currentBar?.setVoiceName(this.settings.voice ?? "Default voice");
+    this.currentBar?.setVoiceName(formatVoiceLabel(voice));
   }
 
   stop(): void {
@@ -130,7 +142,8 @@ export class TtsController {
 
   async setVoice(name: string | null): Promise<void> {
     this.settings = { ...this.settings, voice: name };
-    this.currentBar?.setVoiceName(name ?? "Default voice");
+    this.currentBar?.setVoiceName(formatVoiceLabel(this.effectiveVoice()));
+    this.currentBar?.setSelectedVoice(name);
     await this.opts.saveSettings(this.settings);
   }
 
@@ -188,15 +201,32 @@ export class TtsController {
       parent: container,
       theme: this.theme,
       initialRate: this.settings.rate,
-      voiceName: this.settings.voice ?? "Default voice",
+      voiceName: formatVoiceLabel(this.effectiveVoice()),
+      selectedVoice: this.settings.voice,
+      getVoiceOptions: () => this.getVoiceOptions(),
       callbacks: {
         onPlay: () => this.start(),
         onPause: () => this.pauseToggle(),
         onResume: () => this.pauseToggle(),
         onStop: () => this.stop(),
         onRateChange: (r) => this.setRate(r),
+        onVoiceChange: (name) => void this.setVoice(name),
       },
     });
+  }
+
+  /** The voice playback would use right now: the configured one when it
+   *  exists on this machine, otherwise the resolved default. */
+  private effectiveVoice(): SpeechSynthesisVoice | null {
+    return (
+      this.findVoice(this.settings.voice) ??
+      resolveDefaultVoice(this.voicesCache)
+    );
+  }
+
+  private async getVoiceOptions(): Promise<VoiceOption[]> {
+    if (this.voicesCache.length === 0) await this.preloadVoices();
+    return this.voicesCache.map((v) => ({ name: v.name, lang: v.lang }));
   }
 
   private attachEngine(): void {

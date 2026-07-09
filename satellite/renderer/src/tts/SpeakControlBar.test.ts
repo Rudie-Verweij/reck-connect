@@ -87,7 +87,7 @@ describe("createSpeakControlBar", () => {
       callbacks: makeCallbacks(),
       voiceName: "Samantha",
     });
-    const label = parent.querySelector(".tts-voice-label");
+    const label = parent.querySelector(".tts-voice-name");
     expect(label?.textContent).toBe("Samantha");
     bar.dispose();
   });
@@ -315,9 +315,91 @@ describe("SpeakControlBar.setVoiceName", () => {
       callbacks: makeCallbacks(),
     });
     bar.setVoiceName("Daniel");
-    expect(parent.querySelector(".tts-voice-label")?.textContent).toBe(
+    expect(parent.querySelector(".tts-voice-name")?.textContent).toBe(
       "Daniel",
     );
+    bar.dispose();
+  });
+});
+
+describe("SpeakControlBar voice picker", () => {
+  function flush() {
+    return new Promise((r) => setTimeout(r, 0));
+  }
+
+  const VOICES = [
+    { name: "Zoe (Premium)", lang: "en-US" },
+    { name: "Samantha", lang: "en-US" },
+    { name: "Ellen", lang: "nl-BE" },
+    { name: "Xander", lang: "nl-NL" },
+  ];
+
+  function setupPicker(onVoiceChange = (_: string | null) => {}) {
+    const parent = setup();
+    const bar = createSpeakControlBar({
+      parent,
+      theme: TTS_THEME_LIGHT,
+      callbacks: { ...makeCallbacks(), onVoiceChange },
+      voiceName: "EN (Zoe)",
+      selectedVoice: "Zoe (Premium)",
+      getVoiceOptions: async () => VOICES,
+    });
+    return { parent, bar };
+  }
+
+  it("expands into a language/voice panel when the voice label is clicked", async () => {
+    const { parent, bar } = setupPicker();
+    expect(parent.querySelector(".tts-voice-picker")).toBeNull();
+    (parent.querySelector(".tts-voice-label") as HTMLButtonElement).click();
+    await flush();
+    const picker = parent.querySelector<HTMLElement>(".tts-voice-picker");
+    expect(picker).not.toBeNull();
+    expect(picker!.hidden).toBe(false);
+    // Languages grouped by primary subtag: English + Dutch.
+    const langs = [...parent.querySelectorAll(".tts-voice-lang")].map(
+      (el) => el.querySelector("span")?.textContent,
+    );
+    expect(langs).toContain("English");
+    expect(langs).toContain("Dutch");
+    bar.dispose();
+  });
+
+  it("shows the voices of the selected voice's language, current one marked", async () => {
+    const { parent, bar } = setupPicker();
+    (parent.querySelector(".tts-voice-label") as HTMLButtonElement).click();
+    await flush();
+    const selected = parent.querySelector(".tts-voice-option.is-selected");
+    expect(selected?.textContent).toContain("Zoe (Premium)");
+    bar.dispose();
+  });
+
+  it("fires onVoiceChange when a voice is picked, and null for Automatic", async () => {
+    const picks: Array<string | null> = [];
+    const { parent, bar } = setupPicker((name) => picks.push(name));
+    (parent.querySelector(".tts-voice-label") as HTMLButtonElement).click();
+    await flush();
+    // Switch to Dutch and pick Xander.
+    const dutch = [...parent.querySelectorAll<HTMLButtonElement>(".tts-voice-lang")]
+      .find((el) => el.textContent?.includes("Dutch"));
+    dutch!.click();
+    const xander = [...parent.querySelectorAll<HTMLButtonElement>(".tts-voice-option")]
+      .find((el) => el.textContent?.includes("Xander"));
+    xander!.click();
+    expect(picks).toEqual(["Xander"]);
+    // Automatic resets to null.
+    (parent.querySelector(".tts-voice-auto") as HTMLButtonElement).click();
+    expect(picks).toEqual(["Xander", null]);
+    bar.dispose();
+  });
+
+  it("collapses again when the voice label is re-clicked", async () => {
+    const { parent, bar } = setupPicker();
+    const label = parent.querySelector(".tts-voice-label") as HTMLButtonElement;
+    label.click();
+    await flush();
+    expect(parent.querySelector<HTMLElement>(".tts-voice-picker")!.hidden).toBe(false);
+    label.click();
+    expect(parent.querySelector<HTMLElement>(".tts-voice-picker")!.hidden).toBe(true);
     bar.dispose();
   });
 });

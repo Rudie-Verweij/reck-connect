@@ -62,6 +62,8 @@ export async function initTts(opts: InitTtsOptions): Promise<TtsHandle> {
         callbacks: o.callbacks,
         initialRate: o.initialRate,
         voiceName: o.voiceName,
+        selectedVoice: o.selectedVoice,
+        getVoiceOptions: o.getVoiceOptions,
       }) as SpeakControlBar,
     theme: themeWatcher.current(),
     settings,
