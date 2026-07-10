@@ -207,10 +207,12 @@ describe("TerminalPaneAdapter", () => {
       cellWidth: 8,
       cellHeight: 16,
     });
-    adapter.setTheme({ backgroundColor: "rgb(9, 8, 7)" });
+    adapter.setTheme({ backgroundColor: "#090807" }); // rgb(9, 8, 7)
     adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "alpha", charIndex: 0 });
     const overlay = document.querySelector<HTMLDivElement>(".reck-tts-highlight");
     expect(overlay).not.toBeNull();
-    expect(overlay!.style.backgroundColor).toBe("rgb(9, 8, 7)");
+    // Shared translucent fill + opaque ring (same look as the markdown surface).
+    expect(overlay!.style.background).toBe("rgba(9, 8, 7, 0.5)");
+    expect(overlay!.style.outline).toBe("1.5px solid #090807");
   });
 });
