@@ -1184,8 +1184,9 @@ export class PaneLayout {
     input.addEventListener("blur", onBlur);
   }
 
-  private refitAllActiveTerminals() {
-    if (!this.tree) return;
+  private refitAllActiveTerminals(): boolean {
+    if (!this.tree) return true;
+    let allLaidOut = true;
     for (const leaf of allLeaves(this.tree)) {
       const view = this.views.get(leaf.id);
       const record = view?.terminals.get(leaf.activeTabId);
@@ -1196,18 +1197,21 @@ export class PaneLayout {
       // so a user who scrolled up to read history isn't yanked
       // back to the tail on Alt-Tab.
       const wasAtBottom = record.term.isAtBottom();
-      record.term.refit();
+      if (!record.term.refit()) allLaidOut = false;
       if (wasAtBottom) record.term.scrollToBottom();
     }
+    return allLaidOut;
   }
 
   /**
    * Re-fit every visible pane and re-send its geometry to the PTY. Used
    * by the boot wiring on window focus: a phone client may have resized
    * the shared PTY while the desktop was in the background, so on refocus
-   * the desktop reasserts its own dimensions.
+   * the desktop reasserts its own dimensions. Returns false when any
+   * pane skipped its fit because the container wasn't laid out yet —
+   * the project-switch path uses that to schedule a one-shot retry.
    */
-  refitActive() { this.refitAllActiveTerminals(); }
+  refitActive(): boolean { return this.refitAllActiveTerminals(); }
 
   private updateActiveClasses() {
     for (const [leafId, view] of this.views) {

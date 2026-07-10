@@ -489,4 +489,84 @@ describe("Rail", () => {
       expect(list.hidden).toBe(true);
     });
   });
+
+  // Rail collapse redesign: 48px mini state with initials avatars.
+  // Visibility of names/indicators/chevron is CSS-driven off .rail-mini,
+  // so these tests assert the class contract + avatar content rather
+  // than computed styles (jsdom doesn't load the stylesheet).
+  describe("mini mode", () => {
+    it("setMode toggles the rail-mini class", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      expect(root.classList.contains("rail-mini")).toBe(false);
+      r.setMode("mini");
+      expect(root.classList.contains("rail-mini")).toBe(true);
+      r.setMode("expanded");
+      expect(root.classList.contains("rail-mini")).toBe(false);
+    });
+
+    it("every row carries an initials avatar", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      r.setProjects([
+        mkProject("a", "reck-connect", "gray"),
+        mkProject("b", "docs", "gray"),
+      ]);
+      const labels = root.querySelectorAll<HTMLElement>(".rail-item .rail-avatar-label");
+      expect(labels.length).toBe(2);
+      expect(labels[0].textContent).toBe("rc");
+      expect(labels[1].textContent).toBe("do");
+    });
+
+    it("avatar badge reflects the aggregate (max-severity) stoplight", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      const p: Project = {
+        id: "a",
+        name: "Alpha",
+        cwd: "/",
+        stoplight: "green",
+        pane_count: 2,
+        pane_stoplights: ["green", "red"],
+      };
+      r.setProjects([p]);
+      const badge = root.querySelector<HTMLElement>(".rail-avatar-badge")!;
+      expect(badge.classList.contains("red")).toBe(true);
+      // Severity drops → badge follows.
+      r.setProjects([{ ...p, pane_stoplights: ["green", "gray"] }]);
+      expect(badge.classList.contains("red")).toBe(false);
+      expect(badge.classList.contains("green")).toBe(true);
+    });
+
+    it("rename updates the avatar initials and tooltip", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      r.setProjects([mkProject("a", "old name", "gray")]);
+      r.setProjects([mkProject("a", "new title", "gray")]);
+      const avatar = root.querySelector<HTMLElement>(".rail-avatar")!;
+      expect(avatar.querySelector(".rail-avatar-label")?.textContent).toBe("nt");
+      expect(avatar.title).toBe("new title");
+    });
+
+    it("footer has the expand chevron and it fires onExpand", () => {
+      let expanded = 0;
+      const r = new Rail({
+        root,
+        onSelect: () => {},
+        onAddProject: () => {},
+        onExpand: () => expanded++,
+      });
+      r.setMode("mini");
+      const chip = root.querySelector<HTMLElement>(".rail-collapse-chip")!;
+      expect(chip).not.toBeNull();
+      expect(chip.closest(".rail-footer")).not.toBeNull();
+      chip.click();
+      expect(expanded).toBe(1);
+    });
+
+    it("rows still fire onSelect in mini mode (avatar click selects)", () => {
+      let got: string | null = null;
+      const r = new Rail({ root, onSelect: (id) => (got = id), onAddProject: () => {} });
+      r.setProjects([mkProject("a", "Alpha", "gray")]);
+      r.setMode("mini");
+      (root.querySelector(".rail-item .rail-avatar") as HTMLElement).click();
+      expect(got).toBe("a");
+    });
+  });
 });

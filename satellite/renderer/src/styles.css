@@ -105,10 +105,6 @@ html, body, #app {
   background: var(--app-bg);
 }
 
-.app-main.rail-hidden {
-  grid-template-columns: 0 0 1fr;
-}
-
 /* === Top nav (V1 .nav) === */
 
 .nav {
@@ -555,6 +551,109 @@ html, body, #app {
   background: var(--claude-orange);
   width: 2px;
   left: 2px;
+}
+
+/* === Rail mini mode (48px collapsed state) === */
+
+/* Crossfade the rail content while the width animates between expanded
+   and mini so the stoplight dots never render mid-flight at a wrong
+   offset from the rail edge. The boot layer toggles .rail-switching for
+   the duration of the width animation. */
+.rail > * { transition: opacity 90ms ease; }
+.rail.rail-switching > * { opacity: 0; }
+
+/* Initials avatar — hidden in expanded mode, the whole row in mini. */
+.rail-avatar {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: none;
+  place-items: center;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  background: var(--app-bg-raised);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.03em;
+  color: var(--app-text-dim);
+  position: relative;
+}
+
+/* Aggregate stoplight badge pinned to the avatar corner. Mirrors the
+   .pane-indicator-dot size/colour/shape scale but is its own class —
+   dot-count selectors must not match the badge. */
+.rail-avatar-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sl-gray);
+  transition: background 0.35s var(--ease-smooth),
+              border-radius 0.45s var(--ease-smooth);
+}
+.rail-avatar-badge.gray   { background: var(--sl-gray);   border-radius: 50%; }
+.rail-avatar-badge.green  { background: var(--sl-green);  border-radius: 35%; }
+.rail-avatar-badge.orange { background: var(--sl-orange); border-radius: 15%; transform: rotate(45deg) scale(0.9); }
+.rail-avatar-badge.red    { background: var(--sl-red);    border-radius: 1px; }
+
+/* Expand chevron: only exists in the mini state — expanded mode has no
+   collapse arrow (collapse is the nav toggle / ⇧← / divider drag). */
+.rail-collapse-chip {
+  display: none;
+  border: none;
+  background: transparent;
+  color: var(--app-text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.rail-collapse-chip:hover { color: var(--claude-orange); }
+
+.rail.rail-mini .rail-header,
+.rail.rail-mini .rail-divider,
+.rail.rail-mini .rail-item .name,
+.rail.rail-mini .rail-item .pane-indicator,
+.rail.rail-mini .rail-archive,
+.rail.rail-mini .rail-footer #rail-count,
+.rail.rail-mini .rail-add {
+  display: none;
+}
+
+.rail.rail-mini .rail-collapse-chip { display: block; }
+
+.rail.rail-mini .rail-item {
+  padding: 0;
+  margin-bottom: 8px;
+  justify-content: center;
+  box-shadow: none;
+  background: none;
+}
+
+.rail.rail-mini .rail-item .rail-avatar { display: grid; }
+
+.rail.rail-mini .rail-item.selected .rail-avatar {
+  border-color: var(--claude-orange);
+  color: var(--claude-orange);
+}
+
+.rail.rail-mini .rail-item:hover .rail-avatar {
+  border-color: var(--app-border-strong);
+}
+
+.rail.rail-mini .rail-footer {
+  justify-content: center;
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail > * { transition: none; }
 }
 
 /* === Stoplight dots === */

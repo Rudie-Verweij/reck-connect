@@ -1,6 +1,7 @@
 import type { Project, Stoplight } from "@proto/proto";
 import { stoplightSeverity } from "@proto/proto";
 import { iconPlus } from "./icons";
+import { projectInitials, type RailMode } from "./rail-collapse";
 import { computeReorder } from "./reorder";
 import { createOverlayScrollbar, type OverlayScrollbar } from "../search/OverlayScrollbar";
 import { domScrollSurface } from "../search/scrollSurfaces";
@@ -22,6 +23,12 @@ export interface RailProps {
    */
   onToggleArchive?: (projectId: string, archived: boolean) => void;
   /**
+   * Expand the rail from mini. Fired by the footer's "»" chevron, which
+   * only renders in mini mode (expanded mode has no collapse arrow —
+   * collapse is the nav toggle / ⇧← / divider drag).
+   */
+  onExpand?: () => void;
+  /**
    * an earlier release — return paneIds in the project's saved layout order
    * (left-to-right, top-to-bottom for stacked splits, same flatten as
    * the tab bar uses). Returning `null` skips reorder for that project
@@ -40,6 +47,11 @@ interface RailRow {
   el: HTMLElement;
   nameEl: HTMLElement;
   indicatorEl: HTMLElement;
+  // Mini-rail avatar: initials label + aggregate stoplight badge. Both
+  // exist in every row; CSS shows them only in .rail-mini.
+  avatarEl: HTMLElement;
+  avatarLabelEl: HTMLElement;
+  avatarBadgeEl: HTMLElement;
   // Cached serialisation of the last rendered per-pane stoplight list.
   // Join-comparable so setProjects can skip DOM churn when the list is
   // unchanged. an earlier release: replaces the old `lastStoplight` / `lastPaneCount`
@@ -166,6 +178,22 @@ function syncIndicatorDots(
   }
 }
 
+// Mirror the indicator's aggregate stoplight (written by syncIndicatorDots
+// via aggregateStoplight into dataset.stoplight) onto the mini avatar's
+// badge. Deliberately NOT .pane-indicator-dot — several dot-count code
+// paths (and tests) select on that class and must not count the badge.
+function syncAvatarBadge(row: RailRow) {
+  const agg = row.indicatorEl.dataset.stoplight ?? "gray";
+  row.avatarBadgeEl.className = `rail-avatar-badge ${agg}`;
+}
+
+function setAvatarName(row: RailRow, name: string) {
+  row.avatarLabelEl.textContent = projectInitials(name);
+  // In mini mode the avatar is the whole row; the tooltip carries the
+  // full project name the initials abbreviate.
+  row.avatarEl.title = name;
+}
+
 export class Rail {
   private listEl: HTMLElement;
   private archiveSectionEl: HTMLElement;
@@ -210,6 +238,7 @@ export class Rail {
       <div class="rail-footer">
         <span id="rail-count">0 projects</span>
         <button class="rail-add" id="rail-add" title="Add project">${iconPlus}<span>Add</span></button>
+        <button class="rail-collapse-chip" id="rail-collapse-chip" type="button" title="Expand rail (⇧→)" aria-label="Expand rail">»</button>
       </div>
     `;
     this.listEl = this.props.root.querySelector(".rail-list") as HTMLElement;
@@ -219,6 +248,10 @@ export class Rail {
     this.footerCountEl = this.props.root.querySelector("#rail-count") as HTMLElement;
     (this.props.root.querySelector("#rail-add") as HTMLElement).addEventListener("click", () =>
       this.props.onAddProject(),
+    );
+    (this.props.root.querySelector("#rail-collapse-chip") as HTMLElement).addEventListener(
+      "click",
+      () => this.props.onExpand?.(),
     );
     (this.props.root.querySelector("#rail-archive-header") as HTMLElement).addEventListener(
       "click",
@@ -292,6 +325,16 @@ export class Rail {
     }
   }
 
+  /**
+   * Flip the rail between expanded rows and the 48px mini rail. Purely a
+   * class toggle — the boot layer owns the width animation and drives
+   * this alongside it. CSS keyed off .rail-mini swaps names/indicators
+   * for initials avatars and reveals the footer chevron.
+   */
+  setMode(mode: RailMode) {
+    this.props.root.classList.toggle("rail-mini", mode === "mini");
+  }
+
   private renderZone(projects: Project[], container: HTMLElement) {
     for (let i = 0; i < projects.length; i++) {
       const p = projects[i];
@@ -319,10 +362,12 @@ export class Rail {
     const key = stoplights.join(",");
     if (row.lastStoplightsKey !== key) {
       syncIndicatorDots(row.indicatorEl, stoplights);
+      syncAvatarBadge(row);
       row.lastStoplightsKey = key;
     }
     if (row.lastName !== p.name) {
       row.nameEl.textContent = p.name;
+      setAvatarName(row, p.name);
       row.lastName = p.name;
     }
     const archived = p.archived ?? false;
@@ -405,6 +450,14 @@ export class Rail {
     const initialLayoutOrder = this.props.getLayoutPaneOrder?.(p.id) ?? null;
     const initialStoplights = resolvePaneStoplights(p, initialLayoutOrder);
     syncIndicatorDots(indicator, initialStoplights, { skipAnimation: true });
+    const avatar = document.createElement("span");
+    avatar.className = "rail-avatar";
+    const avatarLabel = document.createElement("span");
+    avatarLabel.className = "rail-avatar-label";
+    const avatarBadge = document.createElement("span");
+    avatar.appendChild(avatarLabel);
+    avatar.appendChild(avatarBadge);
+    el.appendChild(avatar);
     el.appendChild(name);
     el.appendChild(indicator);
     el.addEventListener("click", (e) => {
@@ -478,14 +531,20 @@ export class Rail {
       this.startRename(p.id, name);
     });
     // NOTE: placement into the active/archive zone is done by renderZone.
-    return {
+    const row: RailRow = {
       el,
       nameEl: name,
       indicatorEl: indicator,
+      avatarEl: avatar,
+      avatarLabelEl: avatarLabel,
+      avatarBadgeEl: avatarBadge,
       lastStoplightsKey: initialStoplights.join(","),
       lastName: p.name,
       lastArchived: archived,
     };
+    setAvatarName(row, p.name);
+    syncAvatarBadge(row);
+    return row;
   }
 
   private startRename(projectId: string, nameEl: HTMLElement) {
@@ -520,6 +579,7 @@ export class Rail {
       input.replaceWith(newName);
       row.nameEl = newName;
       row.lastName = commitName;
+      setAvatarName(row, commitName);
       if (commit && next && next !== original) {
         this.props.onRename?.(projectId, next);
       }
