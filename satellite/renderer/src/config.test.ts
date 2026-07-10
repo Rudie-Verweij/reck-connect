@@ -17,6 +17,11 @@ import {
   saveReckConnectPrompt,
   resolveEffectiveReckConnectPrompt,
   DEFAULT_RECK_CONNECT_PROMPT,
+  DEFAULT_RAIL_WIGGLE,
+  loadRailMode,
+  saveRailMode,
+  loadRailWiggle,
+  saveRailWiggle,
   type Settings,
 } from "./config";
 import type { Project } from "@proto/proto";
@@ -510,5 +515,57 @@ describe("Reck Connect prompt (load/save/resolve)", () => {
 
     await saveReckConnectPrompt("custom rules");
     expect(await resolveEffectiveReckConnectPrompt()).toBe("custom rules");
+  });
+});
+
+describe("rail mode + wiggle persistence", () => {
+  const store = new Map<string, unknown>();
+  beforeEach(() => {
+    store.clear();
+    (window as unknown as { reckAPI: unknown }).reckAPI = {
+      config: {
+        get: async <T>(k: string) => (store.has(k) ? (store.get(k) as T) : null),
+        set: async (k: string, v: unknown) => {
+          store.set(k, v);
+          return true;
+        },
+      },
+    };
+  });
+
+  it("railMode defaults to expanded on fresh install", async () => {
+    expect(await loadRailMode()).toBe("expanded");
+  });
+
+  it("railMode round-trips mini", async () => {
+    await saveRailMode("mini");
+    expect(await loadRailMode()).toBe("mini");
+    await saveRailMode("expanded");
+    expect(await loadRailMode()).toBe("expanded");
+  });
+
+  it("railMode coerces a malformed persisted value to expanded", async () => {
+    store.set("railMode", "hidden");
+    expect(await loadRailMode()).toBe("expanded");
+    store.set("railMode", 3);
+    expect(await loadRailMode()).toBe("expanded");
+  });
+
+  it("rail wiggle defaults on fresh install", async () => {
+    expect(await loadRailWiggle()).toEqual(DEFAULT_RAIL_WIGGLE);
+    // Deliberately slow default — a fast wiggle read as jarring in use.
+    expect(DEFAULT_RAIL_WIGGLE.legMs).toBe(240);
+  });
+
+  it("rail wiggle round-trips all three fields", async () => {
+    await saveRailWiggle({ enabled: false, pixels: 20, legMs: 90 });
+    expect(await loadRailWiggle()).toEqual({ enabled: false, pixels: 20, legMs: 90 });
+  });
+
+  it("rail wiggle falls back per-field on malformed values", async () => {
+    store.set("railWiggleEnabled", "yes"); // non-boolean → default true
+    store.set("railWigglePixels", -4); // non-positive → default
+    store.set("railWiggleLegMs", "fast"); // non-number → default
+    expect(await loadRailWiggle()).toEqual(DEFAULT_RAIL_WIGGLE);
   });
 });

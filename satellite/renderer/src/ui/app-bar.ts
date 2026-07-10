@@ -21,7 +21,7 @@ export class AppBar {
         <div class="nav-spacer"></div>
         <div class="nav-actions">
           <button class="icon-btn" id="nav-theme" title="Toggle theme">${iconLightbulb}</button>
-          <button class="icon-btn" id="nav-rail" title="Toggle projects rail (⌘B)">${iconRail}</button>
+          <button class="icon-btn" id="nav-rail" title="Toggle projects rail (⌘B · ⇧←/⇧→)">${iconRail}</button>
           <button class="icon-btn" id="nav-settings" title="Settings">${iconSettings}</button>
         </div>
       </div>
@@ -36,8 +36,9 @@ export class AppBar {
     );
   }
 
-  setRailHidden(hidden: boolean) {
-    this.railBtn.classList.toggle("active", !hidden);
+  /** Rail-toggle button state: active while the rail is expanded, inactive in mini. */
+  setRailExpanded(expanded: boolean) {
+    this.railBtn.classList.toggle("active", expanded);
   }
 
   setTheme(theme: Theme) {

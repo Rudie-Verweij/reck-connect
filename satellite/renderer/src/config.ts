@@ -500,6 +500,57 @@ export async function saveRailWidth(w: number) {
   await window.reckAPI.config.set("railWidth", w);
 }
 
+// Rail collapse mode (mini ⟷ expanded), persisted alongside railWidth so
+// the rail restores exactly as the user left it. Any value that isn't
+// exactly "mini" resolves to "expanded" — the safe default for malformed
+// or pre-feature configs.
+export type RailMode = "expanded" | "mini";
+
+export async function loadRailMode(): Promise<RailMode> {
+  const raw = await window.reckAPI.config.get<string>("railMode");
+  return raw === "mini" ? "mini" : "expanded";
+}
+
+export async function saveRailMode(mode: RailMode) {
+  await window.reckAPI.config.set("railMode", mode);
+}
+
+// Separator wiggle: after a project switch the divider auto-nudges out
+// and back so terminals re-fit without a manual jiggle. Three keys, all
+// optional; malformed values fall back to the defaults.
+export interface RailWiggleSettings {
+  enabled: boolean;
+  pixels: number;
+  legMs: number;
+}
+
+export const DEFAULT_RAIL_WIGGLE: RailWiggleSettings = {
+  enabled: true,
+  pixels: 12,
+  legMs: 240,
+};
+
+function positiveOr(fallback: number, raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+export async function loadRailWiggle(): Promise<RailWiggleSettings> {
+  const enabled = await window.reckAPI.config.get<boolean>("railWiggleEnabled");
+  const pixels = await window.reckAPI.config.get<number>("railWigglePixels");
+  const legMs = await window.reckAPI.config.get<number>("railWiggleLegMs");
+  return {
+    enabled: enabled !== false,
+    pixels: positiveOr(DEFAULT_RAIL_WIGGLE.pixels, pixels),
+    legMs: positiveOr(DEFAULT_RAIL_WIGGLE.legMs, legMs),
+  };
+}
+
+export async function saveRailWiggle(s: RailWiggleSettings) {
+  await window.reckAPI.config.set("railWiggleEnabled", s.enabled === true);
+  await window.reckAPI.config.set("railWigglePixels", s.pixels);
+  await window.reckAPI.config.set("railWiggleLegMs", s.legMs);
+}
+
 export type Theme = "light" | "dark";
 
 export async function loadTheme(): Promise<Theme> {

@@ -105,7 +105,9 @@ import {
   loadLayouts,
   loadProjectNameOverrides,
   loadProjectOrder,
+  loadRailMode,
   loadRailWidth,
+  loadRailWiggle,
   loadSettings,
   loadTheme,
   resolveActiveUrl,
@@ -116,10 +118,20 @@ import {
   saveLayout,
   saveProjectNameOverride,
   saveProjectOrder,
+  saveRailMode,
   saveRailWidth,
   saveStationToken,
   saveTheme,
+  type RailMode,
 } from "./config";
+import {
+  RAIL_COLLAPSE_AT,
+  RAIL_MAX,
+  RAIL_MINI,
+  createWidthAnimator,
+  railDragDecision,
+  railDragRelease,
+} from "./ui/rail-collapse";
 import type { PaneKind, Project, Stoplight } from "@proto/proto";
 import { mergeHybridProjects } from "./hybrid-merge";
 import type { StartupSplashController } from "./ui/startup-splash";
@@ -307,45 +319,219 @@ export async function boot(splash?: StartupSplashController) {
     acknowledgeSeen(currentProjectId, activeTab?.paneId);
   });
 
+  // --- Rail collapse (expanded ⟷ mini) --------------------------------
+  // The 48px mini rail is the ONLY collapsed state — the rail is never
+  // fully hidden. RAIL_MAX (240) is both the default and the maximum
+  // width. Mode + expanded width persist independently so the rail
+  // restores exactly as the user left it.
   const savedRailWidth = await loadRailWidth();
-  let railWidth = savedRailWidth ?? 240;
-  let railHidden = false;
+  const savedRailMode = await loadRailMode();
+  const railWiggle = await loadRailWiggle();
+  const railEl = document.getElementById("rail")!;
+  // Old configs could persist up to the removed 420px upper clamp; a
+  // corrupted value must not feed NaN into the grid template.
+  const savedWidthSafe = typeof savedRailWidth === "number" && Number.isFinite(savedRailWidth) ? savedRailWidth : RAIL_MAX;
+  let railExpandedWidth = Math.max(RAIL_MINI, Math.min(RAIL_MAX, savedWidthSafe));
+  let railMode: RailMode = savedRailMode;
+  let railWidth = railMode === "mini" ? RAIL_MINI : railExpandedWidth;
+  let railDragActive = false;
   applyGrid();
 
   function applyGrid() {
-    if (railHidden) {
-      appMain.style.gridTemplateColumns = `0 0 1fr`;
-      appMain.classList.add("rail-hidden");
-    } else {
-      appMain.style.gridTemplateColumns = `${railWidth}px 6px 1fr`;
-      appMain.classList.remove("rail-hidden");
-    }
+    appMain.style.gridTemplateColumns = `${railWidth}px 6px 1fr`;
+  }
+
+  // Shared rAF width animator: drives collapse/expand and the wiggle.
+  // Every frame writes through the same path as a mouse drag (update
+  // railWidth → applyGrid) so pane ResizeObservers see real grid
+  // deltas rather than a CSS transition they'd sample late.
+  const reducedMotionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  const railAnimator = createWidthAnimator({
+    getWidth: () => railWidth,
+    onFrame: (w) => {
+      railWidth = w;
+      applyGrid();
+    },
+    reducedMotion: () => reducedMotionQuery?.matches === true,
+  });
+
+  const RAIL_SNAP_MS = 200;
+
+  // Late-bound: `layout` is constructed further down, but the nav
+  // rail-toggle is clickable as soon as the app bar mounts — during
+  // boot's awaits a collapse could finish before `layout` exists (TDZ
+  // on the const). Rebound to the real refit once PaneLayout is up.
+  let refitActiveTerminals: () => void = () => {};
+
+  function setRailMode(mode: RailMode) {
+    if (railMode === mode) return;
+    // The pointer owns the width while a divider drag is live — a
+    // keyboard toggle mid-drag would race the mousemove writes.
+    if (railDragActive) return;
+    // A newer mode change is authoritative — a wiggle's delayed restore
+    // must never stomp the width we're about to animate to.
+    cancelWiggle(false);
+    railMode = mode;
+    void saveRailMode(mode);
+    appBar.setRailExpanded(mode === "expanded");
+    // Crossfade the rail content while the width animates so the
+    // stoplight indicators never render mid-flight at a wrong offset
+    // from the rail edge.
+    railEl.classList.add("rail-switching");
+    rail.setMode(mode);
+    // Spring both directions — collapse and expand share the same
+    // bouncy pop, whichever trigger (button, chevron, keys, click).
+    railAnimator.animateTo(mode === "mini" ? RAIL_MINI : railExpandedWidth, {
+      durationMs: RAIL_SNAP_MS,
+      easing: "spring",
+      onDone: () => {
+        railEl.classList.remove("rail-switching");
+        refitActiveTerminals();
+      },
+    });
   }
 
   railResizeEl.addEventListener("mousedown", (e) => {
     e.preventDefault();
+    // The drag owns the width now: settle any in-flight wiggle back to
+    // its base and stop mode animations before sampling the start width.
+    cancelWiggle(true);
+    railAnimator.cancel();
+    railDragActive = true;
     railResizeEl.classList.add("dragging");
     const startX = e.clientX;
     const startW = railWidth;
-    const onMove = (ev: MouseEvent) => {
-      const next = Math.max(180, Math.min(420, startW + (ev.clientX - startX)));
-      railWidth = next;
-      applyGrid();
-    };
-    const onUp = () => {
+    const endDrag = () => {
+      railDragActive = false;
       railResizeEl.classList.remove("dragging");
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      void saveRailWidth(railWidth);
+    };
+    const onMove = (ev: MouseEvent) => {
+      const decision = railDragDecision(startW + (ev.clientX - startX), railMode === "mini");
+      switch (decision.kind) {
+        case "collapse":
+          // The pointer travelled past the sticky zone — collapse
+          // straight into mini mid-drag with a spring, ending the drag.
+          endDrag();
+          setRailMode("mini");
+          break;
+        case "stick":
+          // Accidental-collapse guard: the rail stays pinned at the row
+          // minimum while the pointer crosses the sticky zone.
+          railExpandedWidth = RAIL_COLLAPSE_AT;
+          railWidth = RAIL_COLLAPSE_AT;
+          applyGrid();
+          break;
+        case "expand":
+          // Dragging the handle back out of mini re-expands at the
+          // pointer position (no animation — the pointer is authoritative).
+          railMode = "expanded";
+          rail.setMode("expanded");
+          appBar.setRailExpanded(true);
+          void saveRailMode("expanded");
+          railExpandedWidth = decision.width;
+          railWidth = decision.width;
+          applyGrid();
+          break;
+        case "resize":
+          railExpandedWidth = decision.width;
+          railWidth = decision.width;
+          applyGrid();
+          break;
+        case "track":
+          // Mini rail follows the pointer live; the release decides
+          // whether the pull committed to an expand.
+          railWidth = decision.width;
+          applyGrid();
+          break;
+      }
+    };
+    const onUp = () => {
+      endDrag();
+      const release = railDragRelease(railWidth, railMode === "mini");
+      switch (release.kind) {
+        case "spring-expand":
+          // A small outward pull means "expand": spring open from the
+          // tracked width to the full expanded width.
+          setRailMode("expanded");
+          break;
+        case "settle-mini":
+          railAnimator.animateTo(RAIL_MINI, { durationMs: RAIL_SNAP_MS, easing: "spring" });
+          break;
+        case "stay":
+          void saveRailWidth(railExpandedWidth);
+          break;
+      }
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   });
 
+  railResizeEl.addEventListener("dblclick", () => {
+    setRailMode(railMode === "mini" ? "expanded" : "mini");
+  });
+
   function toggleRail() {
-    railHidden = !railHidden;
-    applyGrid();
-    appBar.setRailHidden(railHidden);
+    setRailMode(railMode === "mini" ? "expanded" : "mini");
+  }
+
+  // --- Separator wiggle ------------------------------------------------
+  // After a project switch the divider auto-nudges out and back through
+  // the shared animator (railWidth → applyGrid each frame), then forces
+  // a terminal refit — replacing the manual divider jiggle previously
+  // needed to unstick a stale grid after a switch.
+  let wiggleActive = false;
+  let wiggleBase = 0;
+  let wiggleRetryTimer: number | null = null;
+
+  function cancelWiggle(restoreBase: boolean) {
+    if (wiggleRetryTimer !== null) {
+      window.clearTimeout(wiggleRetryTimer);
+      wiggleRetryTimer = null;
+    }
+    if (!wiggleActive) return;
+    wiggleActive = false;
+    railAnimator.cancel();
+    railResizeEl.classList.remove("dragging");
+    if (restoreBase) {
+      railWidth = wiggleBase;
+      applyGrid();
+    }
+  }
+
+  function wiggleSeparator(attempt = 0) {
+    if (!railWiggle.enabled || wiggleActive || railDragActive) return;
+    if (railAnimator.isAnimating()) {
+      // A collapse/expand is mid-flight (e.g. a mini-avatar click just
+      // expanded the rail) — retry once after it settles. Tracked so a
+      // later drag or mode change can cancel the stale retry.
+      if (attempt === 0 && wiggleRetryTimer === null) {
+        wiggleRetryTimer = window.setTimeout(() => {
+          wiggleRetryTimer = null;
+          wiggleSeparator(1);
+        }, RAIL_SNAP_MS + 40);
+      }
+      return;
+    }
+    wiggleActive = true;
+    wiggleBase = railWidth;
+    railResizeEl.classList.add("dragging");
+    railAnimator.animateTo(wiggleBase + railWiggle.pixels, {
+      durationMs: railWiggle.legMs,
+      onDone: () => {
+        if (!wiggleActive) return;
+        railAnimator.animateTo(wiggleBase, {
+          durationMs: railWiggle.legMs,
+          onDone: () => {
+            if (!wiggleActive) return;
+            wiggleActive = false;
+            railResizeEl.classList.remove("dragging");
+            refitActiveTerminals();
+          },
+        });
+      },
+    });
   }
 
   function toggleTheme() {
@@ -367,7 +553,7 @@ export async function boot(splash?: StartupSplashController) {
     },
     onToggleTheme: () => toggleTheme(),
   });
-  appBar.setRailHidden(false);
+  appBar.setRailExpanded(railMode === "expanded");
   appBar.setTheme(theme);
   // propagate initial theme to the pane layout (for newly mounted terminals)
   // done after layout is constructed below
@@ -683,7 +869,7 @@ export async function boot(splash?: StartupSplashController) {
   }
 
   const rail = new Rail({
-    root: document.getElementById("rail")!,
+    root: railEl,
     onSelect: (projectId) => {
       // Clicking an archived project restores it (behind a confirm) rather
       // than selecting an empty, panes-killed view.
@@ -692,8 +878,11 @@ export async function boot(splash?: StartupSplashController) {
         void requestUnarchive(projectId);
         return;
       }
+      // A mini-rail avatar click selects the project AND expands the rail.
+      if (railMode === "mini") setRailMode("expanded");
       void selectProject(projectId);
     },
+    onExpand: () => setRailMode("expanded"),
     onAddProject: () => void handleAddProject(),
     onRename: (projectId, newName) => {
       // Optimistic: paint the new name right away, then persist on the
@@ -782,6 +971,7 @@ export async function boot(splash?: StartupSplashController) {
       return allTabs(tree).map((t) => t.paneId);
     },
   });
+  rail.setMode(railMode);
 
   window.reckAPI.onMenuAddProject(() => void handleAddProject());
   // Phase 12: the "Preferences…" menu item hands control to the
@@ -1543,6 +1733,8 @@ export async function boot(splash?: StartupSplashController) {
     },
   });
   layout.setTheme(theme);
+  // Bind the rail-collapse/wiggle refit hook now that the layout exists.
+  refitActiveTerminals = () => void layout.refitActive();
 
   // an earlier release: subscribe to popout-closed notifications. The
   // unsubscribe thunk is captured here so the next reload doesn't stack
@@ -1906,6 +2098,8 @@ export async function boot(splash?: StartupSplashController) {
     onFocusUp: () => layout.navigate("up"),
     onFocusDown: () => layout.navigate("down"),
     onToggleRail: () => toggleRail(),
+    onCollapseRail: () => setRailMode("mini"),
+    onExpandRail: () => setRailMode("expanded"),
     onClearTerminal: () => clearActiveTerminal(),
     // an earlier release: detach the focused pane via the same callback path
     // the per-pane button uses. We resolve "focused pane" from the
@@ -2081,6 +2275,26 @@ export async function boot(splash?: StartupSplashController) {
     renderStatus();
   }
 
+  // Root-cause fix for the stale grid after a cross-project switch:
+  // setTree freshly remounts panes, and a pane whose container isn't
+  // laid out yet makes TerminalPane.refit() early-return without
+  // re-arming — a same-geometry switch then produces no ResizeObserver
+  // delta, so nothing ever re-fits. Double-rAF lets the new tree paint
+  // first; if any pane still reports not-laid-out, retry once shortly
+  // after.
+  function scheduleProjectSwitchRefit() {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        // pinToBottom: end the switch with a real scroll that lands at
+        // the tail — a remounted pane can present blank until scrolled.
+        const allLaidOut = layout.refitActive({ pinToBottom: true });
+        if (!allLaidOut) {
+          window.setTimeout(() => layout.refitActive({ pinToBottom: true }), 100);
+        }
+      });
+    });
+  }
+
   async function selectProject(projectId: string) {
     if (currentProjectId === projectId) return;
 
@@ -2240,6 +2454,8 @@ export async function boot(splash?: StartupSplashController) {
       if (firstLeaf) layout.focusLeaf(firstLeaf.id);
     }
     renderStatus();
+    scheduleProjectSwitchRefit();
+    wiggleSeparator();
 
     // Daemon-restart race: the daemon's restore walk takes several
     // seconds on wake-up, so `getProject` may return a subset of the
@@ -2349,6 +2565,9 @@ export async function boot(splash?: StartupSplashController) {
         const firstLeaf = reconciled ? allLeaves(reconciled)[0] : null;
         if (firstLeaf) layout.focusLeaf(firstLeaf.id);
         renderStatus();
+        // The repaint remounted panes again — same not-laid-out hazard
+        // as the fast-path paint above.
+        scheduleProjectSwitchRefit();
       }
     }
     // Housekeeping: clear the in-flight AbortController now that the

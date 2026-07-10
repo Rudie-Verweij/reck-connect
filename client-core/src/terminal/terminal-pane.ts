@@ -584,8 +584,15 @@ export class TerminalPane {
     markActiveDebugPane(this);
   }
 
-  refit() {
-    if (this.disposed) return;
+  /**
+   * Returns false when the fit was skipped because the container isn't
+   * laid out yet (or the fit threw) — the skip does NOT re-arm itself,
+   * so callers that just remounted the pane (e.g. a project switch)
+   * should retry shortly after. Returns true when geometry was
+   * reasserted (or there was nothing to do: disposed pane).
+   */
+  refit(): boolean {
+    if (this.disposed) return true;
     this.scrollDebug("refit:enter", {
       laidOut: this.isLaidOut(),
       containerW: this.container.clientWidth,
@@ -598,7 +605,7 @@ export class TerminalPane {
         this.fit.fit();
       } else {
         this.scrollDebug("refit:skip(not-laid-out)");
-        return;
+        return false;
       }
       // refit() is the explicit "reassert geometry" hook — it runs on
       // window focus, visibility restore, and tab re-show, where another
@@ -610,8 +617,10 @@ export class TerminalPane {
       this.sendResizeIfChanged();
       this.forceRepaint();
       this.scrollDebug("refit:exit");
+      return true;
     } catch (err) {
       this.scrollDebug("refit:error", { err: String(err) });
+      return false;
     }
   }
 
@@ -643,6 +652,20 @@ export class TerminalPane {
    */
   public scrollToBottom(): void {
     if (this.disposed) return;
+    this.term.scrollToBottom();
+  }
+
+  /**
+   * A real scroll gesture that lands at the bottom: one line up, then
+   * to the tail. A freshly remounted pane can present an empty viewport
+   * until something scrolls it (the manual fix users reach for after a
+   * project switch); two genuine scroll ops force xterm to repaint the
+   * viewport rows, where a no-op scrollToBottom (already at tail) would
+   * not.
+   */
+  public nudgeScrollToBottom(): void {
+    if (this.disposed) return;
+    if (this.term.buffer.active.baseY > 0) this.term.scrollLines(-1);
     this.term.scrollToBottom();
   }
 

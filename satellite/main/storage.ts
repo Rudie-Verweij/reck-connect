@@ -47,6 +47,14 @@ export const CONFIG_KEYS = [
   "layouts",
   "layouts_v2",
   "railWidth",
+  // Rail collapse redesign: persisted mode ("expanded"|"mini") plus the
+  // project-switch separator-wiggle tuning. Without these entries the
+  // IPC boundary silently rejects the renderer's get/set (the exact
+  // failure mode reckConnectPrompt hit before it was allowlisted).
+  "railMode",
+  "railWiggleEnabled",
+  "railWigglePixels",
+  "railWiggleLegMs",
   "theme",
   "projectNames",
   "projectOrder",
@@ -59,6 +67,10 @@ export const CONFIG_KEYS = [
   // Text-to-speech preferences: { voice: string|null, rate: number }.
   // Non-secret. Defaults applied at load time so a missing key is fine.
   "tts",
+  // App-wide prompt text auto-appended to every Claude pane. Was written
+  // by the renderer without being allowlisted — the IPC boundary silently
+  // rejected every save (caught by the config-keys sweep test).
+  "reckConnectPrompt",
   // File-viewer / Cmd+click linkifier settings. Without these allowlisted,
   // the IPC boundary silently rejects every config:get/config:set for them.
   // `fileViewerExtraRoots`: user-added folders the viewer may open outside

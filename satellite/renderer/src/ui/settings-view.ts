@@ -1,13 +1,16 @@
 import {
+  DEFAULT_RAIL_WIGGLE,
   DEFAULT_RECK_CONNECT_PROMPT,
   loadFileViewerExtraRoots,
   loadHoverToFocus,
   loadLinkifierAllowlist,
+  loadRailWiggle,
   loadReckConnectPrompt,
   loadSettings,
   saveFileViewerExtraRoots,
   saveHoverToFocus,
   saveLinkifierAllowlist,
+  saveRailWiggle,
   saveReckConnectPrompt,
   saveSettings,
 } from "../config";
@@ -25,6 +28,13 @@ function escapeAttr(s: string): string {
 const DEFAULT_LOCAL_PORT = 7315;
 const MIN_PORT = 1;
 const MAX_PORT = 65535;
+
+// Separator-wiggle tuning bounds. Generous — the point is to reject
+// nonsense (0, negative, NaN), not to police taste.
+const MIN_WIGGLE_PX = 1;
+const MAX_WIGGLE_PX = 64;
+const MIN_WIGGLE_MS = 16;
+const MAX_WIGGLE_MS = 1000;
 
 /**
  * Returns the offending "host:port" string when `stationUrl` resolves to
@@ -98,6 +108,7 @@ export async function renderSettings(
   // preserve whatever they had.
   const savedLocalAutoStart = existing?.local?.autoStart ?? true;
   const savedHoverToFocus = await loadHoverToFocus();
+  const savedRailWiggle = await loadRailWiggle();
   const savedReckPrompt =
     (await loadReckConnectPrompt()) ?? DEFAULT_RECK_CONNECT_PROMPT;
   const ttsSettings = await loadTtsSettings();
@@ -151,6 +162,17 @@ export async function renderSettings(
         <p style="margin-top:0.25rem;margin-left:1.5rem;color:var(--text-secondary);font-size:0.85rem;">
           Move the cursor over a pane to focus it, no click needed. Suppresses during text selection, drags, and right after typing.
         </p>
+        <label style="display:flex;align-items:center;gap:0.5rem;margin-top:1rem;font-family:var(--font-body);text-transform:none;letter-spacing:0;font-size:0.95rem;color:var(--app-text);font-weight:500;">
+          <input id="s-rail-wiggle" type="checkbox" ${savedRailWiggle.enabled ? "checked" : ""} style="width:auto;" />
+          Wiggle the divider on project switch
+        </label>
+        <p style="margin-top:0.25rem;margin-left:1.5rem;color:var(--text-secondary);font-size:0.85rem;">
+          After switching projects the sidebar divider nudges out and back so terminals re-fit without a manual jiggle.
+        </p>
+        <label for="s-rail-wiggle-px">Wiggle distance (px)</label>
+        <input id="s-rail-wiggle-px" type="number" min="${MIN_WIGGLE_PX}" max="${MAX_WIGGLE_PX}" value="${savedRailWiggle.pixels}" placeholder="${DEFAULT_RAIL_WIGGLE.pixels}" />
+        <label for="s-rail-wiggle-ms">Wiggle leg duration (ms)</label>
+        <input id="s-rail-wiggle-ms" type="number" min="${MIN_WIGGLE_MS}" max="${MAX_WIGGLE_MS}" value="${savedRailWiggle.legMs}" placeholder="${DEFAULT_RAIL_WIGGLE.legMs}" />
         <div class="divider" style="margin-top:1.5rem;"></div>
         <h3>Text to speech</h3>
         <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
@@ -227,6 +249,9 @@ export async function renderSettings(
     const localPortRaw = (root.querySelector("#s-local-port") as HTMLInputElement).value;
     const localAutoStart = (root.querySelector("#s-local-autostart") as HTMLInputElement).checked;
     const hoverToFocus = (root.querySelector("#s-hover-to-focus") as HTMLInputElement).checked;
+    const railWiggleEnabled = (root.querySelector("#s-rail-wiggle") as HTMLInputElement).checked;
+    const railWigglePxRaw = (root.querySelector("#s-rail-wiggle-px") as HTMLInputElement).value;
+    const railWiggleMsRaw = (root.querySelector("#s-rail-wiggle-ms") as HTMLInputElement).value;
     err.style.display = "none";
 
     if (stationEnabled) {
@@ -244,6 +269,18 @@ export async function renderSettings(
     const localPort = parseInt(localPortRaw, 10);
     if (!Number.isFinite(localPort) || localPort < MIN_PORT || localPort > MAX_PORT) {
       err.textContent = `Local port must be an integer between ${MIN_PORT} and ${MAX_PORT}.`;
+      err.style.display = "block";
+      return;
+    }
+    const railWigglePx = parseInt(railWigglePxRaw, 10);
+    if (!Number.isFinite(railWigglePx) || railWigglePx < MIN_WIGGLE_PX || railWigglePx > MAX_WIGGLE_PX) {
+      err.textContent = `Wiggle distance must be an integer between ${MIN_WIGGLE_PX} and ${MAX_WIGGLE_PX} px.`;
+      err.style.display = "block";
+      return;
+    }
+    const railWiggleMs = parseInt(railWiggleMsRaw, 10);
+    if (!Number.isFinite(railWiggleMs) || railWiggleMs < MIN_WIGGLE_MS || railWiggleMs > MAX_WIGGLE_MS) {
+      err.textContent = `Wiggle leg duration must be an integer between ${MIN_WIGGLE_MS} and ${MAX_WIGGLE_MS} ms.`;
       err.style.display = "block";
       return;
     }
@@ -273,6 +310,11 @@ export async function renderSettings(
       },
     });
     await saveHoverToFocus(hoverToFocus);
+    await saveRailWiggle({
+      enabled: railWiggleEnabled,
+      pixels: railWigglePx,
+      legMs: railWiggleMs,
+    });
     // No .trim() — whitespace is user intent; "" is the explicit opt-out.
     await saveReckConnectPrompt(reckPromptEl.value);
 
