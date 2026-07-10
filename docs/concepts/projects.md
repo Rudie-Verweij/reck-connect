@@ -16,7 +16,6 @@ type Project struct {
     DefaultPane string   // "claude" | "shell" | "codex"; defaults to "claude"
     Shell       []string // argv for shell panes; defaults to [$SHELL, "-l"]
     Preamble    string   // optional; injected as --append-system-prompt on claude panes
-    Docked      bool     // true = registered with Mission Control
     DisplayName string   // user-given label override; empty = use Name
 }
 ```
@@ -41,7 +40,6 @@ Override with the `--config` flag at daemon startup. The launchd plist template 
 | `default_pane` | string | No | `"claude"` (default) \| `"shell"` \| `"codex"`. |
 | `shell` | string array | No | Shell argv for shell panes (e.g. `["/bin/zsh", "-l"]`). Defaults to `[$SHELL, "-l"]` resolved at daemon startup. `shell[0]` must be an absolute path. |
 | `preamble` | string | No | Text injected as `--append-system-prompt` on every Claude pane in this project. Combined with the daemon baseline. |
-| `docked` | bool | No | Written by the daemon when the user docks the project to Mission Control. Do not set manually. |
 | `display_name` | string | No | Written by the daemon on rename. Overrides `name` in the UI. |
 
 ### Example

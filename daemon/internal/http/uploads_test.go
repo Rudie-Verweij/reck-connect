@@ -60,7 +60,7 @@ func makeUploadBody(t *testing.T, contentType string, payload []byte) (io.Reader
 // upload endpoint's live-pane-binding check doesn't care about pane
 // kind, so a shell pane (which needs no Claude CLI resolved) is the
 // cheapest test vehicle. Not named `createShellPane` because that
-// name's already taken by docking_test.go for a different flow that
+// name's already taken by pane_io_test.go for a different flow that
 // creates a brand-new project first.
 func createShellPaneInP1(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
@@ -600,32 +600,5 @@ func TestListPaneUploads_unknownPane404(t *testing.T) {
 	r.Body.Close()
 	if r.StatusCode != nethttp.StatusNotFound {
 		t.Fatalf("status=%d want 404", r.StatusCode)
-	}
-}
-
-// TestListPaneUploads_supervisorForbidden pins the supervisor carve-out
-// on the GET (same shape as the POST's supervisor reject). The
-// supervisor has no business enumerating pane uploads even for docked
-// projects; this keeps the paste surface strictly human-driven.
-func TestListPaneUploads_supervisorForbidden(t *testing.T) {
-	t.Setenv("DAEMON_TOKEN", "main-token")
-	s, pane := newServerWithPane(t)
-	s.SupervisorAuth = &fakeSupervisorAuth{
-		token:          "sup-token",
-		dockedProjects: map[string]bool{"p1": true}, // supervisor CAN see p1
-		panes:          map[string]string{pane.ID: "p1"},
-	}
-	srv := httptest.NewServer(newTestHandler(t, s))
-	defer srv.Close()
-
-	req, _ := nethttp.NewRequest("GET", srv.URL+"/panes/"+pane.ID+"/uploads", nil)
-	req.Header.Set("Authorization", "Bearer sup-token")
-	r, err := nethttp.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.Body.Close()
-	if r.StatusCode != nethttp.StatusForbidden {
-		t.Fatalf("supervisor → GET uploads: status=%d want 403", r.StatusCode)
 	}
 }

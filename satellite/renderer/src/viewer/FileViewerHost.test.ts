@@ -980,7 +980,7 @@ describe("Round 6 Phase CC4 — streaming suffix-search picker", () => {
     });
   };
 
-  it("sets document.title to the file basename so Mission Control can tell popups apart", async () => {
+  it("sets document.title to the file basename so macOS Mission Control can tell popups apart", async () => {
     // file-viewer.html ships a static <title>Reck — File Viewer</title>
     // which overwrites the per-file BrowserWindow title on load
     // (Electron's page-title-updated default) — so every popup looked

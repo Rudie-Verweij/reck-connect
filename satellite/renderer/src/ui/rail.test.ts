@@ -9,7 +9,7 @@ function mkProject(
   stoplight: Project["stoplight"],
   paneCount = 0,
 ): Project {
-  return { id, name, cwd: "/", stoplight, pane_count: paneCount, docked: false };
+  return { id, name, cwd: "/", stoplight, pane_count: paneCount };
 }
 
 describe("Rail", () => {
@@ -108,61 +108,6 @@ describe("Rail", () => {
     menu?.remove();
   });
 
-  it("adds .docked class on the rail item when project is docked", () => {
-    const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
-    const docked = { ...mkProject("a", "Alpha", "gray"), docked: true };
-    r.setProjects([docked, mkProject("b", "Bravo", "gray")]);
-    const rows = root.querySelectorAll<HTMLElement>(".rail-item");
-    expect(rows[0].classList.contains("docked")).toBe(true);
-    expect(rows[1].classList.contains("docked")).toBe(false);
-  });
-
-  it("toggles .docked when a project's docked flag changes", () => {
-    const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
-    r.setProjects([mkProject("a", "Alpha", "gray")]);
-    r.setProjects([{ ...mkProject("a", "Alpha", "gray"), docked: true }]);
-    const row = root.querySelector<HTMLElement>(".rail-item")!;
-    expect(row.classList.contains("docked")).toBe(true);
-    r.setProjects([{ ...mkProject("a", "Alpha", "gray"), docked: false }]);
-    expect(row.classList.contains("docked")).toBe(false);
-  });
-
-  it("context menu dock toggle uses the latest docked state after setProjects updates", () => {
-    let toggled: { id: string; docked: boolean } | null = null;
-    const r = new Rail({
-      root,
-      onSelect: () => {},
-      onAddProject: () => {},
-      onToggleDock: (id, docked) => {
-        toggled = { id, docked };
-      },
-    });
-    r.setProjects([mkProject("a", "Alpha", "gray")]);
-    r.setProjects([{ ...mkProject("a", "Alpha", "gray"), docked: true }]);
-
-    const row = root.querySelector<HTMLElement>(".rail-item")!;
-    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
-    const dockButton = document.querySelector<HTMLButtonElement>(
-      '.rail-context-menu button[data-action="dock"]',
-    )!;
-    expect(dockButton.textContent).toBe("Undock from Mission Control");
-    dockButton.click();
-
-    expect(toggled).toEqual({ id: "a", docked: false });
-    document.querySelector(".rail-context-menu")?.remove();
-  });
-
-  it("updates the MC rail light via setMissionControlLight", () => {
-    const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
-    r.setMissionControlLight("orange");
-    const dot = root.querySelector<HTMLElement>("#rail-mc-dot")!;
-    expect(dot.classList.contains("orange")).toBe(true);
-    expect(dot.classList.contains("green")).toBe(false);
-    r.setMissionControlLight("green");
-    expect(dot.classList.contains("green")).toBe(true);
-    expect(dot.classList.contains("orange")).toBe(false);
-  });
-
   // an earlier release: per-pane dot colors.
   describe("pane_stoplights ", () => {
     it("colours each dot independently when pane_stoplights is supplied", () => {
@@ -174,7 +119,6 @@ describe("Rail", () => {
         stoplight: "orange",
         pane_count: 2,
         pane_stoplights: ["orange", "green"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -194,7 +138,6 @@ describe("Rail", () => {
         stoplight: "green",
         pane_count: 2,
         pane_stoplights: ["green", "green"],
-        docked: false,
       };
       r.setProjects([before]);
       const firstDot = root.querySelector<HTMLElement>(
@@ -236,7 +179,6 @@ describe("Rail", () => {
         stoplight: "gray",
         pane_count: 0,
         pane_stoplights: [],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -266,7 +208,6 @@ describe("Rail", () => {
           "red",
           "red",
         ],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -301,7 +242,6 @@ describe("Rail", () => {
         pane_count: 3,
         pane_stoplights: ["red", "green", "orange"],
         pane_ids: ["P1", "P2", "P3"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -328,7 +268,6 @@ describe("Rail", () => {
         pane_count: 2,
         pane_stoplights: ["red", "green"],
         pane_ids: ["P1", "P2"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -355,7 +294,6 @@ describe("Rail", () => {
         pane_count: 2,
         pane_stoplights: ["red", "green"],
         // pane_ids absent.
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -383,7 +321,6 @@ describe("Rail", () => {
         pane_count: 3,
         pane_stoplights: ["green", "orange", "red"],
         pane_ids: ["P1", "P2", "P3"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -413,7 +350,6 @@ describe("Rail", () => {
         pane_count: 2,
         pane_stoplights: ["green", "orange"],
         pane_ids: ["P1", "P2"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -439,7 +375,6 @@ describe("Rail", () => {
         pane_count: 2,
         pane_stoplights: ["green", "orange"],
         pane_ids: ["P1"], // length mismatch
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(

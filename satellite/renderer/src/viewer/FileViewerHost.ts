@@ -442,7 +442,7 @@ export async function mountFileViewer(
   shell.titleEl.textContent = basenameOf(path);
   // the static <title> in file-viewer.html overwrites the
   // per-file BrowserWindow title on load (Electron's page-title-updated
-  // default), so every popup read "Reck — File Viewer" in Mission
+  // default), so every popup read "Reck — File Viewer" in macOS Mission
   // Control / zoom-out hover. Basename only — full paths are
   // unreadable at that size, and multiple popups must be tellable
   // apart at a glance.

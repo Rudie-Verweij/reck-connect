@@ -64,18 +64,6 @@ Skipped entries generate warnings (logged as `slog.Warn`) but do not prevent the
 
 ---
 
-### Mission Control history is intentionally empty
-
-`GET /mission-control/history` always returns `{"messages": []}`. The supervisor's conversation lives inside the Claude Code pane's own session (JSONL transcripts managed by Claude Code), not in daemon storage. The endpoint exists for protocol completeness.
-
-**Source:** `daemon/internal/supervisor/http.go:ServeHistory`
-
-**Why it matters:** if you try to load conversation history from the HTTP API expecting past messages, you'll get an empty list. To see history, open the supervisor pane in the Satellite and use Claude Code's own session tooling.
-
-See [mission-control.md](./mission-control.md).
-
----
-
 ### Hook installer ownership uses structured exact-match, not substring scan
 
 The hook installer identifies Reck-owned entries by exact canonical command match and a sidecar lookup file (`~/.claude/.reck-hooks.json`), NOT by scanning for the `reck-hook-v1` substring anywhere in the command. A user hook whose command happens to contain "reck-hook-v1" in a comment will NOT be stripped by the installer.
@@ -108,11 +96,9 @@ See [protocol.md](./protocol.md).
 
 `GET /panes/:pane_id/output` accepts `?bytes=N` (default 8192, max 131072). It does **not** accept `?lines=N`.
 
-The supervisor's system prompt template (`daemon/internal/supervisor/prompt.go`) documents the endpoint as `?lines=200`. This is incorrect. When the supervisor follows this example, `lines=200` is silently ignored and the endpoint returns the default 8192 bytes.
+**Source:** `daemon/internal/http/router.go:handlePaneOutput` (implements `?bytes=`)
 
-**Source:** `daemon/internal/http/router.go:handlePaneOutput` (implements `?bytes=`); `daemon/internal/supervisor/prompt.go` (documents `?lines=`)
-
-**Why it matters:** if you are scripting against the output endpoint or debugging the supervisor's behavior, use `?bytes=N`. An issue should be opened to update the supervisor system prompt template.
+**Why it matters:** if you are scripting against the output endpoint, use `?bytes=N` — `?lines=` is silently ignored.
 
 See [protocol.md](./protocol.md).
 

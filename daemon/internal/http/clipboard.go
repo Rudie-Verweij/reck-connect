@@ -67,11 +67,6 @@ var ctrlVByte = []byte{0x16}
 
 func (s *Server) handleClipboardImage(w nethttp.ResponseWriter, r *nethttp.Request) {
 	paneID := chi.URLParam(r, "pane_id")
-	if ActorFromRequest(r) == "supervisor" {
-		slog.Info("clipboard_image_rejected", "pane", paneID, "reason", "supervisor")
-		nethttp.Error(w, "forbidden: supervisor cannot push clipboard images", nethttp.StatusForbidden)
-		return
-	}
 	pane, ok := s.Manager.PaneByID(paneID)
 	if !ok {
 		slog.Info("clipboard_image_rejected", "pane", paneID, "reason", "pane_not_found")

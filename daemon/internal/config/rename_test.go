@@ -58,8 +58,8 @@ func TestSetProjectDisplayName_writesThroughAndClears(t *testing.T) {
 	}
 }
 
-// TestSetProjectDisplayName_unknownProjectIsNoOp matches SetProjectDocked's
-// contract: callers racing with a project deletion shouldn't see an error.
+// TestSetProjectDisplayName_unknownProjectIsNoOp: callers racing with a
+// project deletion shouldn't see an error.
 func TestSetProjectDisplayName_unknownProjectIsNoOp(t *testing.T) {
 	path := writeTemp(t, "")
 	if err := SetProjectDisplayName(path, "nope", "Whatever"); err != nil {
@@ -68,7 +68,7 @@ func TestSetProjectDisplayName_unknownProjectIsNoOp(t *testing.T) {
 }
 
 // TestSetProjectDisplayName_preservesOtherFields guards against the rewrite
-// accidentally dropping docked/shell/preamble when it round-trips the file.
+// accidentally dropping archived/shell/preamble when it round-trips the file.
 func TestSetProjectDisplayName_preservesOtherFields(t *testing.T) {
 	dir := t.TempDir()
 	cwd := filepath.Join(dir, "p1")
@@ -82,7 +82,7 @@ func TestSetProjectDisplayName_preservesOtherFields(t *testing.T) {
 		Cwd:      cwd,
 		Shell:    []string{"/bin/bash", "-l"},
 		Preamble: "Hello",
-		Docked:   true,
+		Archived: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +96,8 @@ func TestSetProjectDisplayName_preservesOtherFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := reg.Projects[0]
-	if !p.Docked {
-		t.Error("expected Docked preserved")
+	if !p.Archived {
+		t.Error("expected Archived preserved")
 	}
 	if p.Preamble != "Hello" {
 		t.Errorf("Preamble = %q, want Hello", p.Preamble)

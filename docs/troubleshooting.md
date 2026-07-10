@@ -177,13 +177,3 @@ brew install rsync
 `rsync-copy.ts` prefers `/opt/homebrew/bin/rsync`, then `/usr/local/bin/rsync`, and falls back to bare `rsync` on PATH only if neither Homebrew path exists. `install-satellite.sh` also installs Homebrew rsync as part of the normal setup flow. If the error persists, verify the Homebrew rsync is present: `ls -l /opt/homebrew/bin/rsync`.
 
 See [concepts/mount.md#usrbinrsync-is-openrsync-on-macos-14](./concepts/mount.md#usrbinrsync-is-openrsync-on-macos-14).
-
----
-
-## Mission Control shows no conversation history
-
-**Symptom:** The Mission Control panel opens but the conversation history is empty, even though Claude sessions have been active.
-
-**Cause:** This is intentional. Mission Control's conversation pane shows the history of the supervisor Claude session — a meta-level pane that orchestrates docked projects. Per-project Claude pane conversations are not surfaced here; they live in each project's own pane. The supervisor session starts fresh unless it has been explicitly used.
-
-See [concepts/mission-control.md](./concepts/mission-control.md) and [concepts/behaviors.md](./concepts/behaviors.md) for the distinction between the supervisor session and per-project panes.

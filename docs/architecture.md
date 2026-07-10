@@ -20,12 +20,11 @@ See also: [`docs/internals.md`](../docs/internals.md) for the quickstart, [`conc
 │  │       └── pane p_ghi789  → PTY → codex ...                               │
 │  ├── sessions.Store  ~/.config/reck/sessions/<project>.json                 │
 │  ├── hooks (Claude Code lifecycle shims)                                     │
-│  ├── stoplight.Runner (pane-activity state machine)                         │
-│  └── supervisor.Controller (Mission Control meta-pane, optional)            │
+│  └── stoplight.Runner (pane-activity state machine)                         │
 └───────────────────┬─────────────────────────────────────────────────────────┘
                     │
           HTTP control plane  (REST: project CRUD, pane create/delete,
-                    │          sessions, stoplight snapshot, MC)
+                    │          sessions, stoplight snapshot)
           WS stream plane     (per-pane: PTY I/O + resize + stoplight events)
           hook POST-back       (loopback-exempt: /panes/:id/agent-event)
                     │
@@ -39,7 +38,7 @@ See also: [`docs/internals.md`](../docs/internals.md) for the quickstart, [`conc
 │  │   └── spawns daemon child in local mode (127.0.0.1:7315)                 │
 │  └── renderer process                                                        │
 │      ├── shared-renderer  (typed HTTP client + PTY WS wrapper + xterm.js)  │
-│      └── UI  (project rail, pane tabs, stoplight, Mission Control view)     │
+│      └── UI  (project rail, pane tabs, stoplight)                           │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -62,7 +61,6 @@ Internal packages under `daemon/internal/`:
 | `hooks` | Install/uninstall Claude Code lifecycle hook shims into `~/.claude/settings.json` |
 | `stoplight` | Background runner — classifies pane output activity into gray/orange/green/red |
 | `events` | Append-only in-memory event log per pane (lifecycle hook events) |
-| `supervisor` | Mission Control: a hidden meta-project with a supervisor Claude pane |
 | `httpx` | Shared HTTP helpers (body decode, size caps) |
 
 ### Reck Satellite (Electron app)
@@ -105,8 +103,6 @@ reck-stationd
 ├── per-pane goroutine: pane.readLoop (PTY master → ring buffer + subscribers)
 └── per-pane goroutine: pane.waitLoop (Cmd.Wait → exit-code + callbacks)
 ```
-
-The supervisor (Mission Control) adds its own meta-project and a Claude pane but is otherwise part of the same process. Its WS endpoint (`/ws/mission-control`) is a separate handler.
 
 ## Data Flow
 

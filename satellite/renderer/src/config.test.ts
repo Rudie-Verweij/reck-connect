@@ -22,7 +22,7 @@ import {
 import type { Project } from "@proto/proto";
 
 function mk(id: string, name: string): Project {
-  return { id, name, cwd: "/", stoplight: "gray", pane_count: 0, docked: false };
+  return { id, name, cwd: "/", stoplight: "gray", pane_count: 0 };
 }
 
 describe("project order persistence", () => {

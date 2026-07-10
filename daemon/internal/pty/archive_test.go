@@ -101,7 +101,7 @@ func TestUnarchiveProject_respawnsPanes(t *testing.T) {
 }
 
 // TestArchiveProject_unknownProjectErrors — archiving/unarchiving a project
-// that isn't registered is an error (mirrors SetDocked).
+// that isn't registered is an error.
 func TestArchiveProject_unknownProjectErrors(t *testing.T) {
 	mgr, _, _ := newManagerWithStore(t)
 	if err := mgr.ArchiveProject("nope"); err == nil {

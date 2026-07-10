@@ -151,15 +151,10 @@ type Project struct {
 	// daemons omit the field entirely; the TS client treats `undefined`
 	// as "no reorder info" and renders in PaneStoplights order.
 	PaneIDs []string `json:"pane_ids"`
-	// Docked is true when the project is registered with Mission Control.
-	// Docked projects appear as cards on the MC dashboard and are visible
-	// to the supervisor agent's tools.
-	Docked bool `json:"docked"`
 	// Archived is true when the user put the project to sleep: its panes
 	// are killed to free RAM while its session rows keep was_live=true, so
 	// the project can be restored on demand. Persisted in projects.toml.
-	// Always emitted (no omitempty) so TS clients can rely on it, matching
-	// the docked convention.
+	// Always emitted (no omitempty) so TS clients can rely on it.
 	Archived bool `json:"archived"`
 	// DisplayName is the user-given override. Empty means no override —
 	// clients fall back to Name. Persisted in projects.toml so it survives
@@ -439,110 +434,8 @@ type PaneUploadsListResponse struct {
 	Uploads []PaneUpload `json:"uploads"`
 }
 
-// --- Mission Control  ---
-
-// DockProjectResponse confirms that a project has been docked (or undocked).
-// Docked is the new state after the call.
-type DockProjectResponse struct {
-	Docked bool `json:"docked"`
-}
-
 // ArchiveProjectResponse confirms a project's new archived state after an
 // archive/unarchive call. Archived is the state after the call.
 type ArchiveProjectResponse struct {
 	Archived bool `json:"archived"`
-}
-
-// MissionControlCard is one project card on the Mission Control dashboard.
-// It mirrors the Project fields most useful for supervision plus a
-// summary of active panes.
-type MissionControlCard struct {
-	ProjectID   string               `json:"project_id"`
-	ProjectName string               `json:"project_name"`
-	Cwd         string               `json:"cwd"`
-	Stoplight   Stoplight            `json:"stoplight"`
-	PaneCount   int                  `json:"pane_count"`
-	Panes       []MissionControlPane `json:"panes"`
-}
-
-// MissionControlPane is a slim summary of a pane surfaced on a card.
-// Includes a short tail of recent output for the supervisor agent.
-type MissionControlPane struct {
-	PaneID      string     `json:"pane_id"`
-	Kind        PaneKind   `json:"kind"`
-	AgentState  AgentState `json:"agent_state"`
-	Stoplight   Stoplight  `json:"stoplight"`
-	SessionName string     `json:"session_name,omitempty"`
-}
-
-// MissionControlStateResponse is the snapshot served from
-// GET /mission-control/state and broadcast over the MC WebSocket.
-type MissionControlStateResponse struct {
-	Cards            []MissionControlCard `json:"cards"`
-	SupervisorOnline bool                 `json:"supervisor_online"`
-}
-
-// MissionControlChatRequest is the body of POST /mission-control/chat.
-type MissionControlChatRequest struct {
-	Message string `json:"message"`
-}
-
-// MissionControlRole narrows the role string to the values the
-// supervisor surface actually produces. Older.4, Go declared this as
-// a bare `string` while TS typed it as a closed union — meaning any
-// future Go-side role value would serialize fine but arrive at TS
-// callers as a runtime violation of the declared type. Constraining
-// Go to the same union keeps the two sides honest.
-type MissionControlRole string
-
-const (
-	MissionControlRoleUser      MissionControlRole = "user"
-	MissionControlRoleAssistant MissionControlRole = "assistant"
-)
-
-// MissionControlChatMessage is one persisted turn in the supervisor
-// conversation. Content is plain text; tool calls are flattened into
-// human-readable lines so the renderer can show them inline without a
-// structured tool-call UI.
-type MissionControlChatMessage struct {
-	ID        string             `json:"id"`
-	Role      MissionControlRole `json:"role"`
-	Content   string             `json:"content"`
-	CreatedAt string             `json:"created_at"` // RFC3339
-}
-
-// MissionControlHistoryResponse returns the persisted conversation.
-type MissionControlHistoryResponse struct {
-	Messages []MissionControlChatMessage `json:"messages"`
-}
-
-// --- MC WebSocket: Server → Client ---
-
-type MCStateMessage struct {
-	Type  string                      `json:"type"` // "state"
-	State MissionControlStateResponse `json:"state"`
-}
-
-// MCChatDeltaMessage streams incremental assistant output while a turn is
-// in flight. Consumers should append Text to the current assistant bubble.
-type MCChatDeltaMessage struct {
-	Type      string `json:"type"`       // "chat_delta"
-	MessageID string `json:"message_id"` // stable across deltas for one turn
-	Text      string `json:"text"`
-}
-
-// MCChatMessageMessage is emitted at turn boundaries once a full message
-// has been recorded to history (user echo + assistant final).
-type MCChatMessageMessage struct {
-	Type    string                    `json:"type"` // "chat_message"
-	Message MissionControlChatMessage `json:"message"`
-}
-
-// MCToolCallMessage is emitted when the supervisor invokes a tool. The
-// renderer can surface it inline in the chat thread.
-type MCToolCallMessage struct {
-	Type   string         `json:"type"` // "tool_call"
-	Name   string         `json:"name"`
-	Input  map[string]any `json:"input"`
-	Result string         `json:"result,omitempty"` // human-readable summary
 }

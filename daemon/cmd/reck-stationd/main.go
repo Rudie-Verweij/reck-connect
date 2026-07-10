@@ -26,7 +26,6 @@ import (
 	"github.com/rudie-verweij/reck-connect/daemon/internal/pty"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/sessions"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/stoplight"
-	"github.com/rudie-verweij/reck-connect/daemon/internal/supervisor"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/ws"
 )
 
@@ -131,7 +130,7 @@ func main() {
 			// env token is authoritative (a stale ~/.config/reck/token
 			// winning the chain 401'd every renderer request).
 			// DAEMON_TOKEN is already in the env; nothing to publish.
-			logger.Info("daemon token loaded", "source", "env:DAEMON_TOKEN (local supervisor)")
+			logger.Info("daemon token loaded", "source", "env:DAEMON_TOKEN (supervising Satellite)")
 		} else {
 			cands := config.DefaultTokenCandidates()
 			tok, src, err = config.ResolveTokenChain(cands)
@@ -215,7 +214,7 @@ func main() {
 	//     no useful function without it.
 	//   - default $SHELL: must resolve. Fatal on failure — the
 	//     fallback for any project that registers without its own
-	//     Shell field, and for the MC supervisor meta-project.
+	//     Shell field.
 	//   - codex: best-effort. Not every station ships codex; when
 	//     it's missing we log a warning and pass nil through to the
 	//     adapter, which returns ErrCodexNotAvailable at spawn time
@@ -359,13 +358,6 @@ func main() {
 		CodexAvailable: len(codexCmd) > 0,
 	}
 
-	// Mission Control supervisor — owns a hidden meta-project + an
-	// on-demand claude pane with a supervisor system prompt. The
-	// DaemonURL is filled in after the listener binds (below). We
-	// construct lazily so the controller is wired to the listener's
-	// actual port, not the requested --addr (which may be :0 in tests).
-	var mcCtrl *supervisor.Controller
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -440,11 +432,6 @@ func main() {
 	// Still runs before HTTP serve, so /restore-candidates is empty
 	// from the satellite's perspective.
 	//
-	// Runs before Mission Control supervisor registration too. That's
-	// intentional: MC sessions are not user-visible orphans, and
-	// Manager.Projects() filters hidden IDs anyway, so RestoreOrphans
-	// walks only the right set even without the MC project registered.
-	//
 	// CreatePaneWith is goroutine-safe; the call is fast (no per-pane
 	// wait beyond the spawn syscall).
 	if r := mgr.RestoreOrphans(0, 0); r.Restored+r.Failed+r.ReadOnly > 0 {
@@ -454,27 +441,6 @@ func main() {
 			"skipped", r.Skipped,
 			"read_only", r.ReadOnly,
 		)
-	}
-
-	// Wire the Mission Control supervisor now that we know the real URL.
-	// Controller construction is best-effort: a scratch-dir failure here
-	// shouldn't kill the whole daemon. MC endpoints are only registered
-	// when mcCtrl != nil (see httpsrv.Server.MC).
-	mcCtrl, err = supervisor.New(supervisor.Config{
-		Manager:      mgr,
-		DaemonURL:    daemonURL,
-		AuthRequired: os.Getenv("DAEMON_TOKEN") != "",
-	})
-	if err != nil {
-		logger.Warn("mission control disabled", "err", err)
-		mcCtrl = nil
-	} else {
-		srv.MC = mcCtrl
-		// The supervisor gets its own bearer token (see supervisor/
-		// controller.go); register it on the auth middleware so
-		// supervisor-initiated requests are scoped to docked projects.
-		srv.SupervisorAuth = mcCtrl
-		logger.Info("mission control ready")
 	}
 
 	// HTTP server hardening: timeouts + header cap. Justification for
@@ -576,12 +542,6 @@ func main() {
 	// we subsequently kill panes. Bounded by ws.ShutdownCloseWait so a
 	// stuck client can't delay pane teardown past launchd's kill
 	// timeout.
-	//
-	// Mission Control's own WS endpoint uses the same nhooyr library
-	// but is owned by the supervisor package; its clients observe a
-	// reset-on-exit today. That's a follow-up (not currently a user-
-	// visible regression: the MC WS stream is read-only state pushes,
-	// not an interactive terminal).
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), ws.ShutdownCloseWait)
 	wsH.Shutdown(closeCtx)
 	closeCancel()
@@ -688,8 +648,3 @@ func resolveProcComm(pid int) string {
 	}
 	return strings.TrimSpace(string(out))
 }
-
-// suppress unused-var warnings when mcCtrl is left nil.
-var _ = mcCtrlSentinel
-
-func mcCtrlSentinel() *supervisor.Controller { return nil }

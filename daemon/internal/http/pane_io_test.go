@@ -19,119 +19,6 @@ import (
 	"github.com/rudie-verweij/reck-connect/proto"
 )
 
-func TestDockAndUndockProject(t *testing.T) {
-	s := newServer(t)
-	srv := httptest.NewServer(newTestHandler(t, s))
-	defer srv.Close()
-
-	// Create a project.
-	body, _ := json.Marshal(proto.AddProjectRequest{Name: "Dockable", Cwd: t.TempDir()})
-	r, err := nethttp.Post(srv.URL+"/projects", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.StatusCode != 200 {
-		t.Fatalf("create status %d", r.StatusCode)
-	}
-	var added proto.AddProjectResponse
-	if err := json.NewDecoder(r.Body).Decode(&added); err != nil {
-		t.Fatal(err)
-	}
-	if added.Project.Docked {
-		t.Fatalf("new project should default to undocked, got %+v", added.Project)
-	}
-
-	// Dock.
-	r2, err := nethttp.Post(srv.URL+"/projects/"+added.Project.ID+"/dock", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r2.StatusCode != 200 {
-		t.Fatalf("dock status %d", r2.StatusCode)
-	}
-	var dockResp proto.DockProjectResponse
-	if err := json.NewDecoder(r2.Body).Decode(&dockResp); err != nil {
-		t.Fatal(err)
-	}
-	if !dockResp.Docked {
-		t.Fatalf("expected Docked=true, got %+v", dockResp)
-	}
-
-	// Listing reflects it.
-	r3, err := nethttp.Get(srv.URL + "/projects")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var list proto.ProjectsListResponse
-	if err := json.NewDecoder(r3.Body).Decode(&list); err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, p := range list.Projects {
-		if p.ID == added.Project.ID {
-			found = true
-			if !p.Docked {
-				t.Fatalf("listing says Docked=false after dock: %+v", p)
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("project missing from listing")
-	}
-
-	// Undock.
-	r4, err := nethttp.Post(srv.URL+"/projects/"+added.Project.ID+"/undock", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var undockResp proto.DockProjectResponse
-	if err := json.NewDecoder(r4.Body).Decode(&undockResp); err != nil {
-		t.Fatal(err)
-	}
-	if undockResp.Docked {
-		t.Fatalf("expected Docked=false, got %+v", undockResp)
-	}
-}
-
-func TestDockUnknownProject404s(t *testing.T) {
-	s := newServer(t)
-	srv := httptest.NewServer(newTestHandler(t, s))
-	defer srv.Close()
-
-	r, err := nethttp.Post(srv.URL+"/projects/does-not-exist/dock", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.StatusCode != 404 {
-		t.Fatalf("expected 404, got %d", r.StatusCode)
-	}
-}
-
-func TestStationDockUndockPersistsThroughHTTP(t *testing.T) {
-	s, configPath := newPersistedStationServer(t)
-	srv := httptest.NewServer(newTestHandler(t, s))
-	defer srv.Close()
-
-	postDockAction(t, srv.URL+"/projects/p-station/dock")
-	project := getProject(t, srv.URL, "p-station")
-	if !project.Docked {
-		t.Fatalf("GET /projects after dock: Docked=false, project=%+v", project)
-	}
-	if got := persistedDocked(t, configPath, "p-station"); !got {
-		t.Fatalf("projects.toml after dock: Docked=false, want true")
-	}
-
-	postDockAction(t, srv.URL+"/projects/p-station/undock")
-	project = getProject(t, srv.URL, "p-station")
-	if project.Docked {
-		t.Fatalf("GET /projects after undock: Docked=true, project=%+v", project)
-	}
-	if got := persistedDocked(t, configPath, "p-station"); got {
-		raw, _ := os.ReadFile(configPath)
-		t.Fatalf("projects.toml after undock: Docked=true, want false\n%s", raw)
-	}
-}
-
 func newPersistedStationServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	ensureTestDaemonToken(t)
@@ -175,7 +62,7 @@ func newPersistedStationServer(t *testing.T) (*Server, string) {
 	}, configPath
 }
 
-func postDockAction(t *testing.T, url string) {
+func postProjectAction(t *testing.T, url string) {
 	t.Helper()
 	resp, err := nethttp.Post(url, "application/json", nil)
 	if err != nil {
@@ -210,24 +97,6 @@ func getProject(t *testing.T, baseURL string, id string) proto.Project {
 	}
 	t.Fatalf("project %q missing from GET /projects: %+v", id, list.Projects)
 	return proto.Project{}
-}
-
-func persistedDocked(t *testing.T, configPath string, id string) bool {
-	t.Helper()
-	registry, warnings, err := config.Load(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("config.Load warnings: %+v", warnings)
-	}
-	for _, project := range registry.Projects {
-		if project.ID == id {
-			return project.Docked
-		}
-	}
-	t.Fatalf("project %q missing from %s", id, configPath)
-	return false
 }
 
 func TestPaneInput_writesToStdin(t *testing.T) {

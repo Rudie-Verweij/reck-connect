@@ -31,8 +31,7 @@ import (
 // not try to push the local-mode list into it. Station-mode rejection
 // is at the HTTP boundary (here) rather than inside ReplaceProjects so
 // the manager stays mode-agnostic — local-call paths (config.Load,
-// AddProject, AddMetaProject) keep working the same way regardless of
-// mode.
+// AddProject) keep working the same way regardless of mode.
 //
 // Auth: the standard authMiddleware applies. When DAEMON_TOKEN is set
 // (production local-mode daemons spawned by the Satellite via Phase 5's
@@ -49,19 +48,10 @@ import (
 // "generation" counter).
 func (s *Server) handlePutProjects(w nethttp.ResponseWriter, r *nethttp.Request) {
 	// Mode gate at the HTTP boundary. The manager stays mode-agnostic so
-	// the supervisor / config.Load / AddProject paths keep working in
-	// both modes; only the new RPC surface is mode-restricted.
+	// the config.Load / AddProject paths keep working in both modes;
+	// only the new RPC surface is mode-restricted.
 	if s.Manager.Mode() != agent.ModeLocal {
 		nethttp.Error(w, "PUT /projects not allowed in station mode (projects.toml is authoritative)", nethttp.StatusConflict)
-		return
-	}
-
-	// Supervisor never speaks this endpoint — the supervisor's scope is
-	// docked projects on the station, not the local-mode daemon's
-	// project map. Reject so a supervisor token can't accidentally
-	// repoint Claude spawn cwds.
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden: supervisor cannot replace projects", nethttp.StatusForbidden)
 		return
 	}
 

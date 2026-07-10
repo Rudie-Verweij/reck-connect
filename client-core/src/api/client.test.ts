@@ -57,13 +57,6 @@ describe("ApiClient", () => {
     expect(c.wsSubprotocols()).toEqual([]);
   });
 
-  it("missionControlWsUrl has no token in the URL either", () => {
-    const c = new ApiClient({ baseUrl: "http://host:7315", token: "abc" });
-    expect(c.missionControlWsUrl()).toBe("ws://host:7315/ws/mission-control");
-    expect(c.missionControlWsUrl()).not.toContain("token=");
-    expect(c.missionControlWsUrl()).not.toContain("abc");
-  });
-
   it("POSTs to /projects for createProject", async () => {
     const c = new ApiClient({ baseUrl: "http://x:7315" });
     let captured = { url: "", method: "", body: "" };

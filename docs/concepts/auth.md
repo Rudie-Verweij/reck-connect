@@ -49,21 +49,6 @@ Remote callers reaching the daemon over Tailscale still require the bearer even 
 
 Source: `daemon/internal/http/router.go:isAgentEventPath`, `isLoopbackAddr`, `authMiddleware`.
 
-## Supervisor bearer (Mission Control)
-
-Mission Control uses a **separate bearer token**, distinct from `DAEMON_TOKEN`. This supervisor token is:
-
-- Generated in-memory at `Controller` construction time (`crypto/rand`, 32 bytes → 64 hex chars).
-- Never persisted to disk. Rotates on every daemon restart.
-- Injected into the supervisor pane's environment via `RECK_SUPERVISOR_TOKEN`.
-- Used to authenticate the supervisor pane's own HTTP calls back to the daemon.
-
-The supervisor token gives narrowed scope: requests authenticated with it can only access docked projects and the supervisor's own meta-project (`__reck_supervisor__`). Standard project management operations (create, delete, dock, undock, rename) are explicitly forbidden for the supervisor actor.
-
-For details on what Mission Control is and what endpoints it exposes, see [mission-control.md](./mission-control.md).
-
-Source: `daemon/internal/supervisor/controller.go:generateToken`, `daemon/internal/http/router.go:SupervisorAuthenticator`.
-
 ## Token rotation
 
 To rotate `DAEMON_TOKEN`:
@@ -82,7 +67,6 @@ The auth middleware tags each authenticated request with an actor label on the r
 | Actor | How authenticated | Scope |
 |-------|------------------|-------|
 | `"main"` | `DAEMON_TOKEN` | Full access to all endpoints |
-| `"supervisor"` | Supervisor bearer | Docked projects + meta-project only; write operations restricted |
 | `""` (empty) | No token set | Full access — only used when `DAEMON_TOKEN` is unset (e.g. local mode on loopback) |
 
 Handlers read the actor via `ActorFromRequest(r)` and enforce scope restrictions at the handler level (not in the auth middleware).

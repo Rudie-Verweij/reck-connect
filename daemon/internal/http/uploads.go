@@ -200,19 +200,8 @@ func generateUploadFilename(ext string) (string, error) {
 //
 // On 200, response body is `{"path": "<abs-path>"}`. The caller types
 // this path into the PTY.
-//
-// Supervisor scope: uploads are rejected for supervisor-authenticated
-// callers — this endpoint is a human-driven paste surface; letting the
-// supervisor write arbitrary bytes to disk would widen its attack
-// surface without a compelling reason. Symmetric with the supervisor
-// carve-outs on /mission-control/chat etc.
 func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) {
 	paneID := chi.URLParam(r, "pane_id")
-	if ActorFromRequest(r) == "supervisor" {
-		slog.Info("upload_rejected", "pane", paneID, "reason", "supervisor")
-		nethttp.Error(w, "forbidden: supervisor cannot upload to panes", nethttp.StatusForbidden)
-		return
-	}
 	pane, ok := s.Manager.PaneByID(paneID)
 	if !ok {
 		slog.Info("upload_rejected", "pane", paneID, "reason", "pane_not_found")
@@ -466,9 +455,6 @@ func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) 
 //
 // Rejects with:
 //   - 401 — handled by authMiddleware upstream; never reaches here.
-//   - 403 — supervisor-authenticated caller. Mirrors the POST carve-out:
-//     uploads are a human-driven paste surface; the supervisor has no
-//     business enumerating them.
 //   - 404 — pane id doesn't correspond to a live pane.
 //   - 500 — tmpdir read failed for a reason other than "dir doesn't
 //     exist yet" (which collapses to a 200 with an empty list).
@@ -478,11 +464,6 @@ func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) 
 // `{"uploads": []}`, not a 404 — callers can treat it uniformly.
 func (s *Server) handleListPaneUploads(w nethttp.ResponseWriter, r *nethttp.Request) {
 	paneID := chi.URLParam(r, "pane_id")
-	if ActorFromRequest(r) == "supervisor" {
-		slog.Info("uploads_list_rejected", "pane", paneID, "reason", "supervisor")
-		nethttp.Error(w, "forbidden: supervisor cannot list pane uploads", nethttp.StatusForbidden)
-		return
-	}
 	pane, ok := s.Manager.PaneByID(paneID)
 	if !ok {
 		nethttp.Error(w, "pane not found", nethttp.StatusNotFound)
@@ -591,4 +572,3 @@ func SweepStalePaneUploadDirs(liveIDs map[string]bool) {
 		slog.Info("upload sweep", "removed", removed)
 	}
 }
-

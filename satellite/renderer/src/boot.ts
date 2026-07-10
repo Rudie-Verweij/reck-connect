@@ -44,7 +44,6 @@ import {
 import { HoverFocusController } from "./ui/hover-focus-controller";
 import { StatusBar } from "./ui/status-bar";
 import { deriveConnectionReason, type TailscaleVerdict } from "./ui/connection-reason";
-import { MissionControl } from "./ui/mission-control";
 import {
   askPaneKind,
   confirmDialog,
@@ -746,16 +745,6 @@ export async function boot(splash?: StartupSplashController) {
         console.error("openPath failed:", res.error);
       }
     },
-    onSelectMissionControl: () => void showMissionControl(),
-    onToggleDock: async (projectId, docked) => {
-      try {
-        if (docked) await client.dockProject(projectId);
-        else await client.undockProject(projectId);
-      } catch (e) {
-        console.error("dock toggle failed", e);
-      }
-      // Next poll picks up the new `docked` flag and the rail re-renders.
-    },
     onToggleArchive: async (projectId, archived) => {
       if (!archived) {
         // Unarchive (menu "Unarchive" or drag-out) goes through the same
@@ -793,69 +782,6 @@ export async function boot(splash?: StartupSplashController) {
       return allTabs(tree).map((t) => t.paneId);
     },
   });
-
-  // Mission Control view. Lazily constructed on first activation —
-  // keeps the terminal widget (heavy) out of initial boot.
-  let missionControl: MissionControl | null = null;
-  let missionControlActive = false;
-
-  async function showMissionControl() {
-    rail.select(null);
-    rail.setMissionControlSelected(true);
-    currentProjectId = null;
-    if (!missionControl) {
-      // Phase 11: MC accepts per-host clients and merges cards. Local is
-      // always populated ; station is included when the
-      // user has it enabled. The MC constructor asserts at least one is
-      // set, which `local` always satisfies.
-      const mcClients: { station?: typeof client; local?: typeof client } = {
-        local: apiForHost("local"),
-      };
-      if (settings!.station?.enabled) mcClients.station = apiForHost("station");
-      missionControl = new MissionControl({
-        root: rightPane,
-        clients: mcClients,
-        theme: theme === "light" ? "light" : "dark",
-        onOpenProject: (projectId) => {
-          void selectProject(projectId);
-        },
-        onUndockProject: (projectId) => {
-          // Fire undock at every enabled host. Hybrid mode: a project
-          // may live on only one host, so the others reply 404 — fine
-          // to swallow. The next /projects poll on each host syncs the
-          // rail's per-host docked flag, and MC's MCStateMessage feed
-          // re-renders without the card.
-          const targets: HostRef[] = mcClients.station ? ["station", "local"] : ["local"];
-          for (const host of targets) {
-            void apiForHost(host)
-              .undockProject(projectId)
-              .catch((err) => {
-                // 404 = project isn't on this host; expected in hybrid setups.
-                if (err?.status !== 404) {
-                  console.error(`undock ${projectId} on ${host} failed`, err);
-                }
-              });
-          }
-        },
-        onAggregateChange: (stoplight) => {
-          rail.setMissionControlLight(stoplight);
-        },
-      });
-    }
-    // Hide the normal pane-layout root while MC owns the right side.
-    layoutRoot.style.display = "none";
-    missionControlActive = true;
-    await missionControl.show();
-    renderStatus();
-  }
-
-  function hideMissionControl() {
-    if (!missionControlActive) return;
-    missionControl?.hide();
-    missionControlActive = false;
-    rail.setMissionControlSelected(false);
-    layoutRoot.style.display = "";
-  }
 
   window.reckAPI.onMenuAddProject(() => void handleAddProject());
   // Phase 12: the "Preferences…" menu item hands control to the
@@ -2156,7 +2082,6 @@ export async function boot(splash?: StartupSplashController) {
   }
 
   async function selectProject(projectId: string) {
-    if (missionControlActive) hideMissionControl();
     if (currentProjectId === projectId) return;
 
     // Cancel any in-flight fetch from the prior selection; reserve a
@@ -2251,7 +2176,7 @@ export async function boot(splash?: StartupSplashController) {
             // the primary host, but a phantom-spawn vector here. A
             // station-resident project always reads as "empty" on local
             // (panes live elsewhere), so without `autoSpawn: false`
-            // every Mission Control roundtrip leaks a fresh local
+            // every secondary-host roundtrip leaks a fresh local
             // Claude pane. Reconcile Pass 3 then surfaces it as a tab.
             const detail = await apiForHost(h).getProject(projectId, {
               autoSpawn: false,
@@ -2707,10 +2632,10 @@ export async function boot(splash?: StartupSplashController) {
   // accessed by host. Phase 4 keeps the single-display status bar:
   // we wire `connInfo` from the *primary* host's events
   // (`derivedMode`-resolved, currently station-if-enabled-else-local)
-  // until Phase 11 extends the status bar / Mission Control to
-  // surface both hosts. Local's events still run through the registry
-  // so Phase 9 (project-list push) and Phase 11 (UI aggregation)
-  // plug in without a second rewrite.
+  // until a later phase extends the status bar to surface both
+  // hosts. Local's events still run through the registry so Phase 9
+  // (project-list push) and later UI aggregation plug in without a
+  // second rewrite.
   // Drives the startup splash off the real boot pipeline. Dismissed
   // once the first project is rendered — or shortly after, if there
   // are none / the daemon is unreachable. We don't want to trap the
@@ -2740,7 +2665,7 @@ export async function boot(splash?: StartupSplashController) {
       renderStatus();
     },
     onResult: async (projects, { firstSuccess, firstNonEmpty }) => {
-      if (!currentProjectId && !missionControlActive && projects.length > 0) {
+      if (!currentProjectId && projects.length > 0) {
         if (firstNonEmpty) splash?.step("layout");
         await selectProject(projects[0].id);
       }
@@ -2869,9 +2794,9 @@ export async function boot(splash?: StartupSplashController) {
       }
       // Phase 4: status bar is still single-display. Forward only
       // the primary host's info (matches the existing CONN dot
-      // semantics). Phase 11 (Mission Control aggregation) will
-      // extend the status bar to surface both hosts; until then
-      // local's info is consumed by the registry but not surfaced.
+      // semantics). A later phase may extend the status bar to
+      // surface both hosts; until then local's info is consumed by
+      // the registry but not surfaced.
       if (host !== primaryHost) return;
       connInfo = info;
       // When the station goes unreachable (not a token problem), probe

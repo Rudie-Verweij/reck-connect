@@ -88,8 +88,8 @@ const DefaultProbeConcurrency = 16
 // available", "the probe finished and the mount is NOT available
 // (stat error, timeout)", and "the probe was aborted before it could
 // give an answer (context cancelled / shutdown)". The third case is
-// a no-op for `apply` so shutdown doesn't trigger red transitions +
-// supervisor alerts on healthy panes (codex round-8 finding 15).
+// a no-op for `apply` so shutdown doesn't trigger red transitions
+// on healthy panes (codex round-8 finding 15).
 type probeResult int
 
 const (
@@ -219,8 +219,8 @@ func (w *Watcher) Tick() {
 //     targets (handful per user) this is effectively one timeout.
 //   - Cancellation mid-probe does NOT mutate pane state — a
 //     probeAborted result short-circuits without calling `apply`
-//     so shutdown can't drive false red transitions + supervisor
-//     alerts on healthy panes (codex round-8 finding 15).
+//     so shutdown can't drive false red transitions on healthy
+//     panes (codex round-8 finding 15).
 //   - The spawned stat goroutine leaks if the kernel keeps blocking,
 //     but that's bounded to one leaked goroutine per bad pane per
 //     tick; the pane stays pinned on repeat ticks if the mount

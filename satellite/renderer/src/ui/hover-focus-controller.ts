@@ -10,7 +10,7 @@
  *
  * This controller centralizes the invariants that gate hover-focus.
  * Each gate lives in one place so they're testable in isolation and
- * future additions (e.g. "suppress while Mission Control is open")
+ * future additions (e.g. "suppress while some overlay is open")
  * plug into a single request path rather than the per-leaf listener.
  *
  * Gates (ALL must hold before `apply` fires):
@@ -211,17 +211,14 @@ export class HoverFocusController {
     });
 
     // MutationObserver on body to detect modal overlays
-    // (`.new-pane-dialog`, `.mission-control`) and rail context menus
+    // (`.new-pane-dialog`) and rail context menus
     // (`.rail-context-menu`). All existing dialogs share the
     // `new-pane-dialog` class (add-project, confirm-delete,
-    // token-prompt, claude-launch, new-pane, copy-progress, etc.);
-    // Mission Control is a full-viewport overlay with its own class
-    // and must also gate hover-focus so the cursor parked over a
-    // pane doesn't steal focus back out of the MC supervisor.
+    // token-prompt, claude-launch, new-pane, copy-progress, etc.).
     // Whenever a new modal class is introduced, add it to
     // MODAL_SELECTORS below — the observer's single recount pass
     // keeps the gate consistent.
-    const MODAL_SELECTORS = ".new-pane-dialog, .mission-control";
+    const MODAL_SELECTORS = ".new-pane-dialog";
     const recount = () => {
       const modal = documentRef.querySelector(MODAL_SELECTORS) !== null;
       const ctxMenu = documentRef.querySelector(".rail-context-menu") !== null;

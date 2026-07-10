@@ -54,21 +54,14 @@ Optional auth: `Authorization: Bearer <DAEMON_TOKEN>` — enforced if `DAEMON_TO
 | POST | `/projects` | `AddProjectRequest` | `AddProjectResponse` |
 | PUT | `/projects` | `PutProjectsRequest` (or bare `PutProjectsEntry[]`) | `PutProjectsResponse` (hybrid mode phase 8 — `--mode=local` only; 409 on station) |
 | DELETE | `/projects/:id` | — | `DeletePaneResponse` (reused — `{ok: true}`) |
-| POST | `/projects/:id/dock` | — | `DockProjectResponse` |
-| POST | `/projects/:id/undock` | — | `DockProjectResponse` |
 | GET | `/projects/:id/sessions` | — | `SessionsListResponse` (Claude-only; shell rows are filtered out server-side to keep the legacy resume-picker contract stable — see "Capability negotiation" below) |
 | POST | `/projects/:id/sessions/dismiss` | `DismissSessionsRequest` | `DismissSessionsResponse` |
 | GET | `/restore-candidates[?kinds=claude,shell]` | — | `RestoreCandidatesResponse` |
-| GET | `/mission-control/state` | — | `MissionControlStateResponse` |
-| GET | `/mission-control/history` | — | `MissionControlHistoryResponse` |
-| POST | `/mission-control/chat` | `MissionControlChatRequest` | `{ok, pane_id}` |
-| POST | `/mission-control/reset` | — | `{ok}` |
 | POST | `/panes/:pane_id/input` | `{text, submit?}` | `{ok, bytes}` |
 | GET | `/panes/:pane_id/output?bytes=N` | — | `{pane_id, agent_state, bytes, text}` |
 | POST | `/panes/:pane_id/uploads` | `multipart/form-data` with `file` field | `PaneUploadResponse` |
 | GET | `/panes/:pane_id/uploads` | — | `PaneUploadsListResponse` |
 | POST | `/panes/:pane_id/clipboard-image` | raw image bytes; `Content-Type: image/png\|jpeg\|webp\|gif` | `{ok}` (200), 415 (unsupported MIME), 413 (too large), or 500 (NSPasteboard write failed). A later release retired the sidecar; the previous 503 fallback is gone — non-200 means renderer should fall back to the `/uploads` path. |
-| WS | `/ws/mission-control` | — | `MCStateMessage` stream |
 
 ### Response shapes
 
@@ -79,7 +72,7 @@ Optional auth: `Authorization: Bearer <DAEMON_TOKEN>` — enforced if `DAEMON_TO
 // makes this explicit so nobody switches the unit to nanoseconds
 // without reopening the drift discussion.
 interface HealthResponse { status: string; version: string; uptime_sec: number }
-interface Project { id: string; name: string; cwd: string; stoplight: Stoplight; pane_count: number; pane_stoplights?: Stoplight[]; pane_ids?: string[]; docked: boolean; archived?: boolean; display_name?: string; available?: boolean }
+interface Project { id: string; name: string; cwd: string; stoplight: Stoplight; pane_count: number; pane_stoplights?: Stoplight[]; pane_ids?: string[]; archived?: boolean; display_name?: string; available?: boolean }
 // pane_stoplights — per-pane effective stoplight list, ordered by pane
 // creation (same order as ProjectDetail.panes). Older daemons omit the
 // field; clients fall back to broadcasting `stoplight` across
@@ -165,37 +158,7 @@ interface RestoreCandidatesResponse { candidates: RestoreCandidateGroup[] }
 interface DismissSessionsRequest { session_ids: string[] }   // identity values: Claude SessionID or shell SlotID
 interface DismissSessionsResponse { dismissed: number }
 
-// --- Mission Control ---
-interface DockProjectResponse { docked: boolean }
 interface ArchiveProjectResponse { archived: boolean }
-interface MissionControlPane {
-  pane_id: string;
-  kind: PaneKind;
-  agent_state: AgentState;
-  stoplight: Stoplight;
-  session_name?: string;
-}
-interface MissionControlCard {
-  project_id: string;
-  project_name: string;
-  cwd: string;
-  stoplight: Stoplight;
-  pane_count: number;
-  panes: MissionControlPane[];
-}
-interface MissionControlStateResponse {
-  cards: MissionControlCard[];
-  supervisor_online: boolean;
-}
-interface MissionControlChatRequest { message: string }
-interface MissionControlChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  created_at: string; // RFC3339
-}
-interface MissionControlHistoryResponse { messages: MissionControlChatMessage[] }
-interface MCStateMessage { type: "state"; state: MissionControlStateResponse }
 
 // --- Image-paste uploads ---
 // POST /panes/:pane_id/uploads — multipart/form-data with one `file`
@@ -209,7 +172,7 @@ interface MCStateMessage { type: "state"; state: MissionControlStateResponse }
 interface PaneUploadResponse { path: string }
 
 // GET /panes/:pane_id/uploads — lists images currently staged in the
-// pane's tmpdir. Same auth + supervisor carve-out as the POST. Empty
+// pane's tmpdir. Same auth as the POST. Empty
 // list when the pane has never received a successful upload (200, not
 // 404). Ordered newest-first by mod_time.
 interface PaneUpload { path: string; size_bytes: number; mod_time: string }

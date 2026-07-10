@@ -33,10 +33,9 @@ Reck Connect is a station/satellite dev environment: a powerful Mac runs `reck-s
 | Page | Description |
 |---|---|
 | [concepts/protocol.md](./concepts/protocol.md) | HTTP + WebSocket wire protocol reference |
-| [concepts/auth.md](./concepts/auth.md) | DAEMON_TOKEN, loopback exemption, supervisor token |
+| [concepts/auth.md](./concepts/auth.md) | DAEMON_TOKEN, loopback exemption |
 | [concepts/stoplight.md](./concepts/stoplight.md) | Per-pane stoplight state machine |
 | [concepts/hook-shims.md](./concepts/hook-shims.md) | Claude Code lifecycle hook installation and event flow |
-| [concepts/mission-control.md](./concepts/mission-control.md) | Mission Control supervisor meta-pane |
 | [concepts/behaviors.md](./concepts/behaviors.md) | Intentional design behaviors and known quirks |
 
 ### DevOps & support

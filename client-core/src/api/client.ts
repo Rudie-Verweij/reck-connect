@@ -15,11 +15,7 @@ import type {
   RestoreCandidatesResponse,
   DismissSessionsRequest,
   DismissSessionsResponse,
-  DockProjectResponse,
   ArchiveProjectResponse,
-  MissionControlStateResponse,
-  MissionControlHistoryResponse,
-  MissionControlChatRequest,
   PaneUploadResponse,
   RenameRequest,
 } from "@proto/proto";
@@ -147,7 +143,7 @@ export class ApiClient {
    * side-effect — useful as new-project UX on the primary host, but
    * actively wrong for secondary-host fetches in hybrid mode (issue
    * An earlier release: the bare GET on a station-resident project's local row spawns
-   * a phantom Claude pane on every Mission Control roundtrip). Pass
+   * a phantom Claude pane on every secondary-host roundtrip). Pass
    * `autoSpawn: false` for read-only secondary fetches; the default
    * (omitted, server-side `true`) preserves the starter-pane UX.
    *
@@ -346,13 +342,6 @@ export class ApiClient {
     return `${base}/ws/${encodeURIComponent(projectId)}/${encodeURIComponent(paneId)}`;
   }
 
-  dockProject(projectId: string) {
-    return this.fetch<DockProjectResponse>(
-      `/projects/${encodeURIComponent(projectId)}/dock`,
-      { method: "POST" },
-    );
-  }
-
   renameProject(projectId: string, displayName: string) {
     const body: RenameRequest = { display_name: displayName };
     return this.fetch<RenameRequest>(
@@ -366,13 +355,6 @@ export class ApiClient {
     return this.fetch<RenameRequest>(
       `/projects/${encodeURIComponent(projectId)}/panes/${encodeURIComponent(paneId)}/rename`,
       { method: "POST", body: JSON.stringify(body) },
-    );
-  }
-
-  undockProject(projectId: string) {
-    return this.fetch<DockProjectResponse>(
-      `/projects/${encodeURIComponent(projectId)}/undock`,
-      { method: "POST" },
     );
   }
 
@@ -518,36 +500,6 @@ export class ApiClient {
       throw new HttpError(res.status, res.statusText, await res.text());
     }
     return true;
-  }
-
-  missionControlState() {
-    return this.fetch<MissionControlStateResponse>("/mission-control/state");
-  }
-
-  missionControlHistory() {
-    return this.fetch<MissionControlHistoryResponse>("/mission-control/history");
-  }
-
-  missionControlChat(message: string) {
-    const body: MissionControlChatRequest = { message };
-    return this.fetch<{ ok: boolean; pane_id?: string }>("/mission-control/chat", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-  }
-
-  missionControlReset() {
-    return this.fetch<{ ok: boolean }>("/mission-control/reset", { method: "POST" });
-  }
-
-  /**
-   * URL for the Mission Control state WebSocket. See `wsUrl` for the
-   * rationale on why the token is not on the URL. Pair with
-   * `wsSubprotocols()` at the `new WebSocket(...)` call site.
-   */
-  missionControlWsUrl(): string {
-    const base = this.config.baseUrl.replace(/^http/, "ws");
-    return `${base}/ws/mission-control`;
   }
 
   /**

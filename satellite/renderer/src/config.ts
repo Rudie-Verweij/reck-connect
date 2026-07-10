@@ -338,8 +338,7 @@ const DEFAULT_LOCAL_PORT = 7315;
  * Reduce the new `Settings` shape to the single `HostRef` the
  * surfaces that still ask "which one is this?" care about —
  * primarily `MountHint` (only station-primary arms the CONN-driven
- * mount yellow), the primary-host status-bar, and the MC
- * supervisor-controls routing.
+ * mount yellow) and the primary-host status-bar.
  *
  * Resolution order:
  *   1. station enabled → "station". Station-aware behaviours apply.

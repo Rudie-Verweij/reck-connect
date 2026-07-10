@@ -15,7 +15,7 @@ Response is best-effort. You will get an acknowledgement within a week.
 
 ## What is in scope
 
-- The Go daemon (`daemon/`), specifically: HTTP / WebSocket auth, PTY isolation, hook shim auth, supervisor token boundaries, mount path validation.
+- The Go daemon (`daemon/`), specifically: HTTP / WebSocket auth, PTY isolation, hook shim auth, mount path validation.
 - The Electron satellite (`satellite/`): IPC surface (preload), bootstrap import path, token storage (safeStorage), URL allow-listing.
 - The install scripts (`ops/`): privilege escalation paths, public-key handling, file-permission hygiene.
 

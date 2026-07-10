@@ -231,8 +231,8 @@ func TestWatcher_stuckStatDoesNotBlockLaterPanes(t *testing.T) {
 }
 
 // Codex round-8 finding 15: cancellation mid-probe must NOT drive
-// apply(false), which would emit a red transition + supervisor
-// alerts on healthy panes during shutdown. This test spawns a probe
+// apply(false), which would emit a red transition on healthy panes
+// during shutdown. This test spawns a probe
 // whose statFn blocks; cancels the context; asserts the pane's
 // cwdAvailable is unchanged (still true).
 func TestWatcher_ctxCancelDuringProbeDoesNotMutatePane(t *testing.T) {

@@ -9,7 +9,6 @@ function mk(over: Partial<Project>): Project {
     cwd: "/",
     stoplight: "gray",
     pane_count: 0,
-    docked: false,
     ...over,
   };
 }

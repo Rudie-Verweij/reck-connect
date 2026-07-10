@@ -9,15 +9,13 @@ export interface RailProps {
   root: HTMLElement;
   onSelect: (projectId: string) => void;
   onAddProject: () => void;
-  onSelectMissionControl?: () => void;
   onRename?: (projectId: string, newName: string) => void;
   onReorder?: (newIds: string[]) => void;
   onRequestDelete?: (projectId: string, projectName: string) => void;
   onOpenInFinder?: (projectId: string) => void;
-  onToggleDock?: (projectId: string, docked: boolean) => void;
   /**
-   * Toggle a project's archived state. `archived` is the DESIRED new state
-   * (mirrors onToggleDock): true to archive, false to unarchive. Invoked
+   * Toggle a project's archived state. `archived` is the DESIRED new state:
+   * true to archive, false to unarchive. Invoked
    * from the context menu and from drag-into / drag-out-of the Archive
    * section. The confirm-before-restore prompt lives in the handler, not
    * here — the rail only reports intent.
@@ -48,7 +46,6 @@ interface RailRow {
   // pair — per-pane color makes a single aggregate insufficient.
   lastStoplightsKey: string;
   lastName: string;
-  lastDocked: boolean;
   lastArchived: boolean;
 }
 
@@ -195,10 +192,6 @@ export class Rail {
   constructor(private props: RailProps) {
     this.props.root.classList.add("rail");
     this.props.root.innerHTML = `
-      <div class="rail-mission-control" id="rail-mc" title="Mission Control — dashboard + supervisor across docked projects">
-        <span class="name">Mission Control</span>
-        <span class="dot gray" id="rail-mc-dot" aria-label="Docked-project health"></span>
-      </div>
       <div class="rail-header">Projects</div>
       <div class="rail-divider"></div>
       <div class="rail-list-scroll">
@@ -227,8 +220,6 @@ export class Rail {
     (this.props.root.querySelector("#rail-add") as HTMLElement).addEventListener("click", () =>
       this.props.onAddProject(),
     );
-    const mcEl = this.props.root.querySelector("#rail-mc") as HTMLElement;
-    mcEl.addEventListener("click", () => this.props.onSelectMissionControl?.());
     (this.props.root.querySelector("#rail-archive-header") as HTMLElement).addEventListener(
       "click",
       () => this.toggleArchiveCollapsed(),
@@ -247,17 +238,6 @@ export class Rail {
     });
     this.wireArchiveDropZone();
     this.wireActiveDropZone();
-  }
-
-  setMissionControlSelected(selected: boolean) {
-    const mcEl = this.props.root.querySelector("#rail-mc") as HTMLElement | null;
-    if (mcEl) mcEl.classList.toggle("selected", selected);
-  }
-
-  setMissionControlLight(stoplight: Stoplight) {
-    const dot = this.props.root.querySelector("#rail-mc-dot") as HTMLElement | null;
-    if (!dot) return;
-    dot.className = `dot ${stoplight}`;
   }
 
   setProjects(projects: Project[]) {
@@ -345,18 +325,12 @@ export class Rail {
       row.nameEl.textContent = p.name;
       row.lastName = p.name;
     }
-    if (row.lastDocked !== p.docked) {
-      row.el.classList.toggle("docked", p.docked);
-      row.lastDocked = p.docked;
-    }
     const archived = p.archived ?? false;
     if (row.lastArchived !== archived) {
       row.el.classList.toggle("archived", archived);
       row.lastArchived = archived;
     }
-    // Title reflects the current state (archived wins over docked).
     if (archived) row.el.title = "Archived — click to restore";
-    else if (p.docked) row.el.title = "Docked in Mission Control";
     else row.el.removeAttribute("title");
     row.el.classList.toggle("selected", p.id === this.currentSelected);
   }
@@ -420,11 +394,9 @@ export class Rail {
   private createRow(p: Project): RailRow {
     const archived = p.archived ?? false;
     const el = document.createElement("div");
-    el.className =
-      "rail-item" + (p.docked ? " docked" : "") + (archived ? " archived" : "");
+    el.className = "rail-item" + (archived ? " archived" : "");
     el.setAttribute("data-project-id", p.id);
     if (archived) el.title = "Archived — click to restore";
-    else if (p.docked) el.title = "Docked in Mission Control";
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = p.name;
@@ -442,15 +414,12 @@ export class Rail {
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       const row = this.rows.get(p.id);
-      const docked = row?.lastDocked ?? p.docked;
       const isArchived = row?.lastArchived ?? archived;
       const rowName = row?.lastName ?? p.name;
       showRailContextMenu(e.clientX, e.clientY, {
-        docked,
         archived: isArchived,
         onOpen: () => this.props.onOpenInFinder?.(p.id),
         onDelete: () => this.props.onRequestDelete?.(p.id, rowName),
-        onToggleDock: () => this.props.onToggleDock?.(p.id, !docked),
         onToggleArchive: () => this.props.onToggleArchive?.(p.id, !isArchived),
       });
     });
@@ -515,7 +484,6 @@ export class Rail {
       indicatorEl: indicator,
       lastStoplightsKey: initialStoplights.join(","),
       lastName: p.name,
-      lastDocked: p.docked,
       lastArchived: archived,
     };
   }
@@ -571,11 +539,9 @@ function showRailContextMenu(
   x: number,
   y: number,
   handlers: {
-    docked: boolean;
     archived: boolean;
     onOpen: () => void;
     onDelete: () => void;
-    onToggleDock: () => void;
     onToggleArchive: () => void;
   },
 ) {
@@ -586,13 +552,9 @@ function showRailContextMenu(
   menu.className = "rail-context-menu";
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
-  const dockLabel = handlers.docked
-    ? "Undock from Mission Control"
-    : "Dock in Mission Control";
   const archiveLabel = handlers.archived ? "Unarchive" : "Archive";
   menu.innerHTML = `
     <button type="button" data-action="open">Open in Finder</button>
-    <button type="button" data-action="dock">${dockLabel}</button>
     <button type="button" data-action="archive">${archiveLabel}</button>
     <button type="button" data-action="delete" class="danger">Delete Project…</button>
   `;
@@ -610,7 +572,6 @@ function showRailContextMenu(
   menu.addEventListener("click", (e) => {
     const action = (e.target as HTMLElement).dataset.action;
     if (action === "open") handlers.onOpen();
-    if (action === "dock") handlers.onToggleDock();
     if (action === "archive") handlers.onToggleArchive();
     if (action === "delete") handlers.onDelete();
     close();

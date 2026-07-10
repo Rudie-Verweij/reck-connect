@@ -35,14 +35,10 @@ type Project struct {
 	DefaultPane string   `toml:"default_pane"` // "claude" | "shell" | "codex"; defaults to "claude"
 	Shell       []string `toml:"shell"`        // defaults to [$SHELL, "-l"]
 	Preamble    string   `toml:"preamble"`     // optional; claude: --append-system-prompt, codex: -c developer_instructions
-	// Docked is true when this project opted into Mission Control.
-	// Persisted so dock state survives daemon restarts.
-	Docked bool `toml:"docked,omitempty"`
 	// Archived is true when the user put this project to sleep: its panes
 	// are killed to free RAM, but its session rows keep was_live=true so
 	// unarchive can respawn them. Persisted so archive survives daemon
-	// restarts. Distinct from Docked and from removal — archive never
-	// deletes the cwd.
+	// restarts. Distinct from removal — archive never deletes the cwd.
 	Archived bool `toml:"archived,omitempty"`
 	// DisplayName is the user-given override. Empty = no override;
 	// callers render Name. Persisted here so it survives restart and is
@@ -78,7 +74,7 @@ var idRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 //     project that omitted `shell`. The fix is "resolve shell BEFORE
 //     Load, pass the resolved path into Load".
 //   - Load has many internal re-read callers (AppendProject, RemoveProject,
-//     SetProjectDocked, SetProjectDisplayName) that each re-invoke
+//     SetProjectDisplayName) that each re-invoke
 //     Load(path) to read-modify-write. Changing Load's signature forces
 //     every one of those to thread the default through, and it's easy
 //     to miss one — especially one that only runs during a mutation,
@@ -245,9 +241,6 @@ func renderProjectBlock(w io.Writer, p Project) {
 			fmt.Fprintf(w, "preamble = %q\n", p.Preamble)
 		}
 	}
-	if p.Docked {
-		fmt.Fprintln(w, "docked = true")
-	}
 	if p.Archived {
 		fmt.Fprintln(w, "archived = true")
 	}
@@ -284,42 +277,10 @@ func AppendProject(path string, p Project) error {
 	return nil
 }
 
-// SetProjectDocked rewrites the registry file with the named project's
-// `docked` flag flipped to the given value. No-op (returns nil) when the
-// project is already in the requested state, or when it doesn't exist.
-// Any other project blocks are preserved verbatim via a full re-render.
-func SetProjectDocked(path string, id string, docked bool) error {
-	writerMu.Lock()
-	defer writerMu.Unlock()
-
-	current, _, err := Load(path)
-	if err != nil {
-		return err
-	}
-	if current == nil {
-		return nil
-	}
-	changed := false
-	for i := range current.Projects {
-		if current.Projects[i].ID == id {
-			if current.Projects[i].Docked == docked {
-				return nil
-			}
-			current.Projects[i].Docked = docked
-			changed = true
-			break
-		}
-	}
-	if !changed {
-		return nil
-	}
-	return writeAll(path, current.Projects)
-}
-
 // SetProjectArchived rewrites the registry file with the named project's
 // archived flag set to the given value. Idempotent — no-op when the project
-// is already in the requested state, or when it doesn't exist. Mirrors
-// SetProjectDocked.
+// is already in the requested state, or when it doesn't exist. Any other
+// project blocks are preserved verbatim via a full re-render.
 func SetProjectArchived(path string, id string, archived bool) error {
 	writerMu.Lock()
 	defer writerMu.Unlock()

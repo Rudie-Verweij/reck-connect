@@ -9,7 +9,7 @@ import (
 
 // TestSetProjectArchived_flipsFlagAndPersists walks a project through
 // archive → unarchive → archive and verifies both in-memory and on-disk
-// state round-trip cleanly (mirrors the docked flag).
+// state round-trip cleanly.
 func TestSetProjectArchived_flipsFlagAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	cwd := filepath.Join(dir, "p1")
@@ -59,8 +59,8 @@ func TestSetProjectArchived_flipsFlagAndPersists(t *testing.T) {
 	}
 }
 
-// TestSetProjectArchived_unknownProjectIsNoOp — unknown id is a nil no-op,
-// same as dock; defends against callers racing with RemoveProject.
+// TestSetProjectArchived_unknownProjectIsNoOp — unknown id is a nil no-op;
+// defends against callers racing with RemoveProject.
 func TestSetProjectArchived_unknownProjectIsNoOp(t *testing.T) {
 	path := writeTemp(t, "")
 	if err := SetProjectArchived(path, "nope", true); err != nil {
@@ -68,16 +68,17 @@ func TestSetProjectArchived_unknownProjectIsNoOp(t *testing.T) {
 	}
 }
 
-// TestSetProjectArchived_independentOfDocked — the archived flag and the
-// docked flag are orthogonal; setting one must not disturb the other.
-func TestSetProjectArchived_independentOfDocked(t *testing.T) {
+// TestSetProjectArchived_preservesOtherFields — the archived flag is
+// orthogonal to the other persisted fields; setting it must not disturb
+// them when the file round-trips.
+func TestSetProjectArchived_preservesOtherFields(t *testing.T) {
 	dir := t.TempDir()
 	cwd := filepath.Join(dir, "p1")
 	if err := os.Mkdir(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	path := writeTemp(t, "")
-	if err := AppendProject(path, Project{ID: "p1", Name: "P1", Cwd: cwd, Docked: true}); err != nil {
+	if err := AppendProject(path, Project{ID: "p1", Name: "P1", Cwd: cwd, DisplayName: "P1 Label"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := SetProjectArchived(path, "p1", true); err != nil {
@@ -87,7 +88,7 @@ func TestSetProjectArchived_independentOfDocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reg.Projects[0].Docked || !reg.Projects[0].Archived {
-		t.Fatalf("expected both Docked and Archived true, got %+v", reg.Projects[0])
+	if reg.Projects[0].DisplayName != "P1 Label" || !reg.Projects[0].Archived {
+		t.Fatalf("expected DisplayName preserved and Archived true, got %+v", reg.Projects[0])
 	}
 }

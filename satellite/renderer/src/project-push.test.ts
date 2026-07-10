@@ -25,7 +25,6 @@ function mkProject(id: string, cwd: string): Project {
     cwd,
     stoplight: "gray",
     pane_count: 0,
-    docked: false,
   };
 }
 
@@ -271,7 +270,6 @@ describe("pushStationProjectsToLocal", () => {
       cwd: "/Users/reck-connect/projects/alpha",
       stoplight: "gray",
       pane_count: 0,
-      docked: false,
     },
   ];
 
@@ -309,7 +307,6 @@ describe("pushStationProjectsToLocal", () => {
         cwd: "/Users/reck-connect/projects/beta",
         stoplight: "gray",
         pane_count: 0,
-        docked: false,
       },
     ];
     await h.invoke(updated);
@@ -444,7 +441,6 @@ describe("pushStationProjectsToLocal", () => {
         cwd: "/Users/reck-connect/elsewhere/custom",
         stoplight: "gray",
         pane_count: 0,
-        docked: false,
       },
     ];
     const h = harness(customCwd);

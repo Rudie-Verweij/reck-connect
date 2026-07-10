@@ -495,32 +495,3 @@ func TestPutProjects_concurrentSerialize(t *testing.T) {
 		t.Fatalf("final state %v matches no input payload — interleaved replace?", gotIDs)
 	}
 }
-
-// TestPutProjects_supervisorRejected: the supervisor token must NOT be
-// allowed to redirect Claude pane spawn cwds. We register a fake
-// supervisor authenticator and confirm a 403.
-func TestPutProjects_supervisorRejected(t *testing.T) {
-	t.Setenv("DAEMON_TOKEN", "main-token")
-	s, _ := newLocalServer(t)
-	s.SupervisorAuth = stubSupervisor{token: "supervisor-token"}
-	srv := httptest.NewServer(newTestHandler(t, s))
-	defer srv.Close()
-
-	resp, err := nethttp.DefaultClient.Do(putReq(t, srv.URL+"/projects", []byte("[]"), "supervisor-token"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != nethttp.StatusForbidden {
-		raw, _ := io.ReadAll(resp.Body)
-		t.Fatalf("supervisor PUT: status=%d, want 403; body=%q", resp.StatusCode, string(raw))
-	}
-}
-
-// stubSupervisor is the smallest SupervisorAuthenticator satisfying the
-// interface for the supervisor-rejection test.
-type stubSupervisor struct{ token string }
-
-func (s stubSupervisor) CheckToken(b string) bool          { return b == s.token }
-func (s stubSupervisor) IsProjectAccessible(_ string) bool { return true }
-func (s stubSupervisor) IsPaneAccessible(_ string) bool    { return true }

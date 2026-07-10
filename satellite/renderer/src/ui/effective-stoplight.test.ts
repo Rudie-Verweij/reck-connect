@@ -10,7 +10,6 @@ function mkProject(overrides: Partial<Project> = {}): Project {
     stoplight: "gray",
     pane_count: 0,
     pane_stoplights: [],
-    docked: false,
     ...overrides,
   };
 }
@@ -91,7 +90,6 @@ describe("effectiveStoplight", () => {
       cwd: "/tmp/p1",
       stoplight: "green",
       pane_count: 2,
-      docked: false,
     };
     const out = effectiveStoplight(p, false);
     expect(out.stoplight).toBe("gray");

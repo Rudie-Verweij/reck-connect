@@ -78,20 +78,12 @@ func ApplyTimeouts(srv *nethttp.Server) {
 type Server struct {
 	Manager   *pty.Manager
 	WS        *ws.Handler
-	MC        MissionControlHandler // optional; nil-safe — MC endpoints omitted when unset
 	StartedAt time.Time
 	Version   string
 	// CodexAvailable mirrors whether the daemon resolved a codex binary at
 	// startup; surfaced on /health so the Satellite can gate the "Codex"
 	// new-pane button. Set from len(codexCmd) > 0 in main.
 	CodexAvailable bool
-	// SupervisorAuth, when non-nil, enables a second bearer token that
-	// identifies the Mission Control supervisor pane. The supervisor
-	// token lets a pane child authenticate to the daemon without the
-	// main DAEMON_TOKEN being in its environment. Requests authenticated
-	// with the supervisor token have their scope narrowed at the handler
-	// level (only docked projects + the supervisor's own meta-project).
-	SupervisorAuth SupervisorAuthenticator
 	// ClipboardWriter, when non-nil, replaces the default
 	// macclipboard.WriteImage call inside handleClipboardImage. Tests
 	// stub this so they don't need a real Aqua session; production
@@ -122,37 +114,6 @@ func (s *Server) hookNonceStore() *NonceStore {
 	return s.HookNonceStore
 }
 
-// SupervisorAuthenticator validates the Mission Control supervisor's
-// bearer token and answers scope questions for requests that carry it.
-// Implemented by the supervisor package; nil when MC is disabled.
-type SupervisorAuthenticator interface {
-	// CheckToken reports whether the given bearer (raw, without the
-	// "Bearer " prefix) is the current supervisor token. Implementations
-	// must use constant-time comparison.
-	CheckToken(bearer string) bool
-	// IsProjectAccessible reports whether the supervisor is permitted to
-	// act on the given project. True for docked projects and the
-	// supervisor's own meta-project; false otherwise (including unknown
-	// project ids).
-	IsProjectAccessible(projectID string) bool
-	// IsPaneAccessible reports whether the supervisor is permitted to
-	// act on the given pane. True iff the pane's project is accessible
-	// per IsProjectAccessible.
-	IsPaneAccessible(paneID string) bool
-}
-
-// MissionControlHandler abstracts the supervisor-agent surface so the HTTP
-// router doesn't import the supervisor package (which carries the Anthropic
-// SDK). The daemon cmd wires it up; tests can omit it.
-type MissionControlHandler interface {
-	ServeState(w nethttp.ResponseWriter, r *nethttp.Request)
-	ServeHistory(w nethttp.ResponseWriter, r *nethttp.Request)
-	ServeChat(w nethttp.ResponseWriter, r *nethttp.Request)
-	ServeReset(w nethttp.ResponseWriter, r *nethttp.Request)
-	ServeWS(w nethttp.ResponseWriter, r *nethttp.Request)
-	NotifyStateChanged()
-}
-
 // Router returns the chi mux.
 func (s *Server) Router() *chi.Mux {
 	r := chi.NewRouter()
@@ -169,8 +130,6 @@ func (s *Server) Router() *chi.Mux {
 	r.Put("/projects", s.handlePutProjects)
 	r.Delete("/projects/{id}", s.handleDeleteProject)
 	r.Get("/projects/{id}", s.handleProjectDetail)
-	r.Post("/projects/{id}/dock", s.handleDockProject)
-	r.Post("/projects/{id}/undock", s.handleUndockProject)
 	r.Post("/projects/{id}/archive", s.handleArchiveProject)
 	r.Post("/projects/{id}/unarchive", s.handleUnarchiveProject)
 	r.Post("/projects/{id}/rename", s.handleRenameProject)
@@ -191,7 +150,7 @@ func (s *Server) Router() *chi.Mux {
 	// loopback exemption.
 	r.Post("/panes/{pane_id}/uploads", s.handlePaneUpload)
 	// GET companion — lists images currently staged in the pane's
-	// tmpdir. Shares auth + supervisor carve-outs with the POST above.
+	// tmpdir. Shares auth with the POST above.
 	// Primary consumer is test tooling (and a potential future UI
 	// showing "recent paste history"); no live renderer logic depends
 	// on it yet.
@@ -204,13 +163,6 @@ func (s *Server) Router() *chi.Mux {
 	// falls back to the /uploads path above on any 5xx.
 	r.Post("/panes/{pane_id}/clipboard-image", s.handleClipboardImage)
 	r.HandleFunc("/ws/{id}/{pane_id}", s.handleWS)
-	if s.MC != nil {
-		r.Get("/mission-control/state", s.handleMCState)
-		r.Get("/mission-control/history", s.handleMCHistory)
-		r.Post("/mission-control/chat", s.handleMCChat)
-		r.Post("/mission-control/reset", s.handleMCReset)
-		r.HandleFunc("/ws/mission-control", s.handleMCWS)
-	}
 	return r
 }
 
@@ -235,19 +187,8 @@ func corsMiddleware(next nethttp.Handler) nethttp.Handler {
 type ctxKey string
 
 const (
-	ctxActor         ctxKey = "actor"          // "main" (DAEMON_TOKEN) | "supervisor" | ""
 	ctxWSSubprotocol ctxKey = "ws_subprotocol" // bearer subprotocol offered by the client (must be echoed on accept)
 )
-
-// ActorFromRequest returns "main", "supervisor", or "" for the
-// authenticated actor behind a request. Handlers use this to apply
-// scope restrictions to supervisor-authenticated requests.
-func ActorFromRequest(r *nethttp.Request) string {
-	if v, _ := r.Context().Value(ctxActor).(string); v != "" {
-		return v
-	}
-	return ""
-}
 
 // WSBearerSubprotocol is the Sec-WebSocket-Protocol subprotocol name used to
 // ferry the bearer token through a browser WebSocket upgrade. Browsers can
@@ -355,27 +296,13 @@ func (s *Server) authMiddleware(next nethttp.Handler) nethttp.Handler {
 				offeredSubprotocol = offered
 			}
 		}
-		// Try the main bearer first.
 		if subtle.ConstantTimeCompare([]byte(h), expected) == 1 {
-			ctx := context.WithValue(r.Context(), ctxActor, "main")
+			ctx := r.Context()
 			if offeredSubprotocol != "" {
 				ctx = context.WithValue(ctx, ctxWSSubprotocol, offeredSubprotocol)
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
-		}
-		// Fall back to the supervisor token, if registered. Scope is
-		// enforced at handler level (docked projects + meta only).
-		if s.SupervisorAuth != nil && strings.HasPrefix(h, "Bearer ") {
-			raw := strings.TrimPrefix(h, "Bearer ")
-			if s.SupervisorAuth.CheckToken(raw) {
-				ctx := context.WithValue(r.Context(), ctxActor, "supervisor")
-				if offeredSubprotocol != "" {
-					ctx = context.WithValue(ctx, ctxWSSubprotocol, offeredSubprotocol)
-				}
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
 		}
 		slog.Info("auth rejected", "path", r.URL.Path, "remote", r.RemoteAddr)
 		nethttp.Error(w, "unauthorized", nethttp.StatusUnauthorized)
@@ -392,35 +319,6 @@ func WSSubprotocolFromRequest(r *nethttp.Request) string {
 		return v
 	}
 	return ""
-}
-
-// requireSupervisorProjectScope returns nethttp.StatusForbidden if the
-// request is authenticated as the supervisor and the target project is
-// not in its accessible scope. Safe to call for non-supervisor requests
-// (returns false, no status written). Returns true when the caller should
-// stop handling the request.
-func (s *Server) rejectSupervisorOutOfScope(w nethttp.ResponseWriter, r *nethttp.Request, projectID string) bool {
-	if ActorFromRequest(r) != "supervisor" {
-		return false
-	}
-	if s.SupervisorAuth == nil || !s.SupervisorAuth.IsProjectAccessible(projectID) {
-		nethttp.Error(w, "forbidden: project not accessible to supervisor", nethttp.StatusForbidden)
-		return true
-	}
-	return false
-}
-
-// rejectSupervisorPaneOutOfScope is the per-pane variant; used on
-// /panes/:pane_id/... routes where the pane id is the only routing key.
-func (s *Server) rejectSupervisorPaneOutOfScope(w nethttp.ResponseWriter, r *nethttp.Request, paneID string) bool {
-	if ActorFromRequest(r) != "supervisor" {
-		return false
-	}
-	if s.SupervisorAuth == nil || !s.SupervisorAuth.IsPaneAccessible(paneID) {
-		nethttp.Error(w, "forbidden: pane not accessible to supervisor", nethttp.StatusForbidden)
-		return true
-	}
-	return false
 }
 
 func isAgentEventPath(p string) bool {
@@ -469,9 +367,6 @@ func (s *Server) handleProjects(w nethttp.ResponseWriter, r *nethttp.Request) {
 
 func (s *Server) handleProjectDetail(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := chi.URLParam(r, "id")
-	if s.rejectSupervisorOutOfScope(w, r, id) {
-		return
-	}
 	// an earlier release: hybrid mode's selectProject fetches /projects/:id from
 	// every enabled host so reconcile can rebind tabs across station +
 	// local. The original auto-spawn-on-empty behaviour (kept for the
@@ -516,9 +411,6 @@ func (s *Server) handleProjectDetail(w nethttp.ResponseWriter, r *nethttp.Reques
 
 func (s *Server) handleCreatePane(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := chi.URLParam(r, "id")
-	if s.rejectSupervisorOutOfScope(w, r, id) {
-		return
-	}
 	var req proto.CreatePaneRequest
 	if err := decodeJSONBody(w, r, maxJSONBody, &req); err != nil {
 		return
@@ -577,9 +469,6 @@ func (s *Server) handleCreatePane(w nethttp.ResponseWriter, r *nethttp.Request) 
 // (Codex HIGH #3.)
 func (s *Server) handleListSessions(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := chi.URLParam(r, "id")
-	if s.rejectSupervisorOutOfScope(w, r, id) {
-		return
-	}
 	if !s.Manager.ProjectExists(id) {
 		nethttp.Error(w, "project not found", nethttp.StatusNotFound)
 		return
@@ -747,9 +636,6 @@ func parseAcceptedKinds(param string) map[proto.PaneKind]bool {
 // prompt so subsequent reconnects don't re-prompt for the same ones.
 func (s *Server) handleDismissSessions(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := chi.URLParam(r, "id")
-	if s.rejectSupervisorOutOfScope(w, r, id) {
-		return
-	}
 	if !s.Manager.ProjectExists(id) {
 		nethttp.Error(w, "project not found", nethttp.StatusNotFound)
 		return
@@ -777,9 +663,6 @@ func (s *Server) handleDismissSessions(w nethttp.ResponseWriter, r *nethttp.Requ
 func (s *Server) handleDeletePane(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := chi.URLParam(r, "id")
 	paneID := chi.URLParam(r, "pane_id")
-	if s.rejectSupervisorOutOfScope(w, r, id) {
-		return
-	}
 	if err := s.Manager.DeletePane(id, paneID); err != nil {
 		nethttp.Error(w, err.Error(), nethttp.StatusNotFound)
 		return
@@ -788,13 +671,6 @@ func (s *Server) handleDeletePane(w nethttp.ResponseWriter, r *nethttp.Request) 
 }
 
 func (s *Server) handleCreateProject(w nethttp.ResponseWriter, r *nethttp.Request) {
-	// Project creation is a main-actor-only operation — the supervisor
-	// can observe and dispatch within docked projects but never register
-	// new ones.
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden: supervisor cannot create projects", nethttp.StatusForbidden)
-		return
-	}
 	var req proto.AddProjectRequest
 	if err := decodeJSONBody(w, r, maxJSONBody, &req); err != nil {
 		return
@@ -835,13 +711,6 @@ func (s *Server) handleCreateProject(w nethttp.ResponseWriter, r *nethttp.Reques
 }
 
 func (s *Server) handleDeleteProject(w nethttp.ResponseWriter, r *nethttp.Request) {
-	// Mirror handleCreateProject: deletions belong to the human operator,
-	// not the supervisor. Reject before resolving id so a supervisor
-	// token can't enumerate project existence via 4xx codes.
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden: supervisor cannot delete projects", nethttp.StatusForbidden)
-		return
-	}
 	id := chi.URLParam(r, "id")
 	if err := s.Manager.RemoveProject(id); err != nil {
 		nethttp.Error(w, err.Error(), nethttp.StatusNotFound)
@@ -850,35 +719,9 @@ func (s *Server) handleDeleteProject(w nethttp.ResponseWriter, r *nethttp.Reques
 	writeJSON(w, proto.DeletePaneResponse{Ok: true})
 }
 
-func (s *Server) handleDockProject(w nethttp.ResponseWriter, r *nethttp.Request) {
-	// Docking grants the supervisor access to a project. Letting the
-	// supervisor dock arbitrary projects would be a self-escalation: it
-	// could widen its own reach without the human's consent. Keep this
-	// capability on the main actor only.
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden: supervisor cannot dock projects", nethttp.StatusForbidden)
-		return
-	}
-	id := chi.URLParam(r, "id")
-	if err := s.Manager.SetDocked(id, true); err != nil {
-		nethttp.Error(w, err.Error(), nethttp.StatusNotFound)
-		return
-	}
-	if s.MC != nil {
-		s.MC.NotifyStateChanged()
-	}
-	writeJSON(w, proto.DockProjectResponse{Docked: true})
-}
-
 // handleRenameProject sets (or clears, on empty string) the user-given
-// display_name override for a project. The supervisor can't rename —
-// label mutation is a human-operator concern and out of its scope, same
-// rationale as dock/undock.
+// display_name override for a project.
 func (s *Server) handleRenameProject(w nethttp.ResponseWriter, r *nethttp.Request) {
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden: supervisor cannot rename projects", nethttp.StatusForbidden)
-		return
-	}
 	id := chi.URLParam(r, "id")
 	var req proto.RenameRequest
 	if err := decodeJSONBody(w, r, maxJSONBody, &req); err != nil {
@@ -893,22 +736,14 @@ func (s *Server) handleRenameProject(w nethttp.ResponseWriter, r *nethttp.Reques
 		nethttp.Error(w, err.Error(), nethttp.StatusNotFound)
 		return
 	}
-	if s.MC != nil {
-		s.MC.NotifyStateChanged()
-	}
 	writeJSON(w, proto.RenameRequest{DisplayName: req.DisplayName})
 }
 
 // handleRenamePane sets (or clears) the user-given display_name override
 // for a single pane. Only claude panes (those with a session_id) are
 // renameable — shell panes have no persistent identity to key against,
-// so they reject with 400. Same supervisor restriction as the project
-// variant.
+// so they reject with 400.
 func (s *Server) handleRenamePane(w nethttp.ResponseWriter, r *nethttp.Request) {
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden: supervisor cannot rename panes", nethttp.StatusForbidden)
-		return
-	}
 	projectID := chi.URLParam(r, "id")
 	paneID := chi.URLParam(r, "pane_id")
 	var req proto.RenameRequest
@@ -924,47 +759,16 @@ func (s *Server) handleRenamePane(w nethttp.ResponseWriter, r *nethttp.Request) 
 		nethttp.Error(w, err.Error(), nethttp.StatusBadRequest)
 		return
 	}
-	if s.MC != nil {
-		s.MC.NotifyStateChanged()
-	}
 	writeJSON(w, proto.RenameRequest{DisplayName: req.DisplayName})
 }
 
-func (s *Server) handleUndockProject(w nethttp.ResponseWriter, r *nethttp.Request) {
-	// Symmetric with dock: only the main actor can change the scope the
-	// supervisor operates within.
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden: supervisor cannot undock projects", nethttp.StatusForbidden)
-		return
-	}
-	id := chi.URLParam(r, "id")
-	if err := s.Manager.SetDocked(id, false); err != nil {
-		nethttp.Error(w, err.Error(), nethttp.StatusNotFound)
-		return
-	}
-	if s.MC != nil {
-		s.MC.NotifyStateChanged()
-	}
-	writeJSON(w, proto.DockProjectResponse{Docked: false})
-}
-
 // handleArchiveProject puts a project to sleep — kills its panes to free RAM
-// while keeping its session rows was_live so it can be restored later. Same
-// supervisor restriction as dock: putting a project to sleep is a
-// human-operator concern, and self-archiving would let the supervisor drop
-// its own workspace out from under itself.
+// while keeping its session rows was_live so it can be restored later.
 func (s *Server) handleArchiveProject(w nethttp.ResponseWriter, r *nethttp.Request) {
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden: supervisor cannot archive projects", nethttp.StatusForbidden)
-		return
-	}
 	id := chi.URLParam(r, "id")
 	if err := s.Manager.ArchiveProject(id); err != nil {
 		nethttp.Error(w, err.Error(), nethttp.StatusNotFound)
 		return
-	}
-	if s.MC != nil {
-		s.MC.NotifyStateChanged()
 	}
 	writeJSON(w, proto.ArchiveProjectResponse{Archived: true})
 }
@@ -972,19 +776,12 @@ func (s *Server) handleArchiveProject(w nethttp.ResponseWriter, r *nethttp.Reque
 // handleUnarchiveProject wakes an archived project — clears the flag and
 // respawns exactly the panes that were live. cols/rows are left at 0 (the
 // sessions store default-sizes the PTYs; the client re-fits on attach, same
-// as the boot restore path). Symmetric supervisor restriction with archive.
+// as the boot restore path).
 func (s *Server) handleUnarchiveProject(w nethttp.ResponseWriter, r *nethttp.Request) {
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden: supervisor cannot unarchive projects", nethttp.StatusForbidden)
-		return
-	}
 	id := chi.URLParam(r, "id")
 	if err := s.Manager.UnarchiveProject(id, 0, 0); err != nil {
 		nethttp.Error(w, err.Error(), nethttp.StatusNotFound)
 		return
-	}
-	if s.MC != nil {
-		s.MC.NotifyStateChanged()
 	}
 	writeJSON(w, proto.ArchiveProjectResponse{Archived: false})
 }
@@ -992,9 +789,6 @@ func (s *Server) handleUnarchiveProject(w nethttp.ResponseWriter, r *nethttp.Req
 func (s *Server) handleWS(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := chi.URLParam(r, "id")
 	paneID := chi.URLParam(r, "pane_id")
-	if s.rejectSupervisorOutOfScope(w, r, id) {
-		return
-	}
 	// Origin allowlist: reject browser-initiated cross-site WS upgrades
 	// (CSWSH). Non-browser clients (satellite, curl, go) omit the header
 	// or send something we explicitly allow.
@@ -1055,52 +849,6 @@ func originAllowed(r *nethttp.Request) bool {
 	return false
 }
 
-// Mission Control handlers — thin shims that delegate to the configured
-// MissionControlHandler. All guarded by the MC != nil check at route
-// registration time; these methods are only called when MC is set.
-//
-// Mission Control itself is an operator-facing surface. The supervisor
-// agent is the *subject* of Mission Control, not a consumer — it must
-// not be able to chat with itself, reset itself, or read its own UI
-// stream via its own token.
-func (s *Server) handleMCState(w nethttp.ResponseWriter, r *nethttp.Request) {
-	// Read-only snapshot — intentionally allowed for the supervisor actor.
-	// The supervisor's system prompt directs it to call this endpoint to
-	// enumerate docked projects; the same data is reconstructible from
-	// /projects + /projects/<id> calls it already has access to, so the
-	// ban would only be cosmetic. The write-side endpoints (chat, reset,
-	// history, ws) remain supervisor-forbidden below.
-	s.MC.ServeState(w, r)
-}
-func (s *Server) handleMCHistory(w nethttp.ResponseWriter, r *nethttp.Request) {
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden", nethttp.StatusForbidden)
-		return
-	}
-	s.MC.ServeHistory(w, r)
-}
-func (s *Server) handleMCChat(w nethttp.ResponseWriter, r *nethttp.Request) {
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden", nethttp.StatusForbidden)
-		return
-	}
-	s.MC.ServeChat(w, r)
-}
-func (s *Server) handleMCReset(w nethttp.ResponseWriter, r *nethttp.Request) {
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden", nethttp.StatusForbidden)
-		return
-	}
-	s.MC.ServeReset(w, r)
-}
-func (s *Server) handleMCWS(w nethttp.ResponseWriter, r *nethttp.Request) {
-	if ActorFromRequest(r) == "supervisor" {
-		nethttp.Error(w, "forbidden", nethttp.StatusForbidden)
-		return
-	}
-	s.MC.ServeWS(w, r)
-}
-
 func writeJSON(w nethttp.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
@@ -1116,9 +864,9 @@ func writeJSON(w nethttp.ResponseWriter, v any) {
 //     create/rename/dismiss endpoints. 64 KiB is several thousand
 //     characters of display-name or session-id list, more than any
 //     realistic call needs.
-//   - maxPaneInputBytes: stdin injection via the supervisor's
-//     /panes/:id/input. Capped tight so a runaway agent can't fill a
-//     pane's input queue with megabytes of paste.
+//   - maxPaneInputBytes: stdin injection via /panes/:id/input. Capped
+//     tight so a runaway client can't fill a pane's input queue with
+//     megabytes of paste.
 //   - maxAgentEventBody: as documented above; matches the producer-side
 //     cap in the Claude Code lifecycle hook.
 const (
@@ -1131,9 +879,9 @@ const (
 //
 // Kept as a local name so the large number of existing call sites don't
 // need to change. The helper delegates to the shared implementation in
-// internal/httpx so the router and the supervisor's chat endpoint apply
-// identical body-size, trailing-data, and 413-vs-400 policy — one
-// source of truth for the decode contract.
+// internal/httpx so every JSON-decoding endpoint applies identical
+// body-size, trailing-data, and 413-vs-400 policy — one source of truth
+// for the decode contract.
 func decodeJSONBody(w nethttp.ResponseWriter, r *nethttp.Request, max int64, v any) error {
 	return httpx.DecodeJSONBody(w, r, max, v)
 }
@@ -1288,9 +1036,6 @@ func (s *Server) handleAgentEvent(w nethttp.ResponseWriter, r *nethttp.Request) 
 // for debugging hook wiring during dogfood.
 func (s *Server) handlePaneEvents(w nethttp.ResponseWriter, r *nethttp.Request) {
 	paneID := chi.URLParam(r, "pane_id")
-	if s.rejectSupervisorPaneOutOfScope(w, r, paneID) {
-		return
-	}
 	pane, ok := s.Manager.PaneByID(paneID)
 	if !ok {
 		nethttp.Error(w, "pane not found", nethttp.StatusNotFound)
@@ -1305,14 +1050,13 @@ func (s *Server) handlePaneEvents(w nethttp.ResponseWriter, r *nethttp.Request) 
 	})
 }
 
-// paneInputRequest is the body of POST /panes/:pane_id/input. Used by
-// the Mission Control supervisor (via its Bash tool + curl) to inject
-// text into another pane's stdin.
+// paneInputRequest is the body of POST /panes/:pane_id/input. Injects
+// text into a pane's stdin.
 //
 // Text is written verbatim. Submit=true appends CR so the receiving
 // agent processes the line. Submit=false leaves it queued; the user has
-// to press Enter themselves — this is the safer default when the
-// supervisor doesn't want to clobber an in-progress turn.
+// to press Enter themselves — the safer default when the caller doesn't
+// want to clobber an in-progress turn.
 type paneInputRequest struct {
 	Text   string `json:"text"`
 	Submit bool   `json:"submit,omitempty"`
@@ -1320,21 +1064,10 @@ type paneInputRequest struct {
 
 func (s *Server) handlePaneInput(w nethttp.ResponseWriter, r *nethttp.Request) {
 	paneID := chi.URLParam(r, "pane_id")
-	if s.rejectSupervisorPaneOutOfScope(w, r, paneID) {
-		return
-	}
 	pane, ok := s.Manager.PaneByID(paneID)
 	if !ok {
 		nethttp.Error(w, "pane not found", nethttp.StatusNotFound)
 		return
-	}
-	actor := ActorFromRequest(r)
-	// Audit supervisor-initiated stdin injection. Regular main-actor
-	// writes (the human via the satellite) are not logged — this is the
-	// accountability trail for the agent-driven writes.
-	if actor == "supervisor" {
-		slog.Info("supervisor pane-input",
-			"pane", paneID, "project", pane.ProjectID)
 	}
 	var req paneInputRequest
 	if err := decodeJSONBody(w, r, maxPaneInputBytes, &req); err != nil {
@@ -1343,27 +1076,6 @@ func (s *Server) handlePaneInput(w nethttp.ResponseWriter, r *nethttp.Request) {
 	if req.Text == "" && !req.Submit {
 		nethttp.Error(w, "empty input", nethttp.StatusBadRequest)
 		return
-	}
-	// an audit finding: filter ASCII control bytes on the
-	// supervisor-actor path only. Indirect prompt-injection in pages
-	// the supervisor agent reads can otherwise cause it to type
-	// 0x03 (SIGINT) into a sibling docked pane, or smuggle ANSI
-	// escape sequences (0x1b) that the receiving terminal interprets
-	// as cursor / colour / OSC commands. The filter mirrors the one
-	// /mission-control/chat already applies (see supervisor.firstControlByte):
-	// reject any control byte < 0x20 except \t / \n / \r, plus DEL
-	// (0x7f).
-	//
-	// Main-actor calls (renderer / user keystrokes) MUST stay
-	// unfiltered — interactive use legitimately needs all control
-	// bytes (Ctrl-C, arrow keys, escape sequences for vim, etc.).
-	if actor == "supervisor" {
-		if offender, bad := firstControlByte(req.Text); bad {
-			slog.Info("supervisor pane-input rejected control byte",
-				"pane", paneID, "project", pane.ProjectID, "byte", int(offender))
-			nethttp.Error(w, "input contains control characters", nethttp.StatusBadRequest)
-			return
-		}
 	}
 	payload := req.Text
 	if req.Submit {
@@ -1376,36 +1088,11 @@ func (s *Server) handlePaneInput(w nethttp.ResponseWriter, r *nethttp.Request) {
 	writeJSON(w, map[string]any{"ok": true, "bytes": len(payload)})
 }
 
-// firstControlByte scans for ASCII control bytes (< 0x20) that are NOT
-// tab / LF / CR. Reports the offending byte and true if found, or 0 +
-// false when clean. UTF-8 continuation bytes are >= 0x80 so the
-// <0x20 check is safe on arbitrary-encoded input.
-//
-// Mirrors supervisor.firstControlByte (daemon/internal/supervisor/http.go);
-// duplicated here so the http package doesn't need to import the
-// supervisor package (which would create a cycle — supervisor imports
-// pty/manager which the http package also reaches through Server).
-func firstControlByte(s string) (byte, bool) {
-	for i := 0; i < len(s); i++ {
-		b := s[i]
-		if b < 0x20 && b != '\t' && b != '\n' && b != '\r' {
-			return b, true
-		}
-		if b == 0x7f { // DEL
-			return b, true
-		}
-	}
-	return 0, false
-}
-
-// handlePaneOutput returns the tail of a pane's replay buffer so the
-// supervisor can inspect recent activity without opening a WebSocket.
+// handlePaneOutput returns the tail of a pane's replay buffer so a client
+// can inspect recent activity without opening a WebSocket.
 // `bytes` query param is the approximate byte count to return (default 8192).
 func (s *Server) handlePaneOutput(w nethttp.ResponseWriter, r *nethttp.Request) {
 	paneID := chi.URLParam(r, "pane_id")
-	if s.rejectSupervisorPaneOutOfScope(w, r, paneID) {
-		return
-	}
 	pane, ok := s.Manager.PaneByID(paneID)
 	if !ok {
 		nethttp.Error(w, "pane not found", nethttp.StatusNotFound)

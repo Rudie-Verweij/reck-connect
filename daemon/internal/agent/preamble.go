@@ -12,10 +12,9 @@ import (
 // (--session-id UUID, --resume, --name, any user extras) without
 // pushing close to the OS limit.
 //
-// Bumped from 8 KiB to 16 KiB after an earlier release landed — the Mission Control
-// supervisor's project preamble is ~7.4 KiB of meta-project prompt,
-// and combined with the ~2 KiB Reck-awareness baseline it blew past
-// the original cap. An early verification step confirmed Claude Code
+// Bumped from 8 KiB to 16 KiB after an earlier release landed — a large
+// project preamble (~7.4 KiB) combined with the ~2 KiB Reck-awareness
+// baseline blew past the original cap. An early verification step confirmed Claude Code
 // accepts up to at least 8 KiB verbatim; 16 KiB is a strict superset
 // with the same behavioural evidence from the same CLI version (2.1.x).
 //

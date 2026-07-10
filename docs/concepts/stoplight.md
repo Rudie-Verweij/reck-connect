@@ -81,9 +81,3 @@ Source: `proto/proto.md` "Stoplight semantics".
 ## Persistence
 
 Stoplight and agent_state are **in-memory only**. They are not written to disk and are lost on daemon restart. The Satellite will see all panes start as `gray` on reconnect and their states will be re-derived from PTY activity / the next hook event.
-
-## Relation to Mission Control
-
-Mission Control aggregates `stoplight` and `agent_state` across all docked projects into `MissionControlCard` responses. The supervisor pane watches for state transitions (via `Manager.OnStateChange`) and emits `[reck]` alert lines to its own stdin when meaningful changes occur (e.g. a pane goes `attention` or `idle`).
-
-See [mission-control.md](./mission-control.md).

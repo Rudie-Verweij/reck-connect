@@ -35,7 +35,7 @@ func TestArchiveUnarchiveProjectPersistsThroughHTTP(t *testing.T) {
 	}
 
 	// Archive → flag set, panes gone, persisted.
-	postDockAction(t, srv.URL+"/projects/p-station/archive")
+	postProjectAction(t, srv.URL+"/projects/p-station/archive")
 	project := getProject(t, srv.URL, "p-station")
 	if !project.Archived {
 		t.Fatalf("GET /projects after archive: Archived=false, project=%+v", project)
@@ -48,7 +48,7 @@ func TestArchiveUnarchiveProjectPersistsThroughHTTP(t *testing.T) {
 	}
 
 	// Unarchive → flag cleared, persisted.
-	postDockAction(t, srv.URL+"/projects/p-station/unarchive")
+	postProjectAction(t, srv.URL+"/projects/p-station/unarchive")
 	project = getProject(t, srv.URL, "p-station")
 	if project.Archived {
 		t.Fatalf("GET /projects after unarchive: Archived=true, project=%+v", project)
@@ -59,7 +59,7 @@ func TestArchiveUnarchiveProjectPersistsThroughHTTP(t *testing.T) {
 }
 
 // TestArchiveUnknownProject404s — archiving/unarchiving a project that
-// doesn't exist is a 404, mirroring dock.
+// doesn't exist is a 404.
 func TestArchiveUnknownProject404s(t *testing.T) {
 	s := newServer(t)
 	srv := httptest.NewServer(newTestHandler(t, s))

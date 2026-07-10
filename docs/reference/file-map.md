@@ -10,7 +10,7 @@
 
 | Path | Description |
 |---|---|
-| `daemon/cmd/reck-stationd/main.go` | Daemon entry point: flag parsing, token resolution, hook install, sessions setup, supervisor init, HTTP server start |
+| `daemon/cmd/reck-stationd/main.go` | Daemon entry point: flag parsing, token resolution, hook install, sessions setup, HTTP server start |
 
 ### `internal/config`
 
@@ -79,15 +79,6 @@
 |---|---|
 | `internal/events/events.go` | `Event` struct, `Kind` enum, `KindValid`, event log types |
 
-### `internal/supervisor`
-
-| Path | Description |
-|---|---|
-| `internal/supervisor/controller.go` | Supervisor lifecycle: token generation, Claude pane spawn, scope enforcement |
-| `internal/supervisor/http.go` | Mission Control HTTP handlers (state, history, chat, reset) |
-| `internal/supervisor/alerts.go` | Alert detection across docked-project panes |
-| `internal/supervisor/prompt.go` | System prompt construction for the supervisor agent |
-
 ### `internal/httpx`
 
 | Path | Description |
@@ -127,7 +118,7 @@
 | `satellite/renderer/src/layout/reconcile.ts` | Reconciles daemon pane list against the local split-tree |
 | `satellite/renderer/src/restore-candidates.ts` | Restore-candidates prompt logic |
 | `satellite/renderer/src/select-project.ts` | Project selection from the rail |
-| `satellite/renderer/src/ui/` | UI components: rail, pane-layout, dialogs, mode-chooser, mission-control, etc. |
+| `satellite/renderer/src/ui/` | UI components: rail, pane-layout, dialogs, mode-chooser, etc. |
 
 ---
 

@@ -62,7 +62,6 @@ interface MockProjectFixture {
   pane_stoplights: ("ready" | "working" | "idle" | "input")[];
   pane_ids: string[];
   stoplight: "ready" | "working" | "idle" | "input";
-  docked: boolean;
   available: boolean;
 }
 
@@ -76,7 +75,6 @@ const FIXTURE_PROJECTS: MockProjectFixture[] = [
     pane_stoplights: ["working", "ready", "input"],
     pane_ids: ["p_a1", "p_a2", "p_a3"],
     stoplight: "input",
-    docked: true,
     available: true,
   },
   {
@@ -87,7 +85,6 @@ const FIXTURE_PROJECTS: MockProjectFixture[] = [
     pane_stoplights: ["working", "working"],
     pane_ids: ["p_b1", "p_b2"],
     stoplight: "working",
-    docked: false,
     available: true,
   },
   {
@@ -98,7 +95,6 @@ const FIXTURE_PROJECTS: MockProjectFixture[] = [
     pane_stoplights: ["idle"],
     pane_ids: ["p_c1"],
     stoplight: "idle",
-    docked: false,
     available: true,
   },
   {
@@ -109,7 +105,6 @@ const FIXTURE_PROJECTS: MockProjectFixture[] = [
     pane_stoplights: [],
     pane_ids: [],
     stoplight: "ready",
-    docked: false,
     available: true,
   },
 ];
@@ -162,9 +157,6 @@ function startMockDaemon(): Promise<MockDaemon> {
       }
       if (url.pathname === "/restore-candidates") {
         return send(200, { candidates: [] });
-      }
-      if (url.pathname === "/mission-control/state") {
-        return send(200, { panes: [], history: [] });
       }
       // Catch-all so the renderer doesn't sit on a 404 spinner.
       send(200, {});

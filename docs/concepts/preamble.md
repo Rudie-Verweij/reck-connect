@@ -109,7 +109,7 @@ The main branch is 'main'.
 """
 ```
 
-The project preamble can also be set via the UI (future feature) or via `Manager.SetProjectPreamble` (used by Mission Control internally; not persisted to disk).
+The project preamble can also be set via the UI (future feature) or via `Manager.SetProjectPreamble` (not persisted to disk).
 
 ## Only for Claude Panes
 
