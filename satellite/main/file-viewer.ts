@@ -24,6 +24,7 @@ import { BrowserWindow, dialog, ipcMain, screen, shell } from "electron";
 import { resolveInsideAllowedRoots } from "./file-allowlist";
 import { checkExternalUrl } from "./ipc-validation";
 import { deriveProjectAnchor } from "./project-anchor";
+import { normalizeProjectCwd } from "./project-cwd";
 import { rootRelativeCandidate } from "./root-relative";
 import {
   readStationFile,
@@ -1639,12 +1640,28 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
           ? arg.projectCwd
           : undefined;
       const opener = typeof arg?.opener === "string" ? arg.opener : undefined;
+      const mountPoint =
+        deps.mountPointPath?.() ?? path.join(os.homedir(), "reck", "projects");
+      const stationRoot = deps.stationRoot?.() ?? null;
+      // Round 9 — normalize the threaded cwd by FORM (which root prefix
+      // it sits under), not by the sourceHost flag. Popups stamp the cwd
+      // in whichever form their surface knew (station panes: Pi form;
+      // local popups: mount form), and cascaded popup clicks forward it
+      // WITHOUT sourceHost — the old flag-gated translation left a
+      // Pi-form cwd untranslated on those, and the truthy-but-
+      // Mac-nonexistent path disarmed every miss rescue (2026-07-10
+      // obsidian-brain `.raw/...` field failure).
+      const cwdForms = normalizeProjectCwd(projectCwd, {
+        mountPoint,
+        stationRoot,
+      });
       console.log("[file-viewer] [file:openInViewer] in", {
         rawPath,
         sourceHost,
         opener,
         originalText,
         projectCwd,
+        cwdForms,
       });
       // Phase 3 of linkifier-followups: host-aware expansion. Station-pane
       // tildes expand against the Pi's home; non-mount station paths are
@@ -1654,11 +1671,14 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
         sourceHost,
         localHome: deps.localHome?.() ?? os.homedir(),
         stationHome: deps.stationHome?.() ?? undefined,
-        stationRoot: deps.stationRoot?.() ?? undefined,
-        mountPoint:
-          deps.mountPointPath?.() ?? path.join(os.homedir(), "reck", "projects"),
+        stationRoot: stationRoot ?? undefined,
+        mountPoint,
         // Round 8.6 — anchor project-relative paths from station panes.
-        projectCwd: sourceHost === "station" ? projectCwd : undefined,
+        // Round 9 — prefer the Pi FORM of the cwd: a mount-form cwd
+        // threaded to a station click would otherwise anchor a garbage
+        // Mac-prefixed "station" path and misroute to station-remote.
+        projectCwd:
+          sourceHost === "station" ? cwdForms.station ?? projectCwd : undefined,
       });
       console.log("[file-viewer] expandTildeForHost ->", {
         kind: expanded.kind,
@@ -1698,13 +1718,14 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
         // the Pi (sshfs); a hit lets us open the local mount path
         // (which already classifies as STATION via title-badge)
         // instead of going through SSH for every read.
-        const mountPoint =
-          deps.mountPointPath?.() ??
-          path.join(os.homedir(), "reck", "projects");
-        const stationRoot = deps.stationRoot?.() ?? null;
+        // Round 9 — the normalized local form covers BOTH a Pi-form cwd
+        // (translated) and an already-mount-form cwd; the prefix check
+        // keeps Mac-local (non-mount) projects from arming the mirror.
+        const mp = mountPoint.replace(/\/+$/, "");
         const mountMirror =
-          projectCwd && stationRoot
-            ? translateStationCwdToMount(projectCwd, mountPoint, stationRoot)
+          cwdForms.local &&
+          (cwdForms.local === mp || cwdForms.local.startsWith(mp + "/"))
+            ? cwdForms.local
             : null;
         const stationSearchRoots = mountMirror
           ? await composeSuffixSearchRoots(null, mountMirror)
@@ -1757,10 +1778,10 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
             () => safeSend("file:suffix:fallback-start", { searchId }),
             deps.searchBackendOverrides,
           );
-          // stationRoot is provably non-null here: mountMirror's
-          // derivation guarded on it, and we're inside `if
-          // (mountMirror)`. The non-null assertion satisfies TS's
-          // narrowing limit across the boundary.
+          // stationRoot is provably non-null here: expandTildeForHost
+          // only returns kind "station-remote" when stationHome AND
+          // stationRoot were configured. The non-null assertion
+          // satisfies TS's narrowing limit across the boundary.
           const win = createFileViewerWindow({
             ...baseOpts,
             title: path.basename(stationSuffix),
@@ -1769,7 +1790,10 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
               suffix: stationSuffix,
               progressCapable: backend.progressCapable,
             },
-            projectCwd,
+            // Round 9 — stamp the Pi FORM: this popup's cascaded clicks
+            // send sourceHost:"station", whose expansion anchors on a
+            // Pi-form cwd.
+            projectCwd: cwdForms.station ?? projectCwd,
             displayTranslation: {
               mountRoot: mountPoint,
               stationRoot: stationRoot!,
@@ -1859,7 +1883,8 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
           resolvedPath: stationPath,
           host: "station-remote",
           title,
-          projectCwd,
+          // Round 9 — Pi form for station-remote cascades (see above).
+          projectCwd: cwdForms.station ?? projectCwd,
         });
         fileViewerWindows.delete(stationPath);
         fileViewerWindows.set(key, win);
@@ -1901,7 +1926,16 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
         createFileViewerWindow({
           ...baseOpts,
           title: path.basename(resolved),
-          projectCwd,
+          // Round 9 — stamp the LOCAL form (this popup's cascaded clicks
+          // send no sourceHost), deriving from the opened path when no
+          // cwd was threaded so cascades stay self-healing.
+          projectCwd:
+            cwdForms.local ??
+            deriveProjectAnchor(resolved, {
+              roots: deps.roots(),
+              mountPoint,
+            }) ??
+            undefined,
         });
         return { ok: true };
       }
@@ -1913,9 +1947,6 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
       // the station). The underlying create still writes via sshfs at
       // the Mac path. For non-station-pane clicks we leave the display
       // path unset (banner shows the resolved Mac path as before).
-      const mountPoint =
-        deps.mountPointPath?.() ?? path.join(os.homedir(), "reck", "projects");
-      const stationRoot = deps.stationRoot?.() ?? null;
       const isMountMirror =
         sourceHost === "station" && stationRoot != null
           ? resolved === mountPoint.replace(/\/+$/, "") ||
@@ -1941,7 +1972,15 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
           ...baseOpts,
           title: path.basename(resolved),
           displayPath,
-          projectCwd,
+          // Round 9 — local form, derived from the miss path when no
+          // cwd was threaded (see the exists-branch stamp).
+          projectCwd:
+            cwdForms.local ??
+            deriveProjectAnchor(resolved, {
+              roots: deps.roots(),
+              mountPoint,
+            }) ??
+            undefined,
         });
         return { ok: true };
       }
@@ -1956,18 +1995,14 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
       // sub-dir cwd that doesn't share an ancestor with the project
       // root).
       //
-      // For station-pane clicks, `projectCwd` is a Pi path
-      // (/home/pi/projects/<id>) that does NOT exist on the Mac
-      // filesystem — `composeSuffixSearchRoots`'s existence check
-      // would drop it and the project anchor wouldn't take effect.
-      // Translate to the local mount-mirror BEFORE composing so the
-      // existence check sees the Mac path that actually exists via
-      // sshfs.
-      const projectCwdForSearch =
-        projectCwd && sourceHost === "station" && stationRoot
-          ? translateStationCwdToMount(projectCwd, mountPoint, stationRoot) ??
-            projectCwd
-          : projectCwd;
+      // Round 9 — use the FORM-normalized local cwd (a Pi-form cwd is
+      // mount-translated regardless of the sourceHost flag: cascaded
+      // popup clicks forward a Pi cwd WITHOUT sourceHost, and the old
+      // flag-gated translation left it untranslated — the truthy Pi
+      // path then shadowed deriveProjectAnchor and disarmed every miss
+      // rescue below, collapsing the search to the popup file's own
+      // folder).
+      const projectCwdForSearch = cwdForms.local;
 
       // `projectCwd` is nullable and silently absent on
       // cascaded popup clicks. Without a fallback, the root-relative
@@ -1976,8 +2011,13 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
       // matches for anything outside it. The resolved miss path itself
       // identifies the project (`<mount>/<project>/…` or a local root),
       // so derive the anchor from it whenever the cwd wasn't threaded.
+      // The pathExists guard makes a stale/garbage threaded cwd fall
+      // through to the derived anchor instead of poisoning the retry,
+      // the anchored stat, and the search roots.
       const effectiveProjectCwd =
-        projectCwdForSearch ??
+        (projectCwdForSearch && (await pathExists(projectCwdForSearch))
+          ? projectCwdForSearch
+          : undefined) ??
         deriveProjectAnchor(resolved, {
           roots: deps.roots(),
           mountPoint,
@@ -2015,7 +2055,8 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
           createFileViewerWindow({
             ...baseOpts,
             title: path.basename(rootResolved),
-            projectCwd,
+            // Round 9 — validated local-form anchor (cascades self-heal).
+            projectCwd: effectiveProjectCwd,
           });
           return { ok: true };
         }
@@ -2048,7 +2089,8 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
           ...baseOpts,
           title: path.basename(resolved),
           displayPath,
-          projectCwd,
+          // Round 9 — validated local-form anchor (cascades self-heal).
+          projectCwd: effectiveProjectCwd,
         });
         return { ok: true };
       }
@@ -2110,7 +2152,8 @@ export function registerFileViewerIpc(deps: FileViewerIpcDeps): void {
           progressCapable: backend.progressCapable,
         },
         displayPath,
-        projectCwd,
+        // Round 9 — validated local-form anchor (cascades self-heal).
+        projectCwd: effectiveProjectCwd,
         displayTranslation: localDisplayTranslation,
       });
 
@@ -2299,28 +2342,10 @@ export function translateSearchRootsToStation(
   return out;
 }
 
-/**
- * Round 8 Phase NN — Pi-path → Mac mount-mirror translator for the
- * station-remote branch of `file:openInViewer`. Pure mirror of
- * `translateStationCwd` from renderer/src/project-push.ts (kept here
- * so main doesn't reach into renderer modules). Returns null when the
- * Pi path isn't under the station's managed root (e.g. paths under
- * `~/.claude/`).
- */
-export function translateStationCwdToMount(
-  stationCwd: string,
-  localMount: string,
-  stationRoot: string,
-): string | null {
-  if (!stationCwd || !localMount || !stationRoot) return null;
-  const root = stationRoot.replace(/\/+$/, "");
-  const mount = localMount.replace(/\/+$/, "");
-  if (!stationCwd.startsWith(root)) return null;
-  const suffix = stationCwd.slice(root.length);
-  if (!suffix.startsWith("/")) return null;
-  if (suffix === "/") return null;
-  return mount + suffix;
-}
+// Round 8 Phase NN's Pi-path → Mac mount-mirror translator now lives in
+// project-cwd.ts (form normalization owns both directions); re-exported
+// here so existing importers/tests keep working.
+export { translateStationCwdToMount } from "./project-cwd";
 
 /**
  * Walk up `failedPath`'s ancestry until an existing directory is found.
