@@ -202,6 +202,18 @@ export class TtsEngine {
     if (this.currentUtt) {
       this.detachUtterance(this.currentUtt);
       this.synth.cancel();
+      // pause() pauses the GLOBAL SpeechSynthesis queue, and cancel() does
+      // NOT unpause it — speaking into a still-paused queue leaves the new
+      // utterance silently queued forever (no events, speaking=false, so
+      // even the heartbeat can't rescue it; only an app restart could).
+      // resume() is a spec no-op when the queue isn't paused, so call it
+      // unconditionally rather than trusting synth.paused to be accurate
+      // across a cancel.
+      this.synth.resume();
+    } else if (this.synth.paused) {
+      // No utterance of ours in flight but the queue is paused (e.g. the
+      // utterance ended/errored while paused) — clear it before speak().
+      this.synth.resume();
     }
     this.stopHeartbeat();
 
@@ -236,6 +248,10 @@ export class TtsEngine {
     }
     if (this.currentUtt) this.detachUtterance(this.currentUtt);
     this.synth.cancel();
+    // Clear any global paused state left by pause(): cancel() alone keeps
+    // the queue paused, which would wedge every future speak() app-wide
+    // (see speakInternal). No-op when not paused.
+    this.synth.resume();
     this.currentUtt = null;
     this.currentChunk = null;
     this.currentVoice = null;

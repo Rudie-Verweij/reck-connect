@@ -61,6 +61,28 @@ describe("MarkdownSurfaceAdapter", () => {
     }
   });
 
+  it("skips text hidden inside collapsed <details>, keeping the summary spoken", () => {
+    // The transcript overlay folds tool_use / tool_result / thinking blocks
+    // into collapsed <details> — often hundreds of KB of tool output. The
+    // speak surface must read what the user sees: summaries yes, hidden
+    // payloads no (a monster utterance stalls speech synthesis entirely).
+    const { container, body } = makeBodyWithHTML(
+      "<p>intro prose</p>" +
+        "<details><summary>3 tool calls</summary><pre>hidden tool payload</pre></details>" +
+        "<details open><summary>open group</summary><p>expanded body</p>" +
+        "<details><summary>nested closed</summary><span>nested hidden</span></details></details>",
+    );
+    const adapter = new MarkdownSurfaceAdapter({ container, body });
+    const chunk = adapter.resolveSpokenChunk();
+    expect(chunk.text).toContain("intro prose");
+    expect(chunk.text).toContain("3 tool calls");
+    expect(chunk.text).not.toContain("hidden tool payload");
+    expect(chunk.text).toContain("open group");
+    expect(chunk.text).toContain("expanded body");
+    expect(chunk.text).toContain("nested closed"); // summary of a closed details inside an OPEN one is visible
+    expect(chunk.text).not.toContain("nested hidden");
+  });
+
   it("resolveSpokenChunk returns empty chunk when body is empty", () => {
     const { container, body } = makeBodyWithHTML("");
     const adapter = new MarkdownSurfaceAdapter({ container, body });

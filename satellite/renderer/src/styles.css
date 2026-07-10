@@ -3984,4 +3984,3 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 }
 /* Surfaces with a header push the stack below it. */
 .file-viewer-root > .pane-controls { top: 46px; right: 16px; }
-.transcript-view .pane-controls { top: 42px; right: 12px; }

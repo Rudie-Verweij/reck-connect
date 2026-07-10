@@ -280,10 +280,15 @@ describe("TranscriptView", () => {
   it("exposes a cached markdown speak surface over the body, disposed with the view", () => {
     const surface = view.getSpeakSurface();
     expect(surface.kind).toBe("markdown");
-    // The control bar mounts into the overlay's shared top-right stack.
-    const stack = view.root.querySelector(".pane-controls");
+    // The control bar mounts into the PANE wrapper's top-right stack — the
+    // same one holding the history clock — so search/TTS/History stay ONE
+    // stack (History at the bottom via CSS order) even in History mode. A
+    // nested stack inside the overlay root would float separately, leaving
+    // the clock stranded on top.
+    const stack = host.querySelector(":scope > .pane-controls");
     expect(stack).not.toBeNull();
     expect(surface.getContainerEl()).toBe(stack);
+    expect(view.root.querySelector(".pane-controls")).toBeNull();
     // Same instance on repeat calls (one highlight overlay, not N).
     expect(view.getSpeakSurface()).toBe(surface);
     const disposeSpy = vi.spyOn(surface, "dispose");

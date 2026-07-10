@@ -2076,11 +2076,14 @@ export async function boot(splash?: StartupSplashController) {
         const rec = layout.getActiveTerminalRecord();
         if (!rec) return null;
         // An open History overlay owns ⌘F for its pane (#51): search
-        // the whole transcript, not the terminal's visible rows.
+        // the whole transcript, not the terminal's visible rows. The bar
+        // mounts into the PANE wrapper's stack (with the history clock +
+        // TTS bar), not a nested one inside the overlay — one stack,
+        // History always at the bottom.
         const overlay = transcripts.get(rec.tab.paneId);
         if (overlay) {
           return new MarkdownSearchAdapter({
-            container: ensurePaneControls(overlay.view.root),
+            container: ensurePaneControls(rec.wrapper),
             body: overlay.view.body,
           });
         }

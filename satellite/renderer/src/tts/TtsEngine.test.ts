@@ -61,15 +61,16 @@ class StubSynth extends EventTarget {
   resumeCount = 0;
   voices: SpeechSynthesisVoice[] = [];
 
+  // Spec-faithful paused semantics: pause() pauses the GLOBAL queue, and
+  // neither speak() nor cancel() unpauses it — only resume() does. (This
+  // is exactly the trap the paused-queue wedge tests below exercise.)
   speak(u: StubUtterance) {
     this.spoken.push(u);
     this.speaking = true;
-    this.paused = false;
   }
   cancel() {
     this.cancelCount++;
     this.speaking = false;
-    this.paused = false;
   }
   pause() {
     this.pauseCount++;
@@ -240,6 +241,48 @@ describe("TtsEngine.stop / pause / resume", () => {
     expect(engine.isPaused()).toBe(true);
     engine.resume();
     expect(engine.isPaused()).toBe(false);
+  });
+});
+
+describe("TtsEngine paused-queue wedge (pause → cancel → speak)", () => {
+  // pause() pauses the GLOBAL SpeechSynthesis queue and cancel() empties
+  // the queue WITHOUT unpausing it. So pause → stop/re-speak used to leave
+  // the queue paused forever: every later speak() (any surface, any pane)
+  // sat silently queued until app restart, and the heartbeat couldn't
+  // rescue it because a never-started utterance has speaking === false.
+  // The engine must therefore clear the paused state whenever it cancels.
+  let synth: StubSynth;
+  let engine: TtsEngine;
+
+  beforeEach(() => {
+    synth = new StubSynth();
+    engine = makeEngine(synth);
+  });
+
+  afterEach(() => engine.dispose());
+
+  it("stop() while paused clears the global paused state", () => {
+    engine.start(chunkOfWords(["a", "b"]));
+    engine.pause();
+    engine.stop();
+    expect(synth.paused).toBe(false);
+  });
+
+  it("start() while paused un-wedges the queue so the new utterance can play", () => {
+    engine.start(chunkOfWords(["a", "b"]));
+    engine.pause();
+    engine.start(chunkOfWords(["c", "d"]));
+    expect(synth.paused).toBe(false);
+    expect(synth.spoken).toHaveLength(2);
+  });
+
+  it("start() clears a paused queue even with no current utterance (ended while paused)", () => {
+    engine.start(chunkOfWords(["a"]));
+    engine.pause();
+    synth.spoken[0].fireEnd(); // engine drops currentUtt; queue stays paused
+    engine.start(chunkOfWords(["b"]));
+    expect(synth.paused).toBe(false);
+    expect(synth.spoken).toHaveLength(2);
   });
 });
 
