@@ -4,6 +4,8 @@ import {
   clampRate,
   snapRate,
   sanitizeUtteranceText,
+  segmentText,
+  MAX_UTTERANCE_CHARS,
   DEGENERATE_ZERO_BOUNDARY_THRESHOLD,
   type SpokenChunk,
   type TtsBoundary,
@@ -746,5 +748,162 @@ describe("TtsEngine degenerate-boundary guard", () => {
     synth.spoken[1].fireBoundary(0, 7);
     expect(heard).toHaveLength(1);
     expect(heard[0].word).toBe("charlie");
+  });
+});
+
+describe("segmentText", () => {
+  it("returns one segment when text fits", () => {
+    expect(segmentText("hello world", 100)).toEqual([{ start: 0, end: 11 }]);
+  });
+
+  it("returns no segments for empty text", () => {
+    expect(segmentText("", 100)).toEqual([]);
+  });
+
+  it("splits on whitespace so words are never cut, covering the whole string", () => {
+    const text = "aaaa bbbb cccc dddd";
+    const segs = segmentText(text, 10);
+    expect(segs.length).toBeGreaterThan(1);
+    // Contiguous cover of [0, n) — concatenation reconstitutes the text.
+    expect(segs[0].start).toBe(0);
+    expect(segs[segs.length - 1].end).toBe(text.length);
+    for (let i = 1; i < segs.length; i++) {
+      expect(segs[i].start).toBe(segs[i - 1].end);
+    }
+    expect(segs.map((s) => text.slice(s.start, s.end)).join("")).toBe(text);
+    for (const s of segs) expect(s.end - s.start).toBeLessThanOrEqual(10);
+  });
+
+  it("hard-splits a single token longer than the cap", () => {
+    const segs = segmentText("xxxxxxxxxxxx", 5); // 12 x's, no whitespace
+    for (const s of segs) expect(s.end - s.start).toBeLessThanOrEqual(5);
+    expect(segs.map((s) => "xxxxxxxxxxxx".slice(s.start, s.end)).join("")).toBe(
+      "xxxxxxxxxxxx",
+    );
+  });
+
+  it("has a sane production cap", () => {
+    expect(MAX_UTTERANCE_CHARS).toBeGreaterThan(0);
+    expect(MAX_UTTERANCE_CHARS).toBeLessThanOrEqual(32000);
+  });
+});
+
+describe("utterance segmentation (long tool payloads must not wedge)", () => {
+  let synth: StubSynth;
+  beforeEach(() => {
+    synth = new StubSynth();
+  });
+
+  function makeEngineCapped(max: number) {
+    return new TtsEngine({
+      synth: synth as unknown as SpeechSynthesis,
+      UtteranceCtor: StubUtterance as unknown as typeof SpeechSynthesisUtterance,
+      heartbeatIntervalMs: 100,
+      restartDebounceMs: 0,
+      maxUtteranceChars: max,
+    });
+  }
+
+  /** Fire end on the latest utterance until no new segment is chained. */
+  function drain() {
+    let prev = -1;
+    for (let g = 0; g < 200 && synth.spoken.length !== prev; g++) {
+      prev = synth.spoken.length;
+      synth.spoken[synth.spoken.length - 1].fireEnd();
+    }
+  }
+
+  it("speaks a big chunk as several bounded utterances, one at a time", () => {
+    const engine = makeEngineCapped(10);
+    const chunk = chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]); // 19 chars
+    engine.start(chunk);
+    // Only the first segment is queued up front — the rest chain on end.
+    expect(synth.spoken).toHaveLength(1);
+    drain();
+    expect(synth.spoken.length).toBeGreaterThan(1);
+    for (const u of synth.spoken) expect(u.text.length).toBeLessThanOrEqual(10);
+    // The segments reconstitute the original spoken text exactly.
+    expect(synth.spoken.map((u) => u.text).join("")).toBe(chunk.text);
+  });
+
+  it("fires 'end' to listeners only once, after the LAST segment", () => {
+    const engine = makeEngineCapped(10);
+    let ended = 0;
+    engine.on("end", () => ended++);
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]));
+    // Draining every segment fires 'end' exactly once (after the last).
+    drain();
+    expect(ended).toBe(1);
+  });
+
+  it("maps a boundary in a later segment back to the right word (segBase offset)", () => {
+    const engine = makeEngineCapped(10);
+    const heard: TtsBoundary[] = [];
+    engine.on("boundary", (b) => heard.push(b));
+    // "aaaa bbbb cccc dddd" → seg0 "aaaa bbbb ", seg1 "cccc dddd".
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]));
+    expect(synth.spoken).toHaveLength(1);
+    synth.spoken[0].fireEnd(); // advance to seg1 (segBase = 10)
+    expect(synth.spoken).toHaveLength(2);
+    synth.spoken[1].fireBoundary(0, 4); // rel 0 in seg1 → abs 10 → "cccc"
+    expect(heard).toHaveLength(1);
+    expect(heard[0].word).toBe("cccc");
+  });
+
+  it("a short chunk still speaks as exactly one utterance", () => {
+    const engine = makeEngineCapped(MAX_UTTERANCE_CHARS);
+    engine.start(chunkOfWords(["alpha", "bravo"]));
+    expect(synth.spoken).toHaveLength(1);
+    drain();
+    expect(synth.spoken).toHaveLength(1);
+  });
+
+  it("holds the next segment when a pause races a segment end, then speaks it on resume (no wedge)", () => {
+    const engine = makeEngineCapped(10);
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"])); // 2 segments
+    expect(synth.spoken).toHaveLength(1);
+    // User pauses just as segment 0 finishes — pause() lands, then the
+    // browser still delivers the finishing utterance's end.
+    engine.pause();
+    expect(synth.paused).toBe(true);
+    synth.spoken[0].fireEnd();
+    // Segment 1 must NOT be pushed into the paused queue (that wedges forever).
+    expect(synth.spoken).toHaveLength(1);
+    expect(synth.paused).toBe(true);
+    // Resume runs the held segment.
+    engine.resume();
+    expect(synth.paused).toBe(false);
+    expect(synth.spoken).toHaveLength(2);
+    expect(synth.spoken[1].text).toBe("cccc dddd");
+  });
+
+  it("a rate change in the gap between segments restarts from the new segment, not the prior one", () => {
+    const engine = makeEngineCapped(10);
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]));
+    synth.spoken[0].fireEnd(); // advance to seg1; no boundary fired yet
+    expect(synth.spoken).toHaveLength(2);
+    expect(synth.spoken[1].text).toBe("cccc dddd");
+    engine.setRate(2); // during the gap, before seg1's first boundary
+    expect(synth.spoken).toHaveLength(3);
+    expect(synth.spoken[2].text).toBe("cccc dddd"); // NOT the whole chunk
+  });
+
+  it("start() with empty text speaks nothing and still fires end", () => {
+    const engine = makeEngineCapped(MAX_UTTERANCE_CHARS);
+    let ended = 0;
+    engine.on("end", () => ended++);
+    engine.start({ text: "", rangeMap: [] });
+    expect(synth.spoken).toHaveLength(0);
+    expect(ended).toBe(1);
+  });
+
+  it("an error mid-chunk resets state so a late end can't chain a stale segment", () => {
+    const engine = makeEngineCapped(10);
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]));
+    const errored = synth.spoken[0];
+    errored.fireError("interrupted");
+    // A late end delivered on the errored utterance must not speak segment 1.
+    errored.fireEnd();
+    expect(synth.spoken).toHaveLength(1);
   });
 });

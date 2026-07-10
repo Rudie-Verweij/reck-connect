@@ -107,15 +107,32 @@ describe("MarkdownSurfaceAdapter", () => {
   it("setTheme colours the overlay (applied even when set before the overlay exists)", () => {
     const { container, body } = makeBodyWithHTML("<p>Hello world!</p>");
     const adapter = new MarkdownSurfaceAdapter({ container, body });
-    adapter.setTheme({ backgroundColor: "rgb(10, 20, 30)" });
+    adapter.setTheme({ backgroundColor: "#0a141e" }); // rgb(10, 20, 30)
     adapter.resolveSpokenChunk();
     adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "Hello", charIndex: 0 });
     const overlay = container.querySelector<HTMLDivElement>(".tts-highlight-overlay");
     expect(overlay).not.toBeNull();
-    expect(overlay!.style.background).toBe("rgb(10, 20, 30)");
+    // Fill is the highlight colour at 50% alpha (text reads through it).
+    expect(overlay!.style.background).toBe("rgba(10, 20, 30, 0.5)");
     // And a later setTheme recolours the live overlay.
-    adapter.setTheme({ backgroundColor: "rgb(40, 50, 60)" });
-    expect(overlay!.style.background).toBe("rgb(40, 50, 60)");
+    adapter.setTheme({ backgroundColor: "#28323c" }); // rgb(40, 50, 60)
+    expect(overlay!.style.background).toBe("rgba(40, 50, 60, 0.5)");
+  });
+
+  it("paints an OPAQUE outline ring so the highlight reads over tinted backgrounds", () => {
+    // Regression: a flat translucent fill washed out to invisible over the
+    // orange user-turn cards / raised code blocks. The overlay now also
+    // carries a full-opacity outline in the highlight colour, and must NOT
+    // set element opacity (that would fade the ring along with the fill).
+    const { container, body } = makeBodyWithHTML("<p>Hello world!</p>");
+    const adapter = new MarkdownSurfaceAdapter({ container, body });
+    adapter.setTheme({ backgroundColor: "#ffc96b" });
+    adapter.resolveSpokenChunk();
+    adapter.highlightBoundary({ line: 0, col: 0, len: 5, word: "Hello", charIndex: 0 });
+    const overlay = container.querySelector<HTMLDivElement>(".tts-highlight-overlay");
+    expect(overlay).not.toBeNull();
+    expect(overlay!.style.outline).toBe("1.5px solid #ffc96b");
+    expect(overlay!.style.opacity).toBe(""); // element opacity never set
   });
 
   it("clearHighlight removes the overlay", () => {

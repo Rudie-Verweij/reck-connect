@@ -34,6 +34,9 @@ export interface TtsEngineOptions {
    * a typical drag. Set to 0 in tests for synchronous semantics.
    */
   restartDebounceMs?: number;
+  /** Override the per-utterance char cap (see MAX_UTTERANCE_CHARS). Tests
+   *  set a small value to exercise multi-segment speech cheaply. */
+  maxUtteranceChars?: number;
 }
 
 export interface StartOptions {
@@ -126,11 +129,53 @@ export function sliceChunkFrom(
   };
 }
 
+// Maximum characters per SpeechSynthesisUtterance. A single utterance far
+// larger than this wedges the engine: Chromium silently drops / never
+// finishes an over-long utterance, leaving `speaking` stuck true so every
+// later speak() queues behind it forever (only an app restart clears it).
+// The transcript surface can hand us a huge chunk when a tool_use /
+// tool_result payload is EXPANDED (hundreds of KB of JSON as one string),
+// so we segment the chunk into sub-utterances spoken back-to-back. 2000 is
+// comfortably under the platform limit while keeping inter-segment gaps rare.
+export const MAX_UTTERANCE_CHARS = 2000;
+
+/**
+ * Split `text` into [start, end) segments each at most `max` chars, breaking
+ * on whitespace so a word is never cut across two utterances (a boundary
+ * event's charIndex must stay resolvable within its segment). A single word
+ * longer than `max` is hard-split as a last resort. Offsets index the
+ * ORIGINAL text so each segment maps straight back into the chunk's rangeMap.
+ */
+export function segmentText(
+  text: string,
+  max: number,
+): Array<{ start: number; end: number }> {
+  const segs: Array<{ start: number; end: number }> = [];
+  const n = text.length;
+  if (n === 0) return segs;
+  let i = 0;
+  while (i < n) {
+    let end = Math.min(i + max, n);
+    if (end < n) {
+      // Back up to the last whitespace within (i, end] so we split between
+      // words. If there's no whitespace in the window it's one long token —
+      // hard-split at `end` rather than loop forever.
+      let b = end;
+      while (b > i && !/\s/.test(text[b - 1])) b--;
+      if (b > i) end = b;
+    }
+    segs.push({ start: i, end });
+    i = end;
+  }
+  return segs;
+}
+
 export class TtsEngine {
   private readonly synth: SpeechSynthesis;
   private readonly UtteranceCtor: typeof SpeechSynthesisUtterance;
   private readonly heartbeatIntervalMs: number;
   private readonly restartDebounceMs: number;
+  private readonly maxUtteranceChars: number;
   private rateRestartTimer: ReturnType<typeof setTimeout> | null = null;
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -139,6 +184,17 @@ export class TtsEngine {
   private currentVoice: SpeechSynthesisVoice | null = null;
   private rate = 1.0;
   private userPaused = false;
+  // The current chunk split into [start, end) segments (each ≤
+  // maxUtteranceChars), spoken back-to-back so no single utterance is large
+  // enough to wedge the synthesizer. segIndex is the segment in flight;
+  // segBase is its start offset into currentChunk.text, added to each
+  // boundary's charIndex so highlighting resolves against the whole chunk.
+  private segments: Array<{ start: number; end: number }> = [];
+  private segIndex = 0;
+  private segBase = 0;
+  // Set when a user pause() raced a segment's end: the next segment is held
+  // back (speaking into a paused queue wedges forever) until resume() runs it.
+  private segmentPending = false;
   // Char-index of the most recent 'word' boundary, in the CURRENT chunk's
   // coordinate space. Reset to 0 on start() and on every rate-change
   // restart (where the chunk is re-sliced from this point onward).
@@ -167,6 +223,7 @@ export class TtsEngine {
     this.UtteranceCtor = UtteranceCtor;
     this.heartbeatIntervalMs = opts.heartbeatIntervalMs ?? 9000;
     this.restartDebounceMs = opts.restartDebounceMs ?? 60;
+    this.maxUtteranceChars = opts.maxUtteranceChars ?? MAX_UTTERANCE_CHARS;
   }
 
   on<K extends keyof EventMap>(event: K, cb: Listener<EventMap[K]>): () => void {
@@ -217,21 +274,58 @@ export class TtsEngine {
     }
     this.stopHeartbeat();
 
-    // Speak the sanitized text but keep the ORIGINAL in
-    // currentChunk: boundary `word` extraction, sliceChunkFrom, and every
-    // adapter's rangeMap continue to index the original string (same
-    // length by construction, so charIndex values are interchangeable).
-    const spokenText = sanitizeUtteranceText(chunk.text);
-    const utt = new this.UtteranceCtor(spokenText);
-    utt.text = spokenText;
-    utt.rate = rate;
-    if (voice) utt.voice = voice;
-
+    // Keep the ORIGINAL chunk: boundary `word` extraction, sliceChunkFrom,
+    // and every adapter's rangeMap index the original string. Split it into
+    // ≤ maxUtteranceChars segments so no single utterance is big enough to
+    // wedge the synthesizer, then speak the first — handleEnd chains the rest.
     this.currentChunk = chunk;
-    this.currentUtt = utt;
+    this.currentVoice = voice;
+    this.rate = rate;
+    this.segments = segmentText(chunk.text, this.maxUtteranceChars);
+    this.segIndex = 0;
+    this.segmentPending = false;
     this.userPaused = false;
+    if (this.segments.length === 0) {
+      // Empty text: nothing to speak. Reset and signal completion so callers
+      // that await an 'end' after start() don't hang.
+      this.currentChunk = null;
+      this.currentUtt = null;
+      for (const cb of this.endListeners) cb();
+      return;
+    }
+    this.speakSegment();
+  }
+
+  /** Speak segments[segIndex] as its own utterance. Called by speakInternal
+   *  for the first segment and by handleEnd to chain each subsequent one. */
+  private speakSegment(): void {
+    if (!this.currentChunk) return;
+    const seg = this.segments[this.segIndex];
+    if (!seg) return;
+    // Never speak into a still-paused global queue — the utterance would sit
+    // queued forever with no boundary/end events (the same wedge speakInternal
+    // guards against). resume() is a no-op when the queue isn't paused.
+    if (this.synth.paused) this.synth.resume();
+    this.segBase = seg.start;
+    // Reflect the reached position immediately: until this segment's first
+    // boundary fires, a rate change must restart from the segment START, not
+    // from the previous segment's last boundary (which would re-speak text).
+    this.lastBoundaryCharIndex = seg.start;
     this.zeroBoundaryStreak = 0;
     this.boundaryDegenerate = false;
+
+    // Speak the sanitized text but map boundaries back through segBase into
+    // the original chunk (sanitize is length-preserving, so charIndex values
+    // are interchangeable with the original slice).
+    const spokenText = sanitizeUtteranceText(
+      this.currentChunk.text.slice(seg.start, seg.end),
+    );
+    const utt = new this.UtteranceCtor(spokenText);
+    utt.text = spokenText;
+    utt.rate = this.rate;
+    if (this.currentVoice) utt.voice = this.currentVoice;
+
+    this.currentUtt = utt;
 
     utt.onboundary = (ev: SpeechSynthesisEvent) => this.handleBoundary(ev);
     utt.onend = () => this.handleEnd();
@@ -257,6 +351,10 @@ export class TtsEngine {
     this.currentVoice = null;
     this.userPaused = false;
     this.lastBoundaryCharIndex = 0;
+    this.segments = [];
+    this.segIndex = 0;
+    this.segBase = 0;
+    this.segmentPending = false;
     this.stopHeartbeat();
   }
 
@@ -268,6 +366,12 @@ export class TtsEngine {
   resume(): void {
     this.userPaused = false;
     this.synth.resume();
+    // If a pause raced a segment's end, handleEnd deferred the next segment
+    // rather than speak into the paused queue. Start it now.
+    if (this.segmentPending) {
+      this.segmentPending = false;
+      this.speakSegment();
+    }
   }
 
   setRate(rate: number): void {
@@ -348,7 +452,11 @@ export class TtsEngine {
     if (ev.name !== "word") return;
     if (!this.currentChunk) return;
     if (this.boundaryDegenerate) return;
-    const idx = ev.charIndex;
+    // The OS reports charIndex relative to the current SEGMENT's utterance;
+    // shift by segBase to index the whole chunk (rangeMap / word / rate
+    // restart all work in chunk coordinates).
+    const rel = ev.charIndex;
+    const idx = this.segBase + rel;
     // Track most-recent boundary so live rate changes can restart from
     // here. Recorded even when no rangemap entry matches (e.g. punctuation).
     this.lastBoundaryCharIndex = idx;
@@ -357,8 +465,10 @@ export class TtsEngine {
     // UTTERANCE_POISON_CHARS); a healthy stream's charIndex grows, so a
     // long run of consecutive zeros means the positions are garbage.
     // Warn once, tell listeners (the controller clears the stuck
-    // highlight), and stop emitting boundaries for this utterance.
-    if (idx === 0) {
+    // highlight), and stop emitting boundaries for this utterance. Keyed on
+    // the segment-relative index so a segment that starts at a nonzero
+    // segBase isn't mistaken for a healthy stream.
+    if (rel === 0) {
       this.zeroBoundaryStreak += 1;
       if (this.zeroBoundaryStreak >= DEGENERATE_ZERO_BOUNDARY_THRESHOLD) {
         this.boundaryDegenerate = true;
@@ -390,13 +500,44 @@ export class TtsEngine {
 
   private handleEnd(): void {
     this.stopHeartbeat();
+    // A segment finished. If more remain, chain straight into the next one
+    // (still the same logical playback — no 'end' fires to listeners). Only
+    // when the LAST segment ends is the chunk truly done.
+    this.segIndex += 1;
+    if (this.currentChunk && this.segIndex < this.segments.length) {
+      if (this.userPaused) {
+        // A user pause() raced this segment's end. Do NOT speak the next
+        // segment into the paused queue (it would wedge forever); hold it
+        // until resume() runs it.
+        this.currentUtt = null;
+        this.segmentPending = true;
+        return;
+      }
+      this.speakSegment();
+      return;
+    }
     this.currentUtt = null;
     this.currentChunk = null;
+    this.segments = [];
+    this.segIndex = 0;
+    this.segBase = 0;
+    this.segmentPending = false;
     for (const cb of this.endListeners) cb();
   }
 
   private handleError(ev: SpeechSynthesisErrorEvent): void {
     this.stopHeartbeat();
+    // Reset all in-flight state so an error partway through a multi-segment
+    // chunk doesn't leave the engine stuck "mid-chunk" (segments that would
+    // never be spoken, no end ever reaching the controller). A subsequent
+    // start() is clean; the controller keys off the 'error' below.
+    if (this.currentUtt) this.detachUtterance(this.currentUtt);
+    this.currentUtt = null;
+    this.currentChunk = null;
+    this.segments = [];
+    this.segIndex = 0;
+    this.segBase = 0;
+    this.segmentPending = false;
     const err = new Error(ev.error || "speech-synthesis-error");
     for (const cb of this.errorListeners) cb(err);
   }
