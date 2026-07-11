@@ -415,11 +415,12 @@ export async function boot(splash?: StartupSplashController) {
           endDrag();
           setRailMode("mini");
           break;
-        case "stick":
-          // Accidental-collapse guard: the rail stays pinned at the row
-          // minimum while the pointer crosses the sticky zone.
+        case "stretch":
+          // Elastic accidental-collapse guard: the rail trails the
+          // pointer with damped rubber-band resistance, signalling
+          // "keep pulling to collapse" instead of freezing solid.
           railExpandedWidth = RAIL_COLLAPSE_AT;
-          railWidth = RAIL_COLLAPSE_AT;
+          railWidth = decision.width;
           applyGrid();
           break;
         case "expand":
@@ -457,6 +458,12 @@ export async function boot(splash?: StartupSplashController) {
           break;
         case "settle-mini":
           railAnimator.animateTo(RAIL_MINI, { durationMs: RAIL_SNAP_MS, easing: "spring" });
+          break;
+        case "bounce-back":
+          // Released mid-stretch without committing the collapse — the
+          // elastic snaps the rail back to the row minimum.
+          railAnimator.animateTo(RAIL_COLLAPSE_AT, { durationMs: RAIL_SNAP_MS, easing: "spring" });
+          void saveRailWidth(railExpandedWidth);
           break;
         case "stay":
           void saveRailWidth(railExpandedWidth);

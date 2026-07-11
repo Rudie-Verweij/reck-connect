@@ -5,6 +5,7 @@ import {
   RAIL_MAX,
   RAIL_MINI,
   RAIL_STICKY_PX,
+  RAIL_STRETCH_FACTOR,
   createWidthAnimator,
   projectInitials,
   railDragDecision,
@@ -12,6 +13,11 @@ import {
   type RailDragDecision,
   type RailDragRelease,
 } from "./rail-collapse";
+
+/** Damped width the elastic zone shows for a given raw pointer width. */
+function stretched(rawWidth: number): number {
+  return Math.round(RAIL_COLLAPSE_AT - (RAIL_COLLAPSE_AT - rawWidth) * RAIL_STRETCH_FACTOR);
+}
 
 describe("projectInitials", () => {
   const cases: Array<[string, string]> = [
@@ -52,9 +58,11 @@ describe("railDragDecision", () => {
     { desc: "expanded above max clamps", width: 999, mini: false, want: { kind: "resize", width: RAIL_MAX } },
     { desc: "expanded mid-squeeze", width: 200, mini: false, want: { kind: "resize", width: 200 } },
     { desc: "expanded exactly at row minimum stays resize", width: RAIL_COLLAPSE_AT, mini: false, want: { kind: "resize", width: RAIL_COLLAPSE_AT } },
-    // Expanded: the sticky zone pins the rail before the collapse commits.
-    { desc: "expanded one below row minimum sticks", width: RAIL_COLLAPSE_AT - 1, mini: false, want: { kind: "stick" } },
-    { desc: "expanded at sticky floor still sticks", width: STICK_FLOOR, mini: false, want: { kind: "stick" } },
+    // Expanded: the elastic zone lets the rail trail the pointer with
+    // damped resistance before the collapse commits.
+    { desc: "expanded one below row minimum starts stretching", width: RAIL_COLLAPSE_AT - 1, mini: false, want: { kind: "stretch", width: stretched(RAIL_COLLAPSE_AT - 1) } },
+    { desc: "expanded mid-zone stretch is damped, not 1:1", width: RAIL_COLLAPSE_AT - 20, mini: false, want: { kind: "stretch", width: RAIL_COLLAPSE_AT - Math.round(20 * RAIL_STRETCH_FACTOR) } },
+    { desc: "expanded at sticky floor still stretches", width: STICK_FLOOR, mini: false, want: { kind: "stretch", width: stretched(STICK_FLOOR) } },
     { desc: "expanded one below sticky floor collapses", width: STICK_FLOOR - 1, mini: false, want: { kind: "collapse" } },
     { desc: "expanded far below collapses", width: 10, mini: false, want: { kind: "collapse" } },
     // Mini: the rail tracks the pointer live until it commits past the row minimum.
@@ -80,7 +88,10 @@ describe("railDragRelease", () => {
     want: RailDragRelease;
   }> = [
     { desc: "expanded release stays", width: 200, mini: false, want: { kind: "stay" } },
-    { desc: "expanded release inside old sticky zone stays", width: RAIL_COLLAPSE_AT, mini: false, want: { kind: "stay" } },
+    { desc: "expanded release exactly at the row minimum stays", width: RAIL_COLLAPSE_AT, mini: false, want: { kind: "stay" } },
+    // Released mid-stretch without committing: the elastic snaps back.
+    { desc: "expanded release one px into the stretch bounces back", width: RAIL_COLLAPSE_AT - 1, mini: false, want: { kind: "bounce-back" } },
+    { desc: "expanded release deep in the stretch bounces back", width: stretched(RAIL_COLLAPSE_AT - RAIL_STICKY_PX), mini: false, want: { kind: "bounce-back" } },
     { desc: "mini release with no pull settles back", width: RAIL_MINI, mini: true, want: { kind: "settle-mini" } },
     { desc: "mini release just under the commit settles back", width: COMMIT - 1, mini: true, want: { kind: "settle-mini" } },
     { desc: "mini release at the commit springs open", width: COMMIT, mini: true, want: { kind: "spring-expand" } },
