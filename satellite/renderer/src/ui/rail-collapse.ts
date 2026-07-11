@@ -12,8 +12,10 @@
 export const RAIL_MAX = 240;
 export const RAIL_MINI = 48;
 export const RAIL_COLLAPSE_AT = 171;
-/** Hysteresis: dragging inward, the rail stays pinned at RAIL_COLLAPSE_AT for this many extra pixels of pointer travel before the collapse commits — guards against accidental collapses. */
-export const RAIL_STICKY_PX = 50;
+/** Hysteresis: dragging inward past RAIL_COLLAPSE_AT, the collapse only commits after this many extra pixels of pointer travel — guards against accidental collapses. Inside the zone the rail stretches elastically (see RAIL_STRETCH_FACTOR) so the pull reads as progress, not a stuck divider. */
+export const RAIL_STICKY_PX = 32;
+/** Elastic damping inside the sticky zone: the rail trails the pointer at this fraction of its travel (rubber-band resistance), then snaps back if released before the collapse commits. */
+export const RAIL_STRETCH_FACTOR = 0.35;
 /** Dragging outward from mini, releasing beyond this small pull means "expand" — the rail springs open instead of settling back. */
 export const RAIL_EXPAND_COMMIT_PX = 24;
 
@@ -40,7 +42,7 @@ export function projectInitials(name: string): string {
 
 export type RailDragDecision =
   | { kind: "resize"; width: number }
-  | { kind: "stick" }
+  | { kind: "stretch"; width: number }
   | { kind: "collapse" }
   | { kind: "expand"; width: number }
   | { kind: "track"; width: number };
@@ -52,9 +54,10 @@ export type RailDragDecision =
  *
  *  - expanded, above the row minimum → live resize (clamped to
  *    RAIL_MAX; rows squeeze between RAIL_MAX and RAIL_COLLAPSE_AT).
- *  - expanded, inside the sticky zone → the rail stays pinned at
- *    RAIL_COLLAPSE_AT until the pointer travels RAIL_STICKY_PX further,
- *    so a slight overshoot can't collapse it by accident.
+ *  - expanded, inside the sticky zone → elastic stretch: the rail
+ *    trails the pointer at RAIL_STRETCH_FACTOR of its travel below
+ *    RAIL_COLLAPSE_AT, so the pull visibly makes progress while a
+ *    slight overshoot still can't collapse it by accident.
  *  - expanded, past the sticky zone → collapse into mini mid-drag (the
  *    caller ends the drag and springs to RAIL_MINI).
  *  - mini, past the row minimum → re-expand live at the pointer.
@@ -69,23 +72,38 @@ export function railDragDecision(rawWidth: number, mini: boolean): RailDragDecis
     return { kind: "track", width: Math.max(RAIL_MINI, rawWidth) };
   }
   if (rawWidth < RAIL_COLLAPSE_AT - RAIL_STICKY_PX) return { kind: "collapse" };
-  if (rawWidth < RAIL_COLLAPSE_AT) return { kind: "stick" };
+  if (rawWidth < RAIL_COLLAPSE_AT) {
+    const overshoot = RAIL_COLLAPSE_AT - rawWidth;
+    return {
+      kind: "stretch",
+      width: Math.round(RAIL_COLLAPSE_AT - overshoot * RAIL_STRETCH_FACTOR),
+    };
+  }
   return { kind: "resize", width: Math.min(RAIL_MAX, rawWidth) };
 }
 
 export type RailDragRelease =
   | { kind: "spring-expand" }
   | { kind: "settle-mini" }
+  | { kind: "bounce-back" }
   | { kind: "stay" };
 
 /**
- * Classify a drag release. Only meaningful while still in mini mode (a
- * drag that crossed the row minimum already re-expanded live): letting
- * go after even a small outward pull means "I meant to expand" and the
- * rail springs open; anything less settles back to RAIL_MINI.
+ * Classify a drag release.
+ *
+ * Mini (a drag that crossed the row minimum already re-expanded live):
+ * letting go after even a small outward pull means "I meant to expand"
+ * and the rail springs open; anything less settles back to RAIL_MINI.
+ *
+ * Expanded below RAIL_COLLAPSE_AT means the drag ended mid-stretch
+ * without committing the collapse — the elastic snaps the rail back to
+ * the row minimum.
  */
 export function railDragRelease(width: number, mini: boolean): RailDragRelease {
-  if (!mini) return { kind: "stay" };
+  if (!mini) {
+    if (width < RAIL_COLLAPSE_AT) return { kind: "bounce-back" };
+    return { kind: "stay" };
+  }
   if (width >= RAIL_MINI + RAIL_EXPAND_COMMIT_PX) return { kind: "spring-expand" };
   return { kind: "settle-mini" };
 }

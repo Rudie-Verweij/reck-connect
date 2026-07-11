@@ -137,7 +137,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    minWidth: 900,
+    minWidth: 450,
     minHeight: 600,
     title: "Reck Connect Satellite",
     webPreferences: {
