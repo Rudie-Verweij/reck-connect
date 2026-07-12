@@ -97,6 +97,8 @@ export class DictationBar implements DictationUI {
 
   setInterim(text: string): void {
     this.interimEl.textContent = text;
+    // Keep the most-recent words in view as the transcript grows.
+    this.interimEl.scrollLeft = this.interimEl.scrollWidth;
   }
 
   setError(message: string): void {

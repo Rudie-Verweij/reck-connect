@@ -27,7 +27,15 @@ env.allowLocalModels = false;
 
 type InMessage =
   | { type: "prepare"; repo: string; generation: number }
-  | { type: "transcribe"; repo: string; generation: number; audio: Float32Array };
+  | {
+      type: "transcribe";
+      repo: string;
+      generation: number;
+      audio: Float32Array;
+      // "partial" = a live snapshot while still recording (shown as interim);
+      // "final" = the complete utterance on stop (injected). Default final.
+      kind?: "partial" | "final";
+    };
 
 let asr: AutomaticSpeechRecognitionPipeline | null = null;
 let loadedRepo: string | null = null;
@@ -148,9 +156,11 @@ self.onmessage = async (e: MessageEvent<InMessage>) => {
       post({ type: "ready", generation: gen });
       return;
     }
-    post({ type: "status", status: "transcribing", generation: gen });
+    const kind = msg.kind ?? "final";
+    // Don't flip the UI to "Transcribing…" for the frequent partial passes.
+    if (kind === "final") post({ type: "status", status: "transcribing", generation: gen });
     const output = await model(msg.audio, { chunk_length_s: 30, stride_length_s: 5 });
-    post({ type: "result", text: extractText(output).trim(), generation: gen });
+    post({ type: "result", kind, text: extractText(output).trim(), generation: gen });
   } catch (err) {
     post({
       type: "error",
@@ -173,7 +183,7 @@ type WorkerOut =
   | { type: "status"; status: "loading" | "transcribing"; generation: number }
   | { type: "progress"; pct: number; generation: number }
   | { type: "ready"; generation: number }
-  | { type: "result"; text: string; generation: number }
+  | { type: "result"; kind: "partial" | "final"; text: string; generation: number }
   | { type: "error"; message: string; generation: number };
 
 function post(m: WorkerOut): void {

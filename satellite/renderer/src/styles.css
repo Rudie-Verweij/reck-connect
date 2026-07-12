@@ -3953,8 +3953,8 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 .dictation-bar-label[hidden] { display: none; }
 .dictation-bar-interim {
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 46ch;
   opacity: 0.85;
 }
 .dictation-bar-interim:empty { display: none; }

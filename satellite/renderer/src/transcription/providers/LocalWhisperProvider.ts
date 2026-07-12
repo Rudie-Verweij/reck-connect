@@ -1,19 +1,23 @@
-// Embedded (on-device) Whisper provider. Batch style: it ignores live
-// chunks and transcribes the whole utterance when capture stops, via a
-// persistent Web Worker (so the model stays loaded across utterances).
+// Embedded (on-device) Whisper provider via a persistent Web Worker (so the
+// model stays loaded across utterances).
 //
-// The model is loaded + warmed up in prepare() — before the mic starts — so
-// recording only begins once transcription can actually run, and a WebGPU
-// failure surfaces up front instead of after the user has spoken.
+// Whisper isn't a streaming model, but to show live text we re-transcribe the
+// audio-so-far every ~1.2s while recording and surface that as interim
+// ("partial") text; on stop we do one final pass over the whole utterance and
+// inject that ("final"). The model is loaded + warmed up in prepare() — before
+// the mic starts — so recording only begins once transcription can run.
 
-import { resampleLinear, WHISPER_SAMPLE_RATE } from "../pcm";
+import { mergeFloat32, resampleLinear, WHISPER_SAMPLE_RATE } from "../pcm";
 import type { Transcriber, TranscriptionHandlers } from "./types";
+
+// How often to re-transcribe the growing buffer for the live preview.
+const PARTIAL_INTERVAL_MS = 1200;
 
 type WorkerOut =
   | { type: "status"; status: "loading" | "transcribing"; generation: number }
   | { type: "progress"; pct: number; generation: number }
   | { type: "ready"; generation: number }
-  | { type: "result"; text: string; generation: number }
+  | { type: "result"; kind: "partial" | "final"; text: string; generation: number }
   | { type: "error"; message: string; generation: number };
 
 export class LocalWhisperProvider implements Transcriber {
@@ -21,11 +25,16 @@ export class LocalWhisperProvider implements Transcriber {
   private handlers: TranscriptionHandlers | null = null;
   // Bumped each utterance; a late reply from a cancelled one is dropped.
   private generation = 0;
-  // Resolves the in-flight transcribe (end) promise.
   private resolveEnd: (() => void) | null = null;
-  // Settles the in-flight prepare promise.
   private resolvePrepare: (() => void) | null = null;
   private rejectPrepare: ((err: Error) => void) | null = null;
+
+  // Live-preview state.
+  private liveChunks: Float32Array[] = [];
+  private liveSampleRate = WHISPER_SAMPLE_RATE;
+  private partialTimer: number | null = null;
+  private partialBusy = false;
+  private lastPartialLen = 0;
 
   constructor(private readonly repo: string) {}
 
@@ -48,12 +57,15 @@ export class LocalWhisperProvider implements Transcriber {
           this.settlePrepare();
           break;
         case "result":
-          this.handlers?.onFinal?.(d.text);
-          this.settleEnd();
+          if (d.kind === "partial") {
+            this.partialBusy = false;
+            if (d.text) this.handlers?.onPartial?.(d.text);
+          } else {
+            this.handlers?.onFinal?.(d.text);
+            this.settleEnd();
+          }
           break;
         case "error":
-          // A failure during prepare rejects prepare (before recording);
-          // otherwise it's a transcription error for the current utterance.
           if (this.rejectPrepare) this.settlePrepare(new Error(d.message));
           else {
             this.handlers?.onError?.(d.message);
@@ -101,15 +113,49 @@ export class LocalWhisperProvider implements Transcriber {
   }
 
   async begin(): Promise<void> {
-    // Model was loaded in prepare(); nothing to do per-utterance.
+    // Fresh utterance: reset the live buffer and start the preview loop.
+    this.liveChunks = [];
+    this.lastPartialLen = 0;
+    this.partialBusy = false;
+    this.stopPartialTimer();
+    this.partialTimer = self.setInterval(() => this.runPartial(), PARTIAL_INTERVAL_MS);
   }
 
-  feed(): void {
-    // Batch provider: nothing to do with live chunks.
+  feed(chunk: Float32Array, sampleRate: number): void {
+    this.liveSampleRate = sampleRate;
+    this.liveChunks.push(chunk);
   }
 
-  /** Resolves once the worker has returned a result (or errored/cancelled). */
+  private runPartial(): void {
+    if (this.partialBusy || !this.worker) return;
+    let total = 0;
+    for (const c of this.liveChunks) total += c.length;
+    // Skip if nothing new since the last partial (avoid redundant work).
+    if (total === 0 || total === this.lastPartialLen) return;
+    this.lastPartialLen = total;
+    this.partialBusy = true;
+    const audio = resampleLinear(
+      mergeFloat32(this.liveChunks),
+      this.liveSampleRate,
+      WHISPER_SAMPLE_RATE,
+    );
+    this.worker.postMessage(
+      { type: "transcribe", kind: "partial", audio, repo: this.repo, generation: this.generation },
+      [audio.buffer],
+    );
+  }
+
+  private stopPartialTimer(): void {
+    if (this.partialTimer !== null) {
+      self.clearInterval(this.partialTimer);
+      this.partialTimer = null;
+    }
+  }
+
+  /** Resolves once the worker has returned the final result (or errored). */
   end(full: Float32Array, sampleRate: number): Promise<void> {
+    this.stopPartialTimer();
+    this.liveChunks = [];
     if (full.length === 0) {
       this.handlers?.onFinal?.("");
       return Promise.resolve();
@@ -119,7 +165,7 @@ export class LocalWhisperProvider implements Transcriber {
     return new Promise<void>((resolve) => {
       this.resolveEnd = resolve;
       worker.postMessage(
-        { type: "transcribe", audio, repo: this.repo, generation: this.generation },
+        { type: "transcribe", kind: "final", audio, repo: this.repo, generation: this.generation },
         [audio.buffer],
       );
     });
@@ -128,6 +174,9 @@ export class LocalWhisperProvider implements Transcriber {
   cancel(): void {
     // Invalidate any in-flight reply and release waiters so nothing hangs.
     this.generation++;
+    this.stopPartialTimer();
+    this.liveChunks = [];
+    this.partialBusy = false;
     this.settleEnd();
     this.settlePrepare(new Error("cancelled"));
   }
