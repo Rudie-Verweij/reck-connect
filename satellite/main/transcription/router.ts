@@ -12,7 +12,7 @@ import { DeepgramSession } from "./deepgram";
 
 export interface TranscriptionEvent {
   sessionId: number;
-  kind: "partial" | "final" | "error" | "closed";
+  kind: "partial" | "final" | "error" | "closed" | "debug";
   text: string;
 }
 
@@ -51,6 +51,7 @@ export function registerTranscriptionIpc(getWindow: () => BrowserWindow | null):
           onFinal: (text) => send({ sessionId: id, kind: "final", text }),
           onError: (message) => send({ sessionId: id, kind: "error", text: message }),
           onClosed: () => send({ sessionId: id, kind: "closed", text: "" }),
+          onDebug: (message) => send({ sessionId: id, kind: "debug", text: message }),
         });
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };

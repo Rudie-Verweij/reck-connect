@@ -15,6 +15,12 @@ const PARTIAL_INTERVAL_MS = 1200;
 // RMS above this counts as speech. Below it we don't transcribe at all, so
 // Whisper can't hallucinate words out of silence.
 const VOICE_THRESHOLD = 0.01;
+// Partial passes re-transcribe the whole live buffer, whose cost grows with
+// utterance length. Once the un-frozen span exceeds this, freeze the words
+// committed so far and restart the live pass on audio from that point on, so
+// each partial stays O(window). The final pass still covers the full
+// utterance and corrects anything the cut mangled.
+const MAX_PARTIAL_WINDOW_S = 12;
 
 function words(text: string): string[] {
   return text.trim().split(/\s+/).filter(Boolean);
@@ -51,6 +57,10 @@ export class LocalWhisperProvider implements Transcriber {
   // are committed and never rewritten; `prevHyp` is the last full hypothesis.
   private committed: string[] = [];
   private prevHyp: string[] = [];
+  // Sliding-window state: words permanently frozen when the window advanced,
+  // and the sample offset (at capture rate) where the current window starts.
+  private frozen: string[] = [];
+  private windowStart = 0;
 
   constructor(private readonly repo: string) {}
 
@@ -136,6 +146,8 @@ export class LocalWhisperProvider implements Transcriber {
     this.hasVoice = false;
     this.committed = [];
     this.prevHyp = [];
+    this.frozen = [];
+    this.windowStart = 0;
     this.stopPartialTimer();
     this.partialTimer = self.setInterval(() => this.runPartial(), PARTIAL_INTERVAL_MS);
   }
@@ -160,7 +172,7 @@ export class LocalWhisperProvider implements Transcriber {
     this.prevHyp = cur;
     if (agree > this.committed.length) {
       this.committed = cur.slice(0, agree);
-      this.handlers?.onPartial?.(this.committed.join(" "));
+      this.handlers?.onPartial?.(this.frozen.concat(this.committed).join(" "));
     }
   }
 
@@ -173,9 +185,19 @@ export class LocalWhisperProvider implements Transcriber {
     // Skip if nothing new since the last partial (avoid redundant work).
     if (total === 0 || total === this.lastPartialLen) return;
     this.lastPartialLen = total;
+    // Window overflow: freeze what's committed and restart the live pass on
+    // audio from here on. Uncommitted tail words go dark until the final
+    // full-buffer pass restores them — bounded partial cost is worth it.
+    if (total - this.windowStart > MAX_PARTIAL_WINDOW_S * this.liveSampleRate) {
+      this.frozen = this.frozen.concat(this.committed);
+      this.committed = [];
+      this.prevHyp = [];
+      this.windowStart = total;
+      return;
+    }
     this.partialBusy = true;
     const audio = resampleLinear(
-      mergeFloat32(this.liveChunks),
+      mergeFloat32(this.liveChunks).subarray(this.windowStart),
       this.liveSampleRate,
       WHISPER_SAMPLE_RATE,
     );

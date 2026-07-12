@@ -21,7 +21,7 @@ declare global {
         onEvent: (
           cb: (ev: {
             sessionId: number;
-            kind: "partial" | "final" | "error" | "closed";
+            kind: "partial" | "final" | "error" | "closed" | "debug";
             text: string;
           }) => void,
         ) => () => void;

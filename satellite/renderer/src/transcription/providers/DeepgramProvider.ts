@@ -47,6 +47,10 @@ export class DeepgramProvider implements Transcriber {
       } else if (ev.kind === "final") {
         this.finalized = this.join(this.finalized, ev.text);
         this.handlers?.onPartial?.(this.finalized);
+      } else if (ev.kind === "debug") {
+        // Main-process lifecycle facts (open/close codes, frames sent) —
+        // surfaced here because main's stdout is invisible in a packaged app.
+        console.log("[deepgram]", ev.text);
       } else if (ev.kind === "error") {
         console.error("[deepgram] error event:", ev.text);
         this.dead = true;

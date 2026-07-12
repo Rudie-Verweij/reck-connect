@@ -68,24 +68,16 @@ async function ensureReady(
   if (asr && loadedRepo === repo) return asr;
   post({ type: "status", status: "loading", generation });
 
-  // Device + dtype + graph-optimization fallbacks. The main failure here is
-  // ORT's *extended* graph optimization (TransposeDQWeightsForMatMulNBits)
-  // crashing on these Whisper exports, so we step the optimization level down
-  // to "basic" then "disabled" before trying an unquantized dtype. Cached
-  // model files are reused across same-dtype retries (no re-download).
-  const configs: Array<{
-    device: "webgpu" | "wasm";
-    dtype: string;
-    opt: "basic" | "disabled";
-  }> = [];
+  // Device + dtype fallbacks. transformers.js is pinned to 3.8.1 because its
+  // bundled onnxruntime-web runs these Whisper exports at FULL graph
+  // optimization; 4.x's ORT crashed in TransposeDQWeightsForMatMulNBits and
+  // forced us to disable optimization, which made inference ~4× slower.
+  // Cached model files are reused across same-dtype retries (no re-download).
+  const configs: Array<{ device: "webgpu" | "wasm"; dtype: string }> = [];
   if (await webgpuUsable()) {
-    configs.push({ device: "webgpu", dtype: "fp16", opt: "basic" });
+    configs.push({ device: "webgpu", dtype: "fp16" });
   }
-  configs.push(
-    { device: "wasm", dtype: "q8", opt: "basic" },
-    { device: "wasm", dtype: "q8", opt: "disabled" },
-    { device: "wasm", dtype: "fp32", opt: "disabled" },
-  );
+  configs.push({ device: "wasm", dtype: "q8" }, { device: "wasm", dtype: "fp32" });
 
   // Aggregate per-file download progress into an overall 0-100.
   const files = new Map<string, { loaded: number; total: number }>();
@@ -115,20 +107,20 @@ async function ensureReady(
   let lastErr: unknown;
   for (const cfg of configs) {
     try {
-      // Lower graph optimization to skip the crashing QDQ→MatMulNBits
-      // transform (see the config comment above).
       const options = {
         device: cfg.device,
         dtype: cfg.dtype,
-        session_options: { graphOptimizationLevel: cfg.opt },
         progress_callback,
       };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const p = (await pipeline(
-        "automatic-speech-recognition",
-        repo,
-        options as any,
-      )) as AutomaticSpeechRecognitionPipeline;
+      // pipeline()'s overload union in transformers.js 3.x blows past tsc's
+      // complexity limit (TS2590) when options aren't a literal — call it
+      // through a narrowed signature instead.
+      const makePipeline = pipeline as unknown as (
+        task: string,
+        model: string,
+        opts?: Record<string, unknown>,
+      ) => Promise<AutomaticSpeechRecognitionPipeline>;
+      const p = await makePipeline("automatic-speech-recognition", repo, options);
       // No warm-up inference: device/quant failures surface at model creation
       // above (caught by this loop), and a warm-up on a big model is so slow on
       // CPU it looks hung. Skipping it lets loading finish as soon as the model

@@ -20,6 +20,9 @@ export interface DeepgramSessionHandlers {
   onFinal: (text: string) => void;
   onError: (message: string) => void;
   onClosed: () => void;
+  // Diagnostics forwarded to the renderer console — main-process logs are
+  // invisible in a Finder-launched app, so lifecycle facts travel this way.
+  onDebug: (message: string) => void;
 }
 
 type DeepgramSocket = Awaited<ReturnType<DeepgramClient["listen"]["v1"]["connect"]>>;
@@ -28,11 +31,21 @@ type DeepgramSocket = Awaited<ReturnType<DeepgramClient["listen"]["v1"]["connect
 // slack for the connection to open without growing unbounded.
 const MAX_QUEUED_FRAMES = 250;
 
+// Deepgram closes a stream that goes ~10s without audio (NET-0001). A
+// periodic KeepAlive covers gaps (permission prompts, long pauses).
+const KEEPALIVE_INTERVAL_MS = 4000;
+
 export class DeepgramSession {
   private socket: DeepgramSocket | null = null;
   private ready = false;
   private closed = false;
+  // We asked for the close (user stopped) — a close without this flag set is
+  // Deepgram hanging up on us and must be surfaced, not swallowed.
+  private closeRequested = false;
   private gotResult = false;
+  private framesSent = 0;
+  private bytesSent = 0;
+  private keepAlive: ReturnType<typeof setInterval> | null = null;
   // Frames captured before the socket finished opening — flushed on "open"
   // so the first words aren't lost (and one early frame can't kill the run).
   private queue: ArrayBuffer[] = [];
@@ -53,11 +66,14 @@ export class DeepgramSession {
       punctuate: "true",
       smart_format: "true",
       Authorization: `Token ${apiKey}`,
+      // The SDK's ReconnectingWebSocket retries 30× by default; a rejected
+      // key would silently loop connect/close. Fail once, loudly.
+      reconnectAttempts: 0,
     });
     this.socket = socket;
 
     socket.on("open", () => {
-      console.log("[deepgram] connection open @", sampleRate, "Hz");
+      handlers.onDebug(`connection open @ ${sampleRate} Hz`);
       this.markReady();
     });
     socket.on("message", (msg) => {
@@ -75,26 +91,50 @@ export class DeepgramSession {
     socket.on("close", (event: { code?: number; reason?: string }) => {
       const code = event?.code;
       const reason = event?.reason;
-      console.log(
-        `[deepgram] closed (code=${code ?? "?"}${reason ? `, reason=${reason}` : ""}, gotResult=${this.gotResult}, ready=${this.ready})`,
+      this.stopKeepAlive();
+      handlers.onDebug(
+        `closed (code=${code ?? "?"}${reason ? `, reason=${reason}` : ""}) after ` +
+          `${this.framesSent} frames / ${this.bytesSent} bytes sent; ` +
+          `gotResult=${this.gotResult}, ready=${this.ready}, requested=${this.closeRequested}`,
       );
       this.closed = true;
-      // Closed abnormally before any transcript → almost always a bad/rejected
-      // API key or a plan without streaming access. Surface it (silent
-      // failure was the previous behaviour).
-      if (!this.gotResult && code !== undefined && code !== 1000) {
+      // Deepgram hung up before we asked and before any transcript arrived.
+      // Surface it whatever the code — an undefined/1000 code here still
+      // means the stream produced nothing and the user deserves to know why.
+      if (!this.gotResult && !this.closeRequested) {
         handlers.onError(
-          `Deepgram closed the connection (code ${code}${reason ? `: ${reason}` : ""}). ` +
-            `This is usually an invalid API key or a plan without streaming access.`,
+          `Deepgram closed the connection (code ${code ?? "unknown"}${reason ? `: ${reason}` : ""}) ` +
+            `after ${this.framesSent} audio frames. ` +
+            (this.framesSent === 0
+              ? "No audio reached Deepgram — the socket never became ready."
+              : "This is usually an invalid API key or a plan without streaming access."),
         );
       }
       handlers.onClosed();
     });
 
-    // If connect() already resolved after the socket opened, the "open" event
-    // may have fired before our handler — detect that and flush.
-    const rs = (socket as unknown as { socket?: { readyState?: number } })?.socket?.readyState;
-    if (rs === 1) this.markReady();
+    // waitForOpen() resolves whether the socket opens now or already did —
+    // no race with the "open" event having fired before our handler attached.
+    void socket
+      .waitForOpen()
+      .then(() => {
+        this.markReady();
+      })
+      .catch((err: unknown) => {
+        if (this.closed || this.closeRequested) return;
+        const message = err instanceof Error ? err.message : String(err);
+        handlers.onError(`Deepgram connection failed to open: ${message}`);
+      });
+
+    // Keep the stream alive across quiet gaps.
+    this.keepAlive = setInterval(() => {
+      if (!this.ready || this.closed) return;
+      try {
+        this.socket?.sendKeepAlive({ type: "KeepAlive" });
+      } catch {
+        // Socket closing; the close handler reports the real story.
+      }
+    }, KEEPALIVE_INTERVAL_MS);
   }
 
   private markReady(): void {
@@ -105,6 +145,8 @@ export class DeepgramSession {
     for (const buf of this.queue) {
       try {
         socket.sendMedia(buf);
+        this.framesSent++;
+        this.bytesSent += buf.byteLength;
       } catch {
         // Dropped a flushed frame; the stream keeps going.
       }
@@ -114,7 +156,7 @@ export class DeepgramSession {
 
   /** Feed a linear16 audio frame (little-endian Int16 bytes). */
   sendAudio(bytes: Uint8Array): void {
-    if (this.closed) return;
+    if (this.closed || this.closeRequested) return;
     // Copy into a standalone ArrayBuffer so we never hand the socket a view
     // over a larger/pooled buffer.
     const buf = bytes.slice().buffer;
@@ -126,6 +168,8 @@ export class DeepgramSession {
     }
     try {
       this.socket?.sendMedia(buf);
+      this.framesSent++;
+      this.bytesSent += buf.byteLength;
     } catch {
       // Transient (closing/network); drop this frame, let the next retry.
     }
@@ -133,12 +177,16 @@ export class DeepgramSession {
 
   /** Signal end-of-stream and close. Deepgram flushes any final results. */
   close(): void {
-    this.closed = true;
+    this.closeRequested = true;
     this.ready = false;
     this.queue = [];
+    this.stopKeepAlive();
     const socket = this.socket;
     this.socket = null;
-    if (!socket) return;
+    if (!socket) {
+      this.closed = true;
+      return;
+    }
     try {
       socket.sendCloseStream({ type: "CloseStream" });
     } catch {
@@ -148,6 +196,13 @@ export class DeepgramSession {
       socket.close();
     } catch {
       // Already closed.
+    }
+  }
+
+  private stopKeepAlive(): void {
+    if (this.keepAlive !== null) {
+      clearInterval(this.keepAlive);
+      this.keepAlive = null;
     }
   }
 }
