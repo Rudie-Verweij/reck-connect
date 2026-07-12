@@ -6,6 +6,8 @@ interface FakeLink {
   text: string;
   range: { start: { x: number; y: number }; end: { x: number; y: number } };
   activate: (event: MouseEvent, text: string) => void;
+  hover?: (event: MouseEvent, text: string) => void;
+  leave?: () => void;
 }
 
 function makeLine(text: string, isWrapped = false) {
@@ -70,6 +72,22 @@ describe("installUrlLinkProvider", () => {
     const { term, getRegistered } = makeFakeTerminal(["just some ./path/file.ts text"]);
     installUrlLinkProvider(term as never, { onActivateUrl: vi.fn() });
     expect(linksFor(getRegistered, 1)).toEqual([]);
+  });
+
+  it("hover shows a '⌘+click to open in browser' tooltip; leave hides it", () => {
+    document.body.innerHTML = "";
+    const { term, getRegistered } = makeFakeTerminal(["see https://a.com/x"]);
+    installUrlLinkProvider(term as never, { onActivateUrl: vi.fn() });
+    const link = linksFor(getRegistered, 1)[0];
+
+    link.hover!({ clientX: 10, clientY: 10 } as MouseEvent, link.text);
+    const tip = document.querySelector(".reck-link-tooltip") as HTMLElement | null;
+    expect(tip).not.toBeNull();
+    expect(tip!.textContent).toBe("⌘+click to open in browser");
+    expect(tip!.style.display).toBe("block");
+
+    link.leave!();
+    expect((document.querySelector(".reck-link-tooltip") as HTMLElement).style.display).toBe("none");
   });
 
   it("disposes the registered provider", () => {

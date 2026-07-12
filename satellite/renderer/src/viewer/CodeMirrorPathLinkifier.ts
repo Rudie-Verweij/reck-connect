@@ -65,14 +65,14 @@ const rescanLinksEffect = StateEffect.define<DecorationSet>();
 // (PATH_LINK_TOOLTIP in MarkdownRenderer.ts) so the contract is uniform.
 const linkDecoration = Decoration.mark({
   class: "reck-path-link",
-  attributes: { title: "⌘+click to open" },
+  attributes: { title: "⌘+click to view file" },
 });
 
 // URL sibling of linkDecoration. Solid underline (via .reck-url-link)
 // distinguishes a web URL from the dashed path style.
 const urlDecoration = Decoration.mark({
   class: "reck-url-link",
-  attributes: { title: "⌘+click to open" },
+  attributes: { title: "⌘+click to open in browser" },
 });
 
 function computeDecorations(view: EditorView): DecorationSet {

@@ -18,6 +18,7 @@ import {
   type XtermLinkProviderTerminal,
 } from "./PathLinkProvider";
 import { detectUrlsInLine } from "./LinkDetector";
+import { showLinkTooltip, hideLinkTooltip } from "./linkTooltip";
 
 export interface UrlLinkProviderDeps {
   /**
@@ -52,6 +53,8 @@ export function installUrlLinkProvider(
         text: string;
         range: ReturnType<typeof projectMatchOntoLines>[number];
         activate: (event: MouseEvent, text: string) => void;
+        hover: (event: MouseEvent, text: string) => void;
+        leave: () => void;
       }> = [];
       for (const cand of candidates) {
         // Project the logical-line match back onto the physical rows it
@@ -67,6 +70,12 @@ export function installUrlLinkProvider(
               // must not hijack text selection or normal terminal clicks.
               if (!ev.metaKey) return;
               deps.onActivateUrl(textArg, ev);
+            },
+            hover(ev) {
+              showLinkTooltip("⌘+click to open in browser", ev);
+            },
+            leave() {
+              hideLinkTooltip();
             },
           });
         }

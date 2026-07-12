@@ -140,7 +140,7 @@ describe("installCodeMirrorPathLinkifier", () => {
     installCodeMirrorPathLinkifier(view, { onActivate: vi.fn() });
     const link = parent.querySelector(".reck-path-link") as HTMLElement | null;
     expect(link).not.toBeNull();
-    expect(link!.getAttribute("title")).toBe("⌘+click to open");
+    expect(link!.getAttribute("title")).toBe("⌘+click to view file");
     view.destroy();
   });
 
