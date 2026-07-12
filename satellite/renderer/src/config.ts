@@ -7,6 +7,25 @@ declare global {
         get: <T>(key: string) => Promise<T | null>;
         set: (key: string, value: unknown) => Promise<boolean>;
       };
+      /**
+       * Voice dictation — cloud (Deepgram) path. The main process holds the
+       * API key + websocket; the renderer streams linear16 frames and gets
+       * interim/final transcripts back via `onEvent`. See issue #67.
+       */
+      transcription: {
+        deepgramStart: (
+          sampleRate: number,
+        ) => Promise<{ ok: boolean; sessionId?: number; error?: string }>;
+        deepgramFrame: (sessionId: number, bytes: Uint8Array) => void;
+        deepgramStop: (sessionId: number) => Promise<boolean>;
+        onEvent: (
+          cb: (ev: {
+            sessionId: number;
+            kind: "partial" | "final" | "error" | "closed";
+            text: string;
+          }) => void,
+        ) => () => void;
+      };
       daemon: {
         status: (host: import("./host").HostRef) => Promise<{ running: boolean; binary: string | null }>;
         start: (

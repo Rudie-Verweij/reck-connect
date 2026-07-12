@@ -11,6 +11,7 @@ import {
   localDaemonToken,
 } from "./daemon-spawn";
 import { registerRsyncIpc } from "./rsync-copy";
+import { registerTranscriptionIpc } from "./transcription/router";
 import { checkExternalUrl, resolveInsideMountPoint } from "./ipc-validation";
 import { planMigration } from "./settings-migration";
 import { planBootstrapImport } from "./bootstrap-import";
@@ -1022,6 +1023,10 @@ ipcMain.handle(
 // --- IPC: rsync copy-to-station for "From existing folder…" flow ---
 
 registerRsyncIpc(() => mainWindow);
+
+// --- IPC: voice dictation (Deepgram cloud streaming; issue #67) ---
+
+registerTranscriptionIpc(() => mainWindow);
 
 // --- IPC: file-viewer popup + Cmd+click path linkifier ---
 //
