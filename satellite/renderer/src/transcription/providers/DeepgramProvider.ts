@@ -8,8 +8,11 @@ import type { Transcriber, TranscriptionHandlers } from "./types";
 
 // After CloseStream, Deepgram emits any trailing final results before it
 // closes the socket. Wait up to this long for the "closed" event so the
-// last words aren't dropped.
-const CLOSE_FLUSH_TIMEOUT_MS = 1500;
+// last words aren't dropped. Slightly longer than the main process's own
+// 3s flush window, so the socket always wins or loses before we stop
+// listening. In the normal case Deepgram closes within ~0.5s and this
+// timeout never bites.
+const CLOSE_FLUSH_TIMEOUT_MS = 4000;
 
 export class DeepgramProvider implements Transcriber {
   private sessionId: number | null = null;

@@ -35,6 +35,11 @@ const MAX_QUEUED_FRAMES = 250;
 // periodic KeepAlive covers gaps (permission prompts, long pauses).
 const KEEPALIVE_INTERVAL_MS = 4000;
 
+// After CloseStream, wait this long for Deepgram to flush trailing finals
+// and close from its side before force-closing the socket. Must exceed the
+// renderer's own flush wait so the finals beat the provider teardown.
+const CLOSE_FLUSH_TIMEOUT_MS = 3000;
+
 export class DeepgramSession {
   private socket: DeepgramSocket | null = null;
   private ready = false;
@@ -89,6 +94,7 @@ export class DeepgramSession {
       handlers.onError(err?.message ?? String(err));
     });
     socket.on("close", (event: { code?: number; reason?: string }) => {
+      if (this.closed) return; // forced-close fallback after a real close
       const code = event?.code;
       const reason = event?.reason;
       this.stopKeepAlive();
@@ -175,8 +181,15 @@ export class DeepgramSession {
     }
   }
 
-  /** Signal end-of-stream and close. Deepgram flushes any final results. */
+  /**
+   * Signal end-of-stream. Deepgram transcribes any buffered audio AFTER
+   * CloseStream and sends the trailing finals before closing the socket from
+   * its side — so do NOT hard-close here (the SDK's close() also detaches
+   * the message listeners, which would drop exactly those finals). A
+   * fallback timer force-closes if the server never does.
+   */
   close(): void {
+    if (this.closeRequested) return;
     this.closeRequested = true;
     this.ready = false;
     this.queue = [];
@@ -190,8 +203,16 @@ export class DeepgramSession {
     try {
       socket.sendCloseStream({ type: "CloseStream" });
     } catch {
-      // Socket may already be closing.
+      // Not open (never connected) — nothing to flush, close immediately.
+      this.forceClose(socket);
+      return;
     }
+    setTimeout(() => {
+      if (!this.closed) this.forceClose(socket);
+    }, CLOSE_FLUSH_TIMEOUT_MS);
+  }
+
+  private forceClose(socket: DeepgramSocket): void {
     try {
       socket.close();
     } catch {

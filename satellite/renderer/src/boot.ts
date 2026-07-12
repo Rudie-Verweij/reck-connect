@@ -1,4 +1,5 @@
 import { HttpError } from "@client-core/api/client";
+import { registerDictationSelfTest } from "./transcription/selfTest";
 import { describeError } from "./daemon/connection";
 import type { ConnectionInfo } from "./daemon/connection";
 import { decidePollFailureAction } from "./daemon/poll-failure-policy";
@@ -181,6 +182,10 @@ function unmountRestoringOverlay(root: HTMLElement) {
 
 export async function boot(splash?: StartupSplashController) {
   const app = document.getElementById("app")!;
+
+  // Dictation diagnostics — harmless global hook used by the e2e-electron
+  // dictation spec and by humans in DevTools (`reckDictationSelfTest.run()`).
+  registerDictationSelfTest();
 
   // Theme: apply as early as possible to avoid flash. The <html>
   // data-theme attribute also lets the boot splash pick the right
