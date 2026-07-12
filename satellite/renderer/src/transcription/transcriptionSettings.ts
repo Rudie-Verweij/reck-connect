@@ -54,6 +54,14 @@ export interface TranscriptionSettings {
   autoSubmit: boolean;
   /** Spoken language: "auto" (detect) or an ISO code from DICTATION_LANGUAGES. */
   language: string;
+  /** Show the floating mic button on Claude panes (hotkey works regardless). */
+  showMicButton: boolean;
+  /**
+   * The floating mic's position, as an offset in px from the pane's
+   * BOTTOM-LEFT corner (where the status line starts). Shared by every pane,
+   * so the button sits in the same spot on all of them.
+   */
+  micOffset: { dx: number; dy: number };
 }
 
 export const DEFAULT_TRANSCRIPTION_SETTINGS: TranscriptionSettings = {
@@ -64,6 +72,8 @@ export const DEFAULT_TRANSCRIPTION_SETTINGS: TranscriptionSettings = {
   hotkeyPushToTalk: "Alt+Space",
   autoSubmit: false,
   language: "auto",
+  showMicButton: true,
+  micOffset: { dx: 14, dy: 14 },
 };
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -103,7 +113,17 @@ export function coerce(raw: unknown): TranscriptionSettings {
     language: isDictationLanguage(raw.language)
       ? raw.language
       : DEFAULT_TRANSCRIPTION_SETTINGS.language,
+    showMicButton: coerceBool(raw.showMicButton, DEFAULT_TRANSCRIPTION_SETTINGS.showMicButton),
+    micOffset: coerceOffset(raw.micOffset),
   };
+}
+
+function coerceOffset(v: unknown): { dx: number; dy: number } {
+  const d = DEFAULT_TRANSCRIPTION_SETTINGS.micOffset;
+  if (!isPlainObject(v)) return { ...d };
+  const num = (x: unknown, fallback: number): number =>
+    typeof x === "number" && Number.isFinite(x) ? Math.max(0, Math.round(x)) : fallback;
+  return { dx: num(v.dx, d.dx), dy: num(v.dy, d.dy) };
 }
 
 export async function loadTranscriptionSettings(): Promise<TranscriptionSettings> {

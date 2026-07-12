@@ -6,7 +6,8 @@ import type { PaneWSCloseInfo } from "@client-core/api/ws";
 import type { Stoplight } from "@proto/proto";
 import type { HostRef } from "../host";
 import { iconClose, iconSplitDown, iconSplitRight, iconDetach, iconHistory, iconMic } from "./icons";
-import { ensureHistoryButton, ensureMicButton } from "./paneControls";
+import { ensureHistoryButton } from "./paneControls";
+import { ensureDictationFab } from "../transcription/micOverlay";
 import { installVoiceErrorHint } from "../transcription/voiceErrorHint";
 import { computeReorder } from "./reorder";
 import { HoverFocusController } from "./hover-focus-controller";
@@ -705,10 +706,12 @@ export class PaneLayout {
           },
         });
       }
-      // Voice-dictation mic button (issue #67) — Claude panes only, beside
-      // the History clock. Focuses the pane, then toggles dictation there.
+      // Voice-dictation mic (issue #67) — Claude panes only: the floating
+      // draggable button anchored to the pane's bottom-left (the chosen
+      // design), not the top-right stack. Focuses the pane, then toggles
+      // dictation there.
       if (this.cb.onDictationToggle && t.kind === "claude") {
-        ensureMicButton(wrapper, {
+        ensureDictationFab(wrapper, {
           icon: iconMic,
           onToggle: () => {
             this.focusLeaf(leaf.id);

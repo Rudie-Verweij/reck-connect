@@ -29,6 +29,7 @@ import {
   type TranscriptionProvider,
 } from "../transcription/transcriptionSettings";
 import { DICTATION_LANGUAGES } from "../transcription/languages";
+import { setDictationFabsVisible } from "../transcription/micOverlay";
 import { confirmDialog } from "./new-pane-dialog";
 
 function escapeAttr(s: string): string {
@@ -236,6 +237,13 @@ export async function renderSettings(
         <p style="margin-top:0.25rem;color:var(--text-secondary);font-size:0.8rem;">
           "Detect" figures out the spoken language automatically. Also switchable by right-clicking the mic button on a pane.
         </p>
+        <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.75rem;font-family:var(--font-body);text-transform:none;letter-spacing:0;font-size:0.95rem;color:var(--app-text);font-weight:500;">
+          <input id="s-stt-show-mic" type="checkbox" ${sttSettings.showMicButton ? "checked" : ""} style="width:auto;" />
+          Show dictation button
+        </label>
+        <p style="margin-top:0.25rem;margin-left:1.5rem;color:var(--text-secondary);font-size:0.8rem;">
+          The floating mic on each Claude pane — drag it anywhere; the spot is shared by all panes. ⌘⇧V works even when it's hidden.
+        </p>
         <div class="divider" style="margin-top:1.5rem;"></div>
         <h3>Reck Connect prompt</h3>
         <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
@@ -404,7 +412,15 @@ export async function renderSettings(
       localModel: (root.querySelector("#s-stt-model") as HTMLSelectElement)
         .value as EmbeddedModelId,
       language: (root.querySelector("#s-stt-language") as HTMLSelectElement).value,
+      showMicButton: (root.querySelector("#s-stt-show-mic") as HTMLInputElement).checked,
     });
+    {
+      // Apply mic visibility immediately (no restart).
+      const on =
+        (root.querySelector("#s-stt-enabled") as HTMLInputElement).checked &&
+        (root.querySelector("#s-stt-show-mic") as HTMLInputElement).checked;
+      setDictationFabsVisible(on);
+    }
     await saveDeepgramKey((root.querySelector("#s-stt-deepgram-key") as HTMLInputElement).value);
 
     // Bounce the local daemon so a port change (or a fresh-install

@@ -189,6 +189,10 @@ export class LocalWhisperProvider implements Transcriber {
       this.committed = cur.slice(0, agree);
       this.handlers?.onPartial?.(this.frozen.concat(this.committed).join(" "));
     }
+    // Everything beyond the committed prefix is still settling — surface it
+    // as the ghost tail so the user sees words the instant Whisper hears
+    // them, without the prompt flickering through corrections.
+    this.handlers?.onTail?.(cur.slice(this.committed.length).join(" "));
   }
 
   private runPartial(): void {

@@ -15,6 +15,7 @@ export type DictationState = "idle" | "preparing" | "listening" | "transcribing"
 
 export interface EngineHandlers {
   onPartial?: (text: string) => void;
+  onTail?: (text: string) => void;
   onFinal?: (text: string) => void;
   onStatus?: (status: TranscriberStatus) => void;
   onProgress?: (pct: number) => void;
@@ -64,6 +65,7 @@ export class TranscriptionEngine {
   private providerHandlers(): TranscriptionHandlers {
     return {
       onPartial: (t) => this.handlers.onPartial?.(t),
+      onTail: (t) => this.handlers.onTail?.(t),
       onFinal: (t) => this.handlers.onFinal?.(t),
       onStatus: (s) => this.handlers.onStatus?.(s),
       onProgress: (p) => this.handlers.onProgress?.(p),

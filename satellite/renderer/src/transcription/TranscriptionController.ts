@@ -31,6 +31,8 @@ export interface DictationUI {
   setState(state: DictationState): void;
   setStatus(status: TranscriberStatus | null): void;
   setLevel(level: number): void;
+  /** Unstable ghost-tail text (never injected into the prompt). */
+  setTail(text: string): void;
   setError(message: string): void;
 }
 
@@ -71,6 +73,7 @@ export class TranscriptionController {
     this.settings = deps.settings;
     this.engine = new TranscriptionEngine(this.makeProvider(), {
       onPartial: (t) => this.applyTranscript(t),
+      onTail: (t) => this.bar?.setTail(t),
       onFinal: (t) => this.applyTranscript(t),
       onStatus: (s) => this.bar?.setStatus(s),
       onProgress: (p) => this.bar?.setProgress(p),

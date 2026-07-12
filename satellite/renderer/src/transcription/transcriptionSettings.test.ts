@@ -29,8 +29,16 @@ describe("transcriptionSettings.coerce", () => {
       hotkeyPushToTalk: "Ctrl+Space",
       autoSubmit: true,
       language: "nl",
+      showMicButton: false,
+      micOffset: { dx: 40, dy: 22 },
     };
     expect(coerce(input)).toEqual(input);
+  });
+
+  it("defaults and sanitizes the mic offset", () => {
+    expect(coerce({}).micOffset).toEqual({ dx: 14, dy: 14 });
+    expect(coerce({ micOffset: { dx: -5, dy: 9.7 } }).micOffset).toEqual({ dx: 0, dy: 10 });
+    expect(coerce({ micOffset: "nope" }).micOffset).toEqual({ dx: 14, dy: 14 });
   });
 
   it("defaults language to auto and rejects unknown codes", () => {

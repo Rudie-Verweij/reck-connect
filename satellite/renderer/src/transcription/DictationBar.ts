@@ -1,13 +1,16 @@
-// Per-pane model-loading UI: a circular progress ring (filled by download %,
-// with a pulsing glow) next to the model name, morphing into a checkmark once
-// loaded. Shown only while the model loads — during recording the transcript
-// is typed straight into the pane and the mic button carries the state, so
-// there's no floating box in the way. Also drives the mic-button state and
-// surfaces errors as a toast. Created for one dictation session, disposed
-// when it ends.
+// Per-session dictation UI. Mounts into the floating mic's pill slot (or
+// straight onto the surface when no fab exists, e.g. popouts) and shows:
+//   - while the model loads: a circular progress ring (download %, pulsing
+//     glow) + the model name, morphing into a checkmark when ready;
+//   - while listening: the live volume meter + the GHOST TAIL — the words
+//     still settling, blurred, kept out of the real prompt. Stable words are
+//     typed into the terminal; only this pill ever shows unstable text.
+// Also mirrors the dictation state onto the floating mic button and surfaces
+// errors as a toast. Created for one dictation session, disposed at its end.
 
 import { setMicButtonState } from "../ui/paneControls";
 import { showToast } from "../viewer/Toast";
+import { dictationFabFor } from "./micOverlay";
 import type { DictationState } from "./TranscriptionEngine";
 import type { DictationUI } from "./TranscriptionController";
 import type { TranscriberStatus } from "./providers/types";
@@ -26,7 +29,9 @@ export class DictationBar implements DictationUI {
   private readonly loaderEl: HTMLElement;
   private readonly ringProgress: SVGCircleElement;
   private readonly label: HTMLElement;
+  private readonly liveEl: HTMLElement;
   private readonly meterEl: HTMLElement;
+  private readonly tailEl: HTMLElement;
   private readonly bars: HTMLElement[] = [];
   private readonly levels: number[] = new Array(METER_BARS).fill(0);
   private state: DictationState = "idle";
@@ -83,8 +88,24 @@ export class DictationBar implements DictationUI {
       this.meterEl.append(bar);
     }
 
-    this.el.append(this.loaderEl, this.meterEl);
-    this.surface.appendChild(this.el);
+    // Ghost tail: the unstable words, blurred, next to the meter.
+    this.tailEl = document.createElement("span");
+    this.tailEl.className = "dictation-tail";
+
+    this.liveEl = document.createElement("div");
+    this.liveEl.className = "dictation-live";
+    this.liveEl.append(this.meterEl, this.tailEl);
+
+    this.el.append(this.loaderEl, this.liveEl);
+    // Prefer the floating mic's pill slot; fall back to the pane corner for
+    // surfaces without a fab.
+    const fab = dictationFabFor(surface);
+    if (fab) {
+      this.el.classList.add("in-fab");
+      fab.pillSlot.appendChild(this.el);
+    } else {
+      this.surface.appendChild(this.el);
+    }
     this.render();
   }
 
@@ -93,6 +114,8 @@ export class DictationBar implements DictationUI {
     if (state !== "preparing" && this.state === "preparing") this.ready = true;
     this.state = state;
     setMicButtonState(this.surface, state);
+    dictationFabFor(this.surface)?.setState(state);
+    if (state === "idle" || state === "transcribing") this.setTail("");
     this.render();
   }
 
@@ -118,6 +141,12 @@ export class DictationBar implements DictationUI {
     }
   }
 
+  setTail(text: string): void {
+    if (this.tailEl.textContent === text) return;
+    this.tailEl.textContent = text;
+    this.tailEl.classList.toggle("has-text", text.length > 0);
+  }
+
   setError(message: string): void {
     showToast(this.surface, message, { kind: "error", durationMs: 6000 });
   }
@@ -129,10 +158,11 @@ export class DictationBar implements DictationUI {
   private render(): void {
     const loading = this.isLoading();
     const listening = this.state === "listening";
-    // The box appears while the model loads (ring) or while listening (meter).
+    // The pill appears while the model loads (ring) or while listening
+    // (meter + ghost tail).
     this.el.hidden = !(loading || listening);
     this.loaderEl.hidden = !loading;
-    this.meterEl.hidden = !listening;
+    this.liveEl.hidden = !listening;
     if (!loading) return;
     const complete = this.ready || this.pct >= 100;
     this.loaderEl.dataset.mode = !this.sawProgress && !complete
@@ -150,6 +180,7 @@ export class DictationBar implements DictationUI {
 
   dispose(): void {
     setMicButtonState(this.surface, "idle");
+    dictationFabFor(this.surface)?.setState("idle");
     this.el.remove();
   }
 }

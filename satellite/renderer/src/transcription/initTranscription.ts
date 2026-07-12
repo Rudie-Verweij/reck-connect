@@ -1,18 +1,25 @@
 // Boot entry for voice dictation (issue #67). Loads settings, wires the
-// controller to the active pane, installs the toggle hotkey, and attaches
-// the right-click language menu to every mic button. Invoked non-fatally
-// from boot.ts beside initTts — a failure here must never take down the app.
+// controller to the active pane, installs the hybrid hold/tap hotkey, and
+// attaches the right-click Language/Hide menu to the floating mic. Invoked
+// non-fatally from boot.ts beside initTts — a failure here must never take
+// down the app.
 
 import {
   TranscriptionController,
   type DictationSession,
 } from "./TranscriptionController";
 import { showDictationContextMenu } from "./languageMenu";
+import { setDictationFabsVisible } from "./micOverlay";
 import { installTranscriptionShortcuts } from "./transcriptionShortcuts";
 import {
   loadTranscriptionSettings,
   saveTranscriptionSettings,
 } from "./transcriptionSettings";
+import { confirmDialog } from "../ui/new-pane-dialog";
+
+// A ⌘⇧V press held at least this long is push-to-talk (record while held,
+// stop on release); anything shorter is a tap that toggles.
+const HOLD_TO_TALK_MS = 400;
 
 export interface InitTranscriptionDeps {
   /** Resolve the target pane + UI surface when dictation starts. */
@@ -45,14 +52,30 @@ export async function initTranscription(
     void controller.toggle();
   };
 
+  // Hybrid hotkey: a press that STARTED dictation and is held past the
+  // threshold is push-to-talk — release stops it. A short tap leaves it
+  // running (toggle); pressing while already listening stops it either way.
+  let pressStartedDictation = false;
   const uninstallShortcut = settings.enabled
-    ? installTranscriptionShortcuts({ onToggle: toggle })
+    ? installTranscriptionShortcuts({
+        onPressStart: () => {
+          pressStartedDictation = controller.getState() === "idle";
+          toggle();
+        },
+        onPressEnd: (heldMs) => {
+          if (!pressStartedDictation) return;
+          pressStartedDictation = false;
+          if (heldMs < HOLD_TO_TALK_MS) return; // tap → stay recording
+          const state = controller.getState();
+          if (state === "listening" || state === "preparing") void controller.toggle();
+        },
+      })
     : () => {};
 
-  // Right-click on any pane's mic button → Language ▸ submenu. Delegated so
-  // mic buttons created later (new panes/splits) are covered automatically.
+  // Right-click on any floating mic → Language ▸ / Hide. Delegated so mics
+  // created later (new panes/splits) are covered automatically.
   const onMicContextMenu = (e: MouseEvent): void => {
-    const mic = (e.target as HTMLElement | null)?.closest?.(".pane-controls-mic");
+    const mic = (e.target as HTMLElement | null)?.closest?.(".dictation-fab");
     if (!mic) return;
     e.preventDefault();
     e.stopPropagation();
@@ -62,6 +85,24 @@ export async function initTranscription(
         const next = { ...controller.getSettings(), language: code };
         controller.updateSettings(next);
         void saveTranscriptionSettings(next);
+      },
+      onHide: () => {
+        void (async () => {
+          const ok = await confirmDialog(document.body, {
+            title: "Hide the dictation button?",
+            body:
+              "The floating mic disappears from every pane. Dictation still works with " +
+              "⌘⇧V. Re-enable the button in Settings → Voice dictation → " +
+              "“Show dictation button”.",
+            confirmLabel: "Hide",
+            cancelLabel: "Keep",
+          });
+          if (!ok) return;
+          const next = { ...controller.getSettings(), showMicButton: false };
+          controller.updateSettings(next);
+          await saveTranscriptionSettings(next);
+          setDictationFabsVisible(false);
+        })();
       },
     });
   };

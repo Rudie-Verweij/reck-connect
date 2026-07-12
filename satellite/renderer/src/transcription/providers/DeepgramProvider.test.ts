@@ -75,11 +75,13 @@ function installMockReckAPI(
 
 function makeHandlers(): TranscriptionHandlers & {
   onPartial: ReturnType<typeof vi.fn>;
+  onTail: ReturnType<typeof vi.fn>;
   onFinal: ReturnType<typeof vi.fn>;
   onError: ReturnType<typeof vi.fn>;
 } {
   return {
     onPartial: vi.fn(),
+    onTail: vi.fn(),
     onFinal: vi.fn(),
     onError: vi.fn(),
   };
@@ -111,16 +113,21 @@ describe("DeepgramProvider.begin", () => {
 });
 
 describe("DeepgramProvider — running transcript", () => {
-  it("appends interim text after the accumulated finals", async () => {
+  it("routes interim text to the ghost tail, finals to the stable text", async () => {
     const h = installMockReckAPI({ ok: true, sessionId: 1 });
     const provider = new DeepgramProvider();
     const handlers = makeHandlers();
     await provider.begin(handlers, 16000);
 
-    h.emit({ sessionId: 1, kind: "final", text: "hello" });
-    h.emit({ sessionId: 1, kind: "partial", text: "world" });
+    // Interim = unstable → tail only, never the stable/injected channel.
+    h.emit({ sessionId: 1, kind: "partial", text: "worl" });
+    expect(handlers.onTail).toHaveBeenLastCalledWith("worl");
+    expect(handlers.onPartial).not.toHaveBeenCalled();
 
-    expect(handlers.onPartial).toHaveBeenLastCalledWith("hello world");
+    // Finalized segment → stable text; tail clears.
+    h.emit({ sessionId: 1, kind: "final", text: "hello" });
+    expect(handlers.onPartial).toHaveBeenLastCalledWith("hello");
+    expect(handlers.onTail).toHaveBeenLastCalledWith("");
   });
 
   it("accumulates successive finals", async () => {

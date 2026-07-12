@@ -9,9 +9,15 @@
 // releases everything.
 
 export interface TranscriptionHandlers {
-  /** Interim text for the current utterance (replaces the prior interim). */
+  /** STABLE text-so-far (never rewritten) — safe to type into the prompt. */
   onPartial?: (text: string) => void;
-  /** A finalized segment to inject (appended to what's already there). */
+  /**
+   * The UNSTABLE tail beyond the stable text — words still settling. Shown
+   * as ghost text in the dictation UI, never typed into the prompt (so the
+   * prompt never flickers through corrections). Empty string clears it.
+   */
+  onTail?: (text: string) => void;
+  /** The complete utterance to inject (replaces the stable text-so-far). */
   onFinal?: (text: string) => void;
   /** Progress/status for slow steps, e.g. "loading" the local model. */
   onStatus?: (status: TranscriberStatus) => void;

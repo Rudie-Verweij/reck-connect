@@ -53,10 +53,13 @@ export class DeepgramProvider implements Transcriber {
     this.unsub = window.reckAPI.transcription.onEvent((ev) => {
       if (ev.sessionId !== this.sessionId) return;
       if (ev.kind === "partial") {
-        this.handlers?.onPartial?.(this.join(this.finalized, ev.text));
+        // Interim text is unstable — Deepgram rewrites it until the segment
+        // finalizes. It goes to the ghost tail, never into the prompt.
+        this.handlers?.onTail?.(ev.text);
       } else if (ev.kind === "final") {
         this.finalized = this.join(this.finalized, ev.text);
         this.handlers?.onPartial?.(this.finalized);
+        this.handlers?.onTail?.("");
       } else if (ev.kind === "debug") {
         // Main-process lifecycle facts (open/close codes, frames sent) —
         // surfaced here because main's stdout is invisible in a packaged app.

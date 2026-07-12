@@ -8,6 +8,8 @@ import { DICTATION_LANGUAGES } from "./languages";
 export interface LanguageMenuProps {
   currentCode: string;
   onPick: (code: string) => void;
+  /** When set, adds a "Hide dictation button" item below Language. */
+  onHide?: () => void;
 }
 
 export function showDictationContextMenu(x: number, y: number, props: LanguageMenuProps): void {
@@ -52,6 +54,8 @@ export function showDictationContextMenu(x: number, y: number, props: LanguageMe
     const overflowsRight = menuRect.right + 200 > window.innerWidth;
     submenu.style.left = overflowsRight ? "auto" : "100%";
     submenu.style.right = overflowsRight ? "100%" : "auto";
+    // The unfold animation should grow AWAY from the parent menu.
+    submenu.style.transformOrigin = overflowsRight ? "top right" : "top left";
     // Keep the submenu's bottom on screen.
     const subRect = submenu.getBoundingClientRect();
     if (subRect.bottom > window.innerHeight - 8) {
@@ -62,6 +66,26 @@ export function showDictationContextMenu(x: number, y: number, props: LanguageMe
   langItem.addEventListener("click", openSubmenu);
 
   menu.appendChild(langItem);
+
+  if (props.onHide) {
+    const hideItem = document.createElement("button");
+    hideItem.type = "button";
+    hideItem.className = "dictation-menu-item";
+    hideItem.innerHTML = `<span>Hide dictation button</span>`;
+    hideItem.addEventListener("click", () => {
+      cleanup();
+      props.onHide?.();
+    });
+    // Hovering a sibling item retracts the language submenu.
+    hideItem.addEventListener("mouseenter", () => {
+      if (submenuOpen) {
+        submenuOpen = false;
+        submenu.remove();
+      }
+    });
+    menu.appendChild(hideItem);
+  }
+
   document.body.appendChild(menu);
 
   // Keep the root menu on screen.

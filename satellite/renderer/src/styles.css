@@ -2035,6 +2035,25 @@ html, body, #app {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   font-size: 13px;
   color: var(--app-text);
+  /* Bloom out from the click point instead of popping in. */
+  transform-origin: top left;
+  animation: dictation-menu-in 0.16s var(--ease-smooth) both;
+}
+@keyframes dictation-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dictation-context-menu,
+  .dictation-language-submenu {
+    animation: none !important;
+  }
 }
 .dictation-menu-item {
   display: flex;
@@ -2071,6 +2090,9 @@ html, body, #app {
   border-radius: 8px;
   padding: 4px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  /* Unfolds sideways from the "Language" row. */
+  transform-origin: top left;
+  animation: dictation-menu-in 0.14s var(--ease-smooth) both;
 }
 
 /* === Startup splash (first paint → first project rendered) ===
@@ -4074,6 +4096,105 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 @media (prefers-reduced-motion: reduce) {
   .dictation-ring-progress { animation: none !important; }
 }
+
+/* === Floating dictation mic (the chosen design) ===
+   A draggable circular mic anchored to each Claude pane's BOTTOM-LEFT by a
+   shared {dx,dy} offset (drag one → all move). The pill (meter + ghost tail)
+   unfolds to its right while dictating. */
+.dictation-fab {
+  position: absolute;
+  z-index: 33;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* left/bottom come inline from the shared offset (micOverlay.ts). */
+}
+.dictation-fab-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  color: var(--claude-mid);
+  cursor: grab;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  /* Pointer-captured drag: keep the browser out of it. */
+  touch-action: none;
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth),
+    border-color 0.15s var(--ease-smooth), box-shadow 0.2s var(--ease-smooth);
+}
+.dictation-fab-btn svg {
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+}
+/* Idle hover: the house style — hold the resting ink, bloom the orange ring. */
+.dictation-fab-btn[data-state="idle"]:hover {
+  background: var(--app-bg-raised);
+  color: var(--claude-mid);
+  border-color: var(--claude-orange);
+  box-shadow: 0 0 0 1px rgba(212, 104, 58, 0.55), 0 0 14px 3px rgba(232, 135, 92, 0.5);
+}
+.dictation-fab.dragging .dictation-fab-btn {
+  cursor: grabbing;
+  border-color: var(--claude-orange);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(212, 104, 58, 0.45);
+}
+.dictation-fab-btn[data-state="listening"] {
+  color: #fff;
+  background: #d4483a;
+  border-color: #d4483a;
+  animation: dictation-mic-pulse 1.2s var(--ease-smooth) infinite;
+}
+.dictation-fab-btn[data-state="transcribing"],
+.dictation-fab-btn[data-state="preparing"] {
+  color: #fff;
+  background: #c9982e;
+  border-color: #c9982e;
+}
+.dictation-fab-pillslot {
+  display: flex;
+  align-items: center;
+}
+/* Inside the fab the pill is a flex sibling, not a pane-centered float. */
+.dictation-bar.in-fab {
+  position: static;
+  left: auto;
+  bottom: auto;
+  transform: none;
+  max-width: min(46vw, 520px);
+}
+.dictation-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dictation-live[hidden] { display: none; }
+/* The ghost tail: words still settling — legible but clearly not committed.
+   Stable words live in the real prompt; ONLY this ghost ever rewrites. */
+.dictation-tail {
+  display: none;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  font-style: italic;
+  color: rgba(245, 242, 234, 0.9);
+  filter: blur(0.6px);
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.dictation-tail.has-text { display: block; }
+@media (prefers-reduced-motion: reduce) {
+  .dictation-fab-btn[data-state="listening"] { animation: none !important; }
+}
+
 /* History (clock) button — the primary per-pane affordance that opens the
    transcript overlay. Unlike the other icon-btns it does NOT shift shade on
    hover; it holds its resting fill/ink and instead blooms a soft orange halo
