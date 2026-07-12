@@ -81,6 +81,13 @@ export const CONFIG_KEYS = [
   "fileViewerExtraRoots",
   "fileViewerModePerPath",
   "linkifier.extensionlessAllowlist",
+  // Voice dictation (issue #67). Non-secret prefs blob:
+  //   { enabled, provider, localModel, hotkeyToggle, hotkeyPushToTalk, autoSubmit }.
+  // The Deepgram API key is held separately under the secret key
+  // "transcription.deepgramKey" so the safeStorage refusal path only
+  // blocks the secret half (same split as settings / station.token).
+  "transcription",
+  "transcription.deepgramKey",
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
@@ -110,6 +117,9 @@ export function isAllowedConfigKey(key: unknown): key is ConfigKey {
 const SECRET_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "daemonToken",
   "station.token",
+  // The user's Deepgram API key — plaintext when decrypted, so it must
+  // encrypt at rest. Stored apart from the "transcription" prefs blob.
+  "transcription.deepgramKey",
 ]);
 
 export function listSecretConfigKeys(): ReadonlySet<string> {

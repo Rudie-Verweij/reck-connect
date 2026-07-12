@@ -11,4 +11,10 @@
 allowBuilds:
   electron: true
   esbuild: true
+  # transformers.js runs on the web (WASM/WebGPU) backend in the renderer,
+  # so the Node ONNX native binding is unused — skip its download/build.
+  onnxruntime-node: false
+  # protobufjs (pulled by @deepgram/sdk) works without its postinstall
+  # codegen step; skip it.
+  protobufjs: false
   sharp: true
