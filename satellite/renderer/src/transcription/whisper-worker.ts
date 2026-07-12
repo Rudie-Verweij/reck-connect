@@ -60,15 +60,24 @@ async function ensureReady(
   if (asr && loadedRepo === repo) return asr;
   post({ type: "status", status: "loading", generation });
 
-  // Only attempt WebGPU when the adapter reports the limits its kernels need;
-  // always keep WASM. Try more than one dtype per device so a broken quant
-  // build (e.g. turbo's q8 WASM weights miss a scale tensor) falls back to an
-  // unquantized one instead of erroring.
-  const configs: Array<{ device: "webgpu" | "wasm"; dtype: string }> = [];
+  // Device + dtype + graph-optimization fallbacks. The main failure here is
+  // ORT's *extended* graph optimization (TransposeDQWeightsForMatMulNBits)
+  // crashing on these Whisper exports, so we step the optimization level down
+  // to "basic" then "disabled" before trying an unquantized dtype. Cached
+  // model files are reused across same-dtype retries (no re-download).
+  const configs: Array<{
+    device: "webgpu" | "wasm";
+    dtype: string;
+    opt: "basic" | "disabled";
+  }> = [];
   if (await webgpuUsable()) {
-    configs.push({ device: "webgpu", dtype: "fp16" }, { device: "webgpu", dtype: "q4" });
+    configs.push({ device: "webgpu", dtype: "fp16", opt: "basic" });
   }
-  configs.push({ device: "wasm", dtype: "q8" }, { device: "wasm", dtype: "fp32" });
+  configs.push(
+    { device: "wasm", dtype: "q8", opt: "basic" },
+    { device: "wasm", dtype: "q8", opt: "disabled" },
+    { device: "wasm", dtype: "fp32", opt: "disabled" },
+  );
 
   // Aggregate per-file download progress into an overall 0-100.
   const files = new Map<string, { loaded: number; total: number }>();
@@ -98,12 +107,20 @@ async function ensureReady(
   let lastErr: unknown;
   for (const cfg of configs) {
     try {
-      const p = (await pipeline("automatic-speech-recognition", repo, {
+      // Lower graph optimization to skip the crashing QDQ→MatMulNBits
+      // transform (see the config comment above).
+      const options = {
         device: cfg.device,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        dtype: cfg.dtype as any,
+        dtype: cfg.dtype,
+        session_options: { graphOptimizationLevel: cfg.opt },
         progress_callback,
-      })) as AutomaticSpeechRecognitionPipeline;
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const p = (await pipeline(
+        "automatic-speech-recognition",
+        repo,
+        options as any,
+      )) as AutomaticSpeechRecognitionPipeline;
       // Warm-up: one inference over 1s of silence, validating the device.
       await p(new Float32Array(16000), { chunk_length_s: 30 });
       asr = p;
