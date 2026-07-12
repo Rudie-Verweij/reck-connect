@@ -361,6 +361,84 @@ func TestPaneUpload_textMarkdownAccepted(t *testing.T) {
 	}
 }
 
+// makeUploadBodyNamed is makeUploadBody with a caller-chosen client
+// filename, for exercising the arbitrary-file path (extension derived
+// from the untrusted filename).
+func makeUploadBodyNamed(t *testing.T, contentType, filename string, payload []byte) (io.Reader, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	hdr := textproto.MIMEHeader{}
+	hdr.Set("Content-Disposition", `form-data; name="file"; filename="`+filename+`"`)
+	hdr.Set("Content-Type", contentType)
+	part, err := w.CreatePart(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &buf, w.FormDataContentType()
+}
+
+// TestPaneUpload_arbitraryFileByExtension covers the drag-drop any-file
+// path: a type not in the MIME allowlist is stored, with its extension
+// taken from the (untrusted) client filename and no content sniff.
+func TestPaneUpload_arbitraryFileByExtension(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	body, ct := makeUploadBodyNamed(t, "application/octet-stream", "analysis.py", []byte("import os\nprint('hi')\n"))
+	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		b, _ := io.ReadAll(r.Body)
+		t.Fatalf("status=%d body=%s, want 200", r.StatusCode, string(b))
+	}
+	dir := filepath.Join(os.TempDir(), "reck-pane-"+paneID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".py") {
+		t.Fatalf("want one .py on disk, got %v", entries)
+	}
+	// Server-generated basename must not echo the client filename.
+	if strings.Contains(entries[0].Name(), "analysis") {
+		t.Fatalf("stored name %q leaks client filename", entries[0].Name())
+	}
+}
+
+// TestPaneUpload_arbitraryRejectsUnusableExtension: an unknown MIME with
+// no usable extension (no dot, or a non-alphanumeric one) is rejected —
+// the server has nothing safe to name the file.
+func TestPaneUpload_arbitraryRejectsUnusableExtension(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	for _, name := range []string{"Makefile", "../../etc/passwd", "weird.name!", "trailingdot."} {
+		body, ct := makeUploadBodyNamed(t, "application/octet-stream", name, []byte("data"))
+		r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode != nethttp.StatusUnsupportedMediaType {
+			t.Fatalf("filename %q: status=%d, want 415", name, r.StatusCode)
+		}
+	}
+}
+
 // TestPaneUpload_textRejectsBinary covers the sniffText security gate: a
 // binary payload declared under a text extension (here text/plain with
 // PKZip bytes) must be rejected, so an executable/archive can't be

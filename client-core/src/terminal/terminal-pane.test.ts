@@ -228,7 +228,7 @@ vi.mock("./osc-filter", () => ({
 // Import AFTER vi.mock so the mocks take effect. `terminal-pane.ts`
 // transitively imports `ws.ts`, which we leave alone — our tests don't
 // fire any WS callbacks here.
-import { TerminalPane, __resetScrollDebugCacheForTests } from "./terminal-pane";
+import { TerminalPane, __resetScrollDebugCacheForTests, type TerminalPaneProps } from "./terminal-pane";
 
 // Each test mounts a pane under a fresh wrapper so `.hidden` toggles
 // can be observed in isolation.
@@ -1159,32 +1159,80 @@ describe("TerminalPane teardown races", () => {
     pane.dispose();
   });
 
-  it("drop of an unsupported file blocks navigation but does not upload", async () => {
+  function mountPaneWithDropPolicy(
+    wrapper: HTMLElement,
+    upload: (blob: Blob, mime: string, filename?: string) => Promise<{ kind: "path"; path: string } | { kind: "chip" }>,
+    validateDroppedFile: TerminalPaneProps["validateDroppedFile"],
+    onDropRejected: TerminalPaneProps["onDropRejected"],
+  ): TerminalPane {
+    const pane = new TerminalPane({
+      wsUrl: "ws://x/ws/p/p",
+      wsSubprotocols: [],
+      onPasteUpload: upload,
+      validateDroppedFile,
+      onDropRejected,
+    });
+    wrapper.appendChild(pane.container);
+    pane.mount();
+    return pane;
+  }
+
+  it("drop rejected by type does not upload and reports the rejection", async () => {
     const wrapper = setupDom();
     const { sends } = installCapturingWebSocket();
     const upload = vi.fn(async () => ({ kind: "path" as const, path: "never" }));
-    const pane = mountPaneWithPaste(wrapper, upload);
+    const onDropRejected = vi.fn();
+    const pane = mountPaneWithDropPolicy(
+      wrapper,
+      upload,
+      (f) => (f.name.endsWith(".zip") ? { ok: false, reason: "type" } : { ok: true }),
+      onDropRejected,
+    );
 
-    // .zip is not in the drop allowlist (images + Scope B docs/text).
     const ev = makeDropEvent("drop", [makeImageFile("application/zip", new Uint8Array([1]), "archive.zip")]);
     pane.container.dispatchEvent(ev);
     await new Promise((r) => setTimeout(r, 0));
 
-    // preventDefault still fires (never let Electron navigate to the file),
-    // but no upload happens — the type isn't uploadable.
+    // preventDefault still fires (never navigate to the file), but no
+    // upload — and the host is told so it can toast.
     expect(ev.defaultPrevented).toBe(true);
     expect(upload).not.toHaveBeenCalled();
-    const inputFrames = sends
-      .map((raw) => JSON.parse(raw) as { type: string })
-      .filter((m) => m.type === "input");
+    expect(onDropRejected).toHaveBeenCalledTimes(1);
+    expect(onDropRejected.mock.calls[0][0]).toMatchObject({
+      reason: "type",
+      ext: "zip",
+      name: "archive.zip",
+    });
+    const inputFrames = sends.map((raw) => JSON.parse(raw) as { type: string }).filter((m) => m.type === "input");
     expect(inputFrames).toEqual([]);
     pane.dispose();
   });
 
-  it("drop of a PDF uploads with application/pdf and types the path (Scope B)", async () => {
+  it("drop rejected for size reports reason 'size'", async () => {
+    const wrapper = setupDom();
+    installCapturingWebSocket();
+    const upload = vi.fn(async () => ({ kind: "path" as const, path: "never" }));
+    const onDropRejected = vi.fn();
+    const pane = mountPaneWithDropPolicy(
+      wrapper,
+      upload,
+      (f) => (f.size > 5 ? { ok: false, reason: "size" } : { ok: true }),
+      onDropRejected,
+    );
+
+    const ev = makeDropEvent("drop", [makeImageFile("image/png", new Uint8Array([1, 2, 3, 4, 5, 6]), "big.png")]);
+    pane.container.dispatchEvent(ev);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(onDropRejected.mock.calls[0][0]).toMatchObject({ reason: "size", name: "big.png" });
+    pane.dispose();
+  });
+
+  it("drop of a non-image file uploads as octet-stream with its original filename (Scope B)", async () => {
     const wrapper = setupDom();
     const { sends, openAll } = installCapturingWebSocket();
-    const upload = vi.fn(async (_blob: Blob, _mime: string) => ({
+    const upload = vi.fn(async (_blob: Blob, _mime: string, _filename?: string) => ({
       kind: "path" as const,
       path: "/tmp/reck-pane-p_x/uploads/doc.pdf",
     }));
@@ -1197,7 +1245,10 @@ describe("TerminalPane teardown races", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(upload.mock.calls[0][1]).toBe("application/pdf");
+    // Non-image drops go up as octet-stream; the daemon stores them by the
+    // original filename's extension.
+    expect(upload.mock.calls[0][1]).toBe("application/octet-stream");
+    expect(upload.mock.calls[0][2]).toBe("spec.pdf");
     const texts = sends
       .map((raw) => JSON.parse(raw) as { type: string; data?: string })
       .filter((m) => m.type === "input")
@@ -1206,12 +1257,10 @@ describe("TerminalPane teardown races", () => {
     pane.dispose();
   });
 
-  it("drop of a text file with no browser MIME derives the MIME from its extension (Scope B)", async () => {
+  it("drop of a text file with empty browser MIME still forwards its filename (Scope B)", async () => {
     const wrapper = setupDom();
     installCapturingWebSocket();
-    // Browsers frequently report an empty file.type for .md/.csv/etc.;
-    // resolveDropMime must fall back to the filename extension.
-    const upload = vi.fn(async (_blob: Blob, _mime: string) => ({
+    const upload = vi.fn(async (_blob: Blob, _mime: string, _filename?: string) => ({
       kind: "path" as const,
       path: "/tmp/notes.md",
     }));
@@ -1222,7 +1271,8 @@ describe("TerminalPane teardown races", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(upload.mock.calls[0][1]).toBe("text/markdown");
+    expect(upload.mock.calls[0][1]).toBe("application/octet-stream");
+    expect(upload.mock.calls[0][2]).toBe("notes.md");
     pane.dispose();
   });
 

@@ -42,35 +42,12 @@ function dragCarriesFiles(ev: DragEvent): boolean {
 }
 
 /**
- * Non-image file types accepted by drag-drop (Scope B), keyed by
- * lowercase filename extension → the MIME the daemon `/uploads` allowlist
- * expects. A dropped file's browser-reported `file.type` is unreliable
- * (often empty for text/code files), so we derive the upload MIME from
- * the extension. Must stay in sync with `allowedUploadMIMEs` in
- * `daemon/internal/http/uploads.go`.
+ * Lowercase filename extension without the leading dot, or "" when the
+ * name has none. `report.PDF` → `pdf`, `Makefile` → ``.
  */
-const DROP_UPLOAD_EXT_MIMES: ReadonlyMap<string, string> = new Map([
-  ["pdf", "application/pdf"],
-  ["txt", "text/plain"],
-  ["text", "text/plain"],
-  ["log", "text/plain"],
-  ["md", "text/markdown"],
-  ["markdown", "text/markdown"],
-  ["csv", "text/csv"],
-  ["json", "application/json"],
-]);
-
-/**
- * Resolve the upload MIME for a dropped file, or null when the file type
- * isn't in the drag-drop allowlist. Prefers a recognised image
- * `file.type`; otherwise derives from the filename extension.
- */
-function resolveDropMime(file: File): string | null {
-  const declared = file.type.toLowerCase();
-  if (IMAGE_PASTE_MIMES.has(declared)) return declared;
-  const dot = file.name.lastIndexOf(".");
-  const ext = dot >= 0 ? file.name.slice(dot + 1).toLowerCase() : "";
-  return DROP_UPLOAD_EXT_MIMES.get(ext) ?? null;
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
 
 /**
@@ -102,7 +79,11 @@ export type PasteFallbackReason = "no-capability" | "daemon-error" | "upload-onl
 export type PasteUploadResult =
   | { kind: "path"; path: string; fallbackReason?: PasteFallbackReason; fallbackDetail?: string }
   | { kind: "chip" };
-export type PasteUploadFn = (blob: Blob, mime: string) => Promise<PasteUploadResult>;
+export type PasteUploadFn = (
+  blob: Blob,
+  mime: string,
+  filename?: string,
+) => Promise<PasteUploadResult>;
 
 function isIOS(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -180,6 +161,28 @@ export interface TerminalPaneProps {
    * paste behaviour). Image PASTE always types the path regardless.
    */
   dropPromptTemplate?: string;
+  /**
+   * Gate a dropped file before upload. Returns `{ ok: true }` to accept
+   * or `{ ok: false, reason }` to reject (the host typically shows a
+   * toast via `onDropRejected`). When unset, all dropped files are
+   * accepted (client-core default; the Satellite injects the user's
+   * allow-list + size cap).
+   */
+  validateDroppedFile?: (file: {
+    name: string;
+    size: number;
+    type: string;
+  }) => { ok: true } | { ok: false; reason: "type" | "size" };
+  /**
+   * Called once per rejected drop so the host can surface a toast. `ext`
+   * is the lowercase extension (no dot) or "" when the file has none.
+   */
+  onDropRejected?: (info: {
+    name: string;
+    reason: "type" | "size";
+    ext: string;
+    sizeBytes: number;
+  }) => void;
 }
 
 function themeFor(t: PaneTheme): ITheme {
@@ -957,7 +960,7 @@ export class TerminalPane {
     if (!upload) return;
     for (const { blob, mime, filename } of items) {
       try {
-        const result = await upload(blob, mime);
+        const result = await upload(blob, mime, filename);
         if (result.kind === "path") {
           // Emit a yellow inline breadcrumb when the host classified
           // *why* we fell off the chip path — otherwise a path/prompt
@@ -1062,21 +1065,29 @@ export class TerminalPane {
     // resolveDropMime). Files whose type isn't uploadable are surfaced
     // via a breadcrumb rather than silently dropped.
     const uploads: { blob: Blob; mime: string; filename: string }[] = [];
-    let skipped = 0;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const mime = resolveDropMime(file);
-      if (mime) {
-        uploads.push({ blob: file, mime, filename: file.name });
-      } else {
-        skipped++;
+      const verdict = this.props.validateDroppedFile?.({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      }) ?? { ok: true };
+      if (!verdict.ok) {
+        this.props.onDropRejected?.({
+          name: file.name,
+          reason: verdict.reason,
+          ext: extensionOf(file.name),
+          sizeBytes: file.size,
+        });
+        continue;
       }
-    }
-    if (skipped > 0) {
-      const plural = skipped === 1 ? "file" : "files";
-      this.term.write(
-        `\r\n\x1b[33m[drag-drop: skipped ${skipped} unsupported ${plural}]\x1b[0m\r\n`,
-      );
+      // The daemon stores non-image drops by their filename extension, so
+      // send a generic type to route them off the image sniff path;
+      // images keep their real MIME so they're validated as images.
+      const mime = file.type.toLowerCase().startsWith("image/")
+        ? file.type.toLowerCase()
+        : "application/octet-stream";
+      uploads.push({ blob: file, mime, filename: file.name });
     }
     // Drop delivery: a configurable prompt (bracketed paste) referencing
     // the upload, not the raw path.
