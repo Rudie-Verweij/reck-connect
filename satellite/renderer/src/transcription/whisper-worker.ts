@@ -129,8 +129,10 @@ async function ensureReady(
         repo,
         options as any,
       )) as AutomaticSpeechRecognitionPipeline;
-      // Warm-up: one inference over 1s of silence, validating the device.
-      await p(new Float32Array(16000), { chunk_length_s: 30 });
+      // No warm-up inference: device/quant failures surface at model creation
+      // above (caught by this loop), and a warm-up on a big model is so slow on
+      // CPU it looks hung. Skipping it lets loading finish as soon as the model
+      // is in memory.
       asr = p;
       loadedRepo = repo;
       return p;

@@ -48,15 +48,18 @@ export class DeepgramProvider implements Transcriber {
         this.finalized = this.join(this.finalized, ev.text);
         this.handlers?.onPartial?.(this.finalized);
       } else if (ev.kind === "error") {
+        console.error("[deepgram] error event:", ev.text);
         this.dead = true;
         this.handlers?.onError?.(ev.text);
       } else if (ev.kind === "closed") {
+        console.log("[deepgram] closed event; transcript so far:", JSON.stringify(this.finalized));
         this.dead = true;
         this.handlers?.onFinal?.(this.finalized);
         this.onClosed?.();
       }
     });
     const res = await window.reckAPI.transcription.deepgramStart(sampleRate || 16000);
+    console.log("[deepgram] start →", res, "@", sampleRate, "Hz");
     if (!res.ok || res.sessionId === undefined) {
       this.unsub?.();
       this.unsub = null;

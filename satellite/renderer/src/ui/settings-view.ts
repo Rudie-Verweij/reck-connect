@@ -215,13 +215,17 @@ export async function renderSettings(
           <option value="local" ${sttSettings.provider === "local" ? "selected" : ""}>On-device Whisper — private, no key needed</option>
           <option value="deepgram" ${sttSettings.provider === "deepgram" ? "selected" : ""}>Deepgram cloud — fastest, needs an API key</option>
         </select>
-        <label for="s-stt-model">On-device model</label>
-        <select id="s-stt-model" class="form-input">${sttModelOptions}</select>
-        <p style="margin-top:0.25rem;color:var(--text-secondary);font-size:0.8rem;">
-          Downloaded once on first use. Larger models are more accurate but slower and heavier to fetch.
-        </p>
-        <label for="s-stt-deepgram-key">Deepgram API key</label>
-        <input id="s-stt-deepgram-key" type="password" autocomplete="off" spellcheck="false" placeholder="only needed for the Deepgram engine" value="${escapeAttr(sttKey)}" />
+        <div id="s-stt-local-fields" ${sttSettings.provider === "local" ? "" : "hidden"}>
+          <label for="s-stt-model">On-device model</label>
+          <select id="s-stt-model" class="form-input">${sttModelOptions}</select>
+          <p style="margin-top:0.25rem;color:var(--text-secondary);font-size:0.8rem;">
+            Downloaded once on first use. Larger models are more accurate but slower and heavier to fetch (large needs a fast GPU).
+          </p>
+        </div>
+        <div id="s-stt-deepgram-fields" ${sttSettings.provider === "deepgram" ? "" : "hidden"}>
+          <label for="s-stt-deepgram-key">Deepgram API key</label>
+          <input id="s-stt-deepgram-key" type="password" autocomplete="off" spellcheck="false" placeholder="dg-..." value="${escapeAttr(sttKey)}" />
+        </div>
         <div class="divider" style="margin-top:1.5rem;"></div>
         <h3>Reck Connect prompt</h3>
         <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
@@ -276,6 +280,18 @@ export async function renderSettings(
   reckResetBtn.onclick = () => {
     reckPromptEl.value = DEFAULT_RECK_CONNECT_PROMPT;
   };
+  // Voice dictation: show only the fields relevant to the chosen engine —
+  // the on-device model picker for local, the API key for Deepgram.
+  const sttProviderEl = root.querySelector("#s-stt-provider") as HTMLSelectElement;
+  const sttLocalFields = root.querySelector("#s-stt-local-fields") as HTMLDivElement;
+  const sttDeepgramFields = root.querySelector("#s-stt-deepgram-fields") as HTMLDivElement;
+  const syncSttFields = (): void => {
+    const isLocal = sttProviderEl.value === "local";
+    sttLocalFields.hidden = !isLocal;
+    sttDeepgramFields.hidden = isLocal;
+  };
+  sttProviderEl.addEventListener("change", syncSttFields);
+
   const btn = root.querySelector("#s-save") as HTMLButtonElement;
   const err = root.querySelector("#s-err") as HTMLDivElement;
   btn.onclick = async () => {
