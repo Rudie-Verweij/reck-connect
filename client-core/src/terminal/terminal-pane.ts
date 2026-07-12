@@ -42,6 +42,38 @@ function dragCarriesFiles(ev: DragEvent): boolean {
 }
 
 /**
+ * Non-image file types accepted by drag-drop (Scope B), keyed by
+ * lowercase filename extension → the MIME the daemon `/uploads` allowlist
+ * expects. A dropped file's browser-reported `file.type` is unreliable
+ * (often empty for text/code files), so we derive the upload MIME from
+ * the extension. Must stay in sync with `allowedUploadMIMEs` in
+ * `daemon/internal/http/uploads.go`.
+ */
+const DROP_UPLOAD_EXT_MIMES: ReadonlyMap<string, string> = new Map([
+  ["pdf", "application/pdf"],
+  ["txt", "text/plain"],
+  ["text", "text/plain"],
+  ["log", "text/plain"],
+  ["md", "text/markdown"],
+  ["markdown", "text/markdown"],
+  ["csv", "text/csv"],
+  ["json", "application/json"],
+]);
+
+/**
+ * Resolve the upload MIME for a dropped file, or null when the file type
+ * isn't in the drag-drop allowlist. Prefers a recognised image
+ * `file.type`; otherwise derives from the filename extension.
+ */
+function resolveDropMime(file: File): string | null {
+  const declared = file.type.toLowerCase();
+  if (IMAGE_PASTE_MIMES.has(declared)) return declared;
+  const dot = file.name.lastIndexOf(".");
+  const ext = dot >= 0 ? file.name.slice(dot + 1).toLowerCase() : "";
+  return DROP_UPLOAD_EXT_MIMES.get(ext) ?? null;
+}
+
+/**
  * Callback shape for uploading a pasted image to the daemon.
  * Wired from the app layer (Satellite renderer) so the TerminalPane
  * stays decoupled from ApiClient — the host passes a thunk that knows
@@ -984,17 +1016,16 @@ export class TerminalPane {
     if (!this.props.onPasteUpload) return;
     const files = ev.dataTransfer?.files;
     if (!files || files.length === 0) return;
-    // Scope A: images only — the daemon /uploads endpoint rejects
-    // everything else. Non-image files are surfaced via a breadcrumb
-    // rather than silently dropped; Scope B widens both this filter and
-    // the daemon allowlist.
-    const images: { blob: Blob; mime: string }[] = [];
+    // Accept images + the Scope B document/text allowlist (see
+    // resolveDropMime). Files whose type isn't uploadable are surfaced
+    // via a breadcrumb rather than silently dropped.
+    const uploads: { blob: Blob; mime: string }[] = [];
     let skipped = 0;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const mime = file.type.toLowerCase();
-      if (IMAGE_PASTE_MIMES.has(mime)) {
-        images.push({ blob: file, mime });
+      const mime = resolveDropMime(file);
+      if (mime) {
+        uploads.push({ blob: file, mime });
       } else {
         skipped++;
       }
@@ -1002,10 +1033,10 @@ export class TerminalPane {
     if (skipped > 0) {
       const plural = skipped === 1 ? "file" : "files";
       this.term.write(
-        `\r\n\x1b[33m[drag-drop: skipped ${skipped} non-image ${plural} — image drop only for now]\x1b[0m\r\n`,
+        `\r\n\x1b[33m[drag-drop: skipped ${skipped} unsupported ${plural}]\x1b[0m\r\n`,
       );
     }
-    await this.uploadBlobsAndTypePaths(images);
+    await this.uploadBlobsAndTypePaths(uploads);
   }
 }
 

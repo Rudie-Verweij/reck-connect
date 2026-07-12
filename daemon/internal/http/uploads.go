@@ -97,14 +97,46 @@ const statusClientClosedRequest = 499
 // periodically.
 const paneUploadDirPrefix = "reck-pane-"
 
-// allowedUploadMIMEs is the phase-1 image allowlist. Non-image paste
-// content falls through to the xterm default text-paste path in the
-// renderer and never hits this endpoint.
-var allowedUploadMIMEs = map[string]string{
-	"image/png":  ".png",
-	"image/jpeg": ".jpg",
-	"image/webp": ".webp",
-	"image/gif":  ".gif",
+// sniffKind selects how a declared upload MIME is validated against the
+// magic-byte sniff of the actual payload.
+//
+//   - sniffStrict: http.DetectContentType must report *exactly* the
+//     declared MIME. Used for formats the stdlib sniffer recognises by
+//     magic bytes (all images + PDF). Closes the "declare png, ship a
+//     different format" gap so a downstream consumer trusting the
+//     extension can't be format-confused.
+//   - sniffText: the payload must sniff as text/plain. Used for text
+//     formats the stdlib sniffer can't tell apart — CSV, JSON and
+//     Markdown all sniff as text/plain, so equality can't work — while
+//     still rejecting a binary (executable, archive) disguised under a
+//     .txt/.md/.csv/.json declared type, which would sniff as
+//     application/octet-stream.
+type sniffKind int
+
+const (
+	sniffStrict sniffKind = iota
+	sniffText
+)
+
+type uploadType struct {
+	ext  string
+	kind sniffKind
+}
+
+// allowedUploadMIMEs is the upload allowlist. Images + PDF are validated
+// strictly; text-family formats (Scope B drag-drop) are validated against
+// a text sniff. Anything not listed is rejected with 415, and the renderer
+// never sends it (it derives an allowlisted MIME from the file extension).
+var allowedUploadMIMEs = map[string]uploadType{
+	"image/png":        {".png", sniffStrict},
+	"image/jpeg":       {".jpg", sniffStrict},
+	"image/webp":       {".webp", sniffStrict},
+	"image/gif":        {".gif", sniffStrict},
+	"application/pdf":  {".pdf", sniffStrict},
+	"text/plain":       {".txt", sniffText},
+	"text/markdown":    {".md", sniffText},
+	"text/csv":         {".csv", sniffText},
+	"application/json": {".json", sniffText},
 }
 
 // paneUploadRegistrations tracks which live panes have already had their
@@ -281,7 +313,7 @@ func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) 
 	// was), distinct from the outer request's multipart Content-Type.
 	// Trim a trailing charset= in case a browser ever tags one on.
 	declaredCT := normalizeContentType(header.Header.Get("Content-Type"))
-	ext, ok := allowedUploadMIMEs[declaredCT]
+	ut, ok := allowedUploadMIMEs[declaredCT]
 	if !ok {
 		slog.Info("upload_rejected",
 			"pane", pane.ID,
@@ -291,6 +323,7 @@ func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) 
 		nethttp.Error(w, "unsupported media type", nethttp.StatusUnsupportedMediaType)
 		return
 	}
+	ext := ut.ext
 
 	// Magic-byte sniff the first chunk. Defends against a hostile or
 	// buggy client lying about Content-Type to slip a non-image
@@ -310,21 +343,29 @@ func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) 
 	}
 	sniffBuf = sniffBuf[:nSniff]
 	detectedCT := normalizeContentType(nethttp.DetectContentType(sniffBuf))
-	// Strict match: detected MIME must equal declared MIME. Relaxing
-	// this to "detected is *in the allowlist*" would let a client
-	// declare image/png, ship JPEG bytes (also allowlisted), and end
-	// up with a `.png` file containing non-PNG bytes — so any
-	// downstream consumer trusting the extension gets format-
-	// confused. Requiring equality closes that gap and matches the
-	// error string's stated intent.
-	if detectedCT != declaredCT {
+	// Validate the sniff against the declared type's policy (see
+	// sniffKind). sniffStrict requires exact equality — declaring
+	// image/png while shipping other bytes lands a `.png` full of
+	// non-PNG data, format-confusing any downstream consumer that trusts
+	// the extension. sniffText requires the payload to sniff as
+	// text/plain, which rejects a binary disguised under a text
+	// extension while still accepting CSV/JSON/Markdown (all of which
+	// the stdlib sniffer reports as text/plain).
+	sniffOK := false
+	switch ut.kind {
+	case sniffStrict:
+		sniffOK = detectedCT == declaredCT
+	case sniffText:
+		sniffOK = detectedCT == "text/plain"
+	}
+	if !sniffOK {
 		slog.Info("upload_rejected",
 			"pane", pane.ID,
 			"reason", "content_sniff",
 			"declared", declaredCT,
 			"detected", detectedCT,
 		)
-		nethttp.Error(w, "content does not match declared image type", nethttp.StatusUnsupportedMediaType)
+		nethttp.Error(w, "content does not match declared type", nethttp.StatusUnsupportedMediaType)
 		return
 	}
 

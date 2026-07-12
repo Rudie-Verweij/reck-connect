@@ -1638,7 +1638,13 @@ export async function boot(splash?: StartupSplashController) {
       // from a bug from the user's seat. See PasteUploadResult.
       let fallbackReason: "no-capability" | "daemon-error" | "upload-only" | undefined;
       let fallbackDetail: string | undefined;
-      if (paneClipboardImage.get(paneId) === true) {
+      // The clipboard-image sidecar only handles image pasteboard writes;
+      // non-image drops (PDF, text, Scope B) go straight to /uploads. Flag
+      // it as the expected upload-only route rather than a failure.
+      const isImage = mime.toLowerCase().startsWith("image/");
+      if (!isImage) {
+        fallbackReason = "upload-only";
+      } else if (paneClipboardImage.get(paneId) === true) {
         try {
           const ok = await api.pasteImage(paneId, blob, mime);
           if (ok) return { kind: "chip" };

@@ -273,15 +273,17 @@ func TestPaneUpload_cleanupOnPaneClose(t *testing.T) {
 }
 
 // TestPaneUpload_unsupportedMIME415 pins the MIME allowlist contract
-// from the plan's security section: non-image content is rejected
-// with 415 Unsupported Media Type before it reaches disk.
+// from the plan's security section: a declared type outside the
+// allowlist is rejected with 415 Unsupported Media Type before it
+// reaches disk. application/octet-stream stands in for any binary the
+// renderer would never send (it only sends allowlisted MIMEs).
 func TestPaneUpload_unsupportedMIME415(t *testing.T) {
 	s := newServer(t)
 	srv := httptest.NewServer(newTestHandler(t, s))
 	defer srv.Close()
 
 	paneID := createShellPaneInP1(t, srv)
-	body, ct := makeUploadBody(t, "application/pdf", []byte("%PDF-1.4 fake"))
+	body, ct := makeUploadBody(t, "application/octet-stream", []byte("arbitrary bytes"))
 	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
 	if err != nil {
 		t.Fatal(err)
@@ -296,10 +298,96 @@ func TestPaneUpload_unsupportedMIME415(t *testing.T) {
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".pdf") {
-			t.Fatalf("rejected MIME left file on disk: %q", e.Name())
-		}
+	if len(entries) > 0 {
+		t.Fatalf("rejected MIME left %d file(s) on disk", len(entries))
+	}
+}
+
+// TestPaneUpload_pdfAccepted covers Scope B: a PDF (strict sniff, magic
+// bytes recognised by the stdlib) uploads and lands with a .pdf name.
+func TestPaneUpload_pdfAccepted(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	// "%PDF-" prefix makes http.DetectContentType report application/pdf.
+	body, ct := makeUploadBody(t, "application/pdf", []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n"))
+	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		b, _ := io.ReadAll(r.Body)
+		t.Fatalf("status=%d body=%s, want 200", r.StatusCode, string(b))
+	}
+	dir := filepath.Join(os.TempDir(), "reck-pane-"+paneID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".pdf") {
+		t.Fatalf("want one .pdf on disk, got %v", entries)
+	}
+}
+
+// TestPaneUpload_textMarkdownAccepted covers the sniffText policy: a
+// Markdown file is declared text/markdown but sniffs as text/plain, and
+// must be accepted (equality would wrongly reject it) and saved .md.
+func TestPaneUpload_textMarkdownAccepted(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	body, ct := makeUploadBody(t, "text/markdown", []byte("# Title\n\nSome **markdown** body.\n"))
+	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		b, _ := io.ReadAll(r.Body)
+		t.Fatalf("status=%d body=%s, want 200", r.StatusCode, string(b))
+	}
+	dir := filepath.Join(os.TempDir(), "reck-pane-"+paneID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".md") {
+		t.Fatalf("want one .md on disk, got %v", entries)
+	}
+}
+
+// TestPaneUpload_textRejectsBinary covers the sniffText security gate: a
+// binary payload declared under a text extension (here text/plain with
+// PKZip bytes) must be rejected, so an executable/archive can't be
+// smuggled in disguised as a .txt.
+func TestPaneUpload_textRejectsBinary(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	zipBytes := []byte{0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00}
+	body, ct := makeUploadBody(t, "text/plain", zipBytes)
+	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != nethttp.StatusUnsupportedMediaType {
+		t.Fatalf("status=%d, want 415", r.StatusCode)
+	}
+	dir := filepath.Join(os.TempDir(), "reck-pane-"+paneID)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) > 0 {
+		t.Fatalf("binary-as-text upload left %d file(s) on disk", len(entries))
 	}
 }
 

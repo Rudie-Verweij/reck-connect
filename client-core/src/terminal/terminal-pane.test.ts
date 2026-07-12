@@ -1159,24 +1159,70 @@ describe("TerminalPane teardown races", () => {
     pane.dispose();
   });
 
-  it("drop of a non-image file blocks navigation but does not upload (Scope A)", async () => {
+  it("drop of an unsupported file blocks navigation but does not upload", async () => {
     const wrapper = setupDom();
     const { sends } = installCapturingWebSocket();
     const upload = vi.fn(async () => ({ kind: "path" as const, path: "never" }));
     const pane = mountPaneWithPaste(wrapper, upload);
 
-    const ev = makeDropEvent("drop", [makeImageFile("application/pdf", new Uint8Array([1]), "doc.pdf")]);
+    // .zip is not in the drop allowlist (images + Scope B docs/text).
+    const ev = makeDropEvent("drop", [makeImageFile("application/zip", new Uint8Array([1]), "archive.zip")]);
     pane.container.dispatchEvent(ev);
     await new Promise((r) => setTimeout(r, 0));
 
     // preventDefault still fires (never let Electron navigate to the file),
-    // but no upload happens — Scope A handles images only.
+    // but no upload happens — the type isn't uploadable.
     expect(ev.defaultPrevented).toBe(true);
     expect(upload).not.toHaveBeenCalled();
     const inputFrames = sends
       .map((raw) => JSON.parse(raw) as { type: string })
       .filter((m) => m.type === "input");
     expect(inputFrames).toEqual([]);
+    pane.dispose();
+  });
+
+  it("drop of a PDF uploads with application/pdf and types the path (Scope B)", async () => {
+    const wrapper = setupDom();
+    const { sends, openAll } = installCapturingWebSocket();
+    const upload = vi.fn(async (_blob: Blob, _mime: string) => ({
+      kind: "path" as const,
+      path: "/tmp/reck-pane-p_x/uploads/doc.pdf",
+    }));
+    const pane = mountPaneWithPaste(wrapper, upload);
+    openAll();
+
+    const ev = makeDropEvent("drop", [makeImageFile("application/pdf", new Uint8Array([1, 2]), "spec.pdf")]);
+    pane.container.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(upload.mock.calls[0][1]).toBe("application/pdf");
+    const texts = sends
+      .map((raw) => JSON.parse(raw) as { type: string; data?: string })
+      .filter((m) => m.type === "input")
+      .map((m) => new TextDecoder().decode(Uint8Array.from(atob(m.data!), (c) => c.charCodeAt(0))));
+    expect(texts).toEqual(["/tmp/reck-pane-p_x/uploads/doc.pdf "]);
+    pane.dispose();
+  });
+
+  it("drop of a text file with no browser MIME derives the MIME from its extension (Scope B)", async () => {
+    const wrapper = setupDom();
+    installCapturingWebSocket();
+    // Browsers frequently report an empty file.type for .md/.csv/etc.;
+    // resolveDropMime must fall back to the filename extension.
+    const upload = vi.fn(async (_blob: Blob, _mime: string) => ({
+      kind: "path" as const,
+      path: "/tmp/notes.md",
+    }));
+    const pane = mountPaneWithPaste(wrapper, upload);
+
+    const ev = makeDropEvent("drop", [makeImageFile("", new Uint8Array([1]), "notes.md")]);
+    pane.container.dispatchEvent(ev);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(upload.mock.calls[0][1]).toBe("text/markdown");
     pane.dispose();
   });
 
