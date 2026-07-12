@@ -9,7 +9,11 @@ import { DictationBar } from "./DictationBar";
 import { DeepgramProvider } from "./providers/DeepgramProvider";
 import { LocalWhisperProvider } from "./providers/LocalWhisperProvider";
 import type { Transcriber, TranscriberStatus } from "./providers/types";
-import { embeddedModelRepo, type TranscriptionSettings } from "./transcriptionSettings";
+import {
+  EMBEDDED_MODELS,
+  embeddedModelRepo,
+  type TranscriptionSettings,
+} from "./transcriptionSettings";
 
 /** Where dictated text lands — typically the active terminal pane. */
 export interface DictationTarget {
@@ -55,6 +59,7 @@ export class TranscriptionController {
       onPartial: (t) => this.bar?.setInterim(t),
       onFinal: (t) => this.injectFinal(t),
       onStatus: (s) => this.bar?.setStatus(s),
+      onProgress: (p) => this.bar?.setProgress(p),
       onError: (m) => {
         if (this.bar) this.bar.setError(m);
         else this.deps.onError?.(m);
@@ -66,6 +71,14 @@ export class TranscriptionController {
   private makeProvider(): Transcriber {
     if (this.settings.provider === "deepgram") return new DeepgramProvider();
     return new LocalWhisperProvider(embeddedModelRepo(this.settings.localModel));
+  }
+
+  /** Short model name for the loading UI (local engine only). */
+  private modelLabel(): string | null {
+    if (this.settings.provider !== "local") return null;
+    const m = EMBEDDED_MODELS.find((x) => x.id === this.settings.localModel);
+    const short = m ? m.label.split("—")[0].trim() : this.settings.localModel;
+    return `Whisper ${short}`;
   }
 
   private injectFinal(text: string): void {
@@ -104,7 +117,7 @@ export class TranscriptionController {
       return;
     }
     this.target = session.target;
-    this.bar = new DictationBar(session.surface);
+    this.bar = new DictationBar(session.surface, this.modelLabel());
     this.injectedAny = false;
     await this.engine.start();
   }

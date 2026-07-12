@@ -15,6 +15,8 @@ export interface TranscriptionHandlers {
   onFinal?: (text: string) => void;
   /** Progress/status for slow steps, e.g. "loading" the local model. */
   onStatus?: (status: TranscriberStatus) => void;
+  /** Model-load progress, 0–100 (local model download). */
+  onProgress?: (pct: number) => void;
   /** A user-facing error message. */
   onError?: (message: string) => void;
 }

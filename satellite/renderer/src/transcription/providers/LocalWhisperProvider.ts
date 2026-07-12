@@ -11,6 +11,7 @@ import type { Transcriber, TranscriptionHandlers } from "./types";
 
 type WorkerOut =
   | { type: "status"; status: "loading" | "transcribing"; generation: number }
+  | { type: "progress"; pct: number; generation: number }
   | { type: "ready"; generation: number }
   | { type: "result"; text: string; generation: number }
   | { type: "error"; message: string; generation: number };
@@ -39,6 +40,9 @@ export class LocalWhisperProvider implements Transcriber {
       switch (d.type) {
         case "status":
           this.handlers?.onStatus?.(d.status);
+          break;
+        case "progress":
+          this.handlers?.onProgress?.(d.pct);
           break;
         case "ready":
           this.settlePrepare();

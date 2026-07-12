@@ -16,6 +16,7 @@ export interface EngineHandlers {
   onPartial?: (text: string) => void;
   onFinal?: (text: string) => void;
   onStatus?: (status: TranscriberStatus) => void;
+  onProgress?: (pct: number) => void;
   onError?: (message: string) => void;
   onStateChange?: (state: DictationState) => void;
 }
@@ -62,6 +63,7 @@ export class TranscriptionEngine {
       onPartial: (t) => this.handlers.onPartial?.(t),
       onFinal: (t) => this.handlers.onFinal?.(t),
       onStatus: (s) => this.handlers.onStatus?.(s),
+      onProgress: (p) => this.handlers.onProgress?.(p),
       onError: (m) => this.handlers.onError?.(m),
     };
   }

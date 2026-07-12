@@ -3950,6 +3950,7 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   vertical-align: middle;
 }
 .dictation-bar[data-state="transcribing"] .dictation-bar-label::before { background: #c9982e; }
+.dictation-bar-label[hidden] { display: none; }
 .dictation-bar-interim {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3957,6 +3958,76 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   opacity: 0.85;
 }
 .dictation-bar-interim:empty { display: none; }
+
+/* Model-loading component: a circular progress ring (filled by download %,
+   with a pulsing glow) next to the model name, morphing into a checkmark
+   when loaded. */
+.dictation-loader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dictation-loader[hidden] { display: none; }
+.dictation-loader-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dictation-ring {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  overflow: visible;
+}
+.dictation-ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 3;
+}
+.dictation-ring-progress {
+  fill: none;
+  stroke: var(--claude-orange-glow, #e8875c);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  transition: stroke-dashoffset 0.3s var(--ease-smooth);
+  animation: dictation-glow 1.3s ease-in-out infinite;
+}
+.dictation-ring-check {
+  fill: none;
+  stroke: #8fae82;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 16;
+  stroke-dashoffset: 16;
+  opacity: 0;
+}
+/* No % yet (cached load / warm-up) — spin a short arc instead of a fill. */
+.dictation-loader[data-mode="indeterminate"] .dictation-ring-progress {
+  stroke-dasharray: 16 47;
+  stroke-dashoffset: 0;
+  animation: dictation-glow 1.3s ease-in-out infinite, dictation-spin 0.9s linear infinite;
+}
+/* Loaded — hide the ring, draw the checkmark. */
+.dictation-loader[data-mode="complete"] .dictation-ring-progress { opacity: 0; animation: none; }
+.dictation-loader[data-mode="complete"] .dictation-ring-track { stroke: rgba(143, 174, 130, 0.3); }
+.dictation-loader[data-mode="complete"] .dictation-ring-check {
+  opacity: 1;
+  stroke-dashoffset: 0;
+  transition: stroke-dashoffset 0.35s var(--ease-smooth) 0.05s, opacity 0.2s;
+}
+@keyframes dictation-glow {
+  0%, 100% { filter: drop-shadow(0 0 1px rgba(232, 135, 92, 0.4)); }
+  50% { filter: drop-shadow(0 0 5px rgba(232, 135, 92, 0.95)); }
+}
+@keyframes dictation-spin {
+  from { transform: rotate(-90deg); }
+  to { transform: rotate(270deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dictation-ring-progress { animation: none !important; }
+}
 /* History (clock) button — the primary per-pane affordance that opens the
    transcript overlay. Unlike the other icon-btns it does NOT shift shade on
    hover; it holds its resting fill/ink and instead blooms a soft orange halo

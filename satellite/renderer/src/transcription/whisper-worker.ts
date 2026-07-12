@@ -29,33 +29,78 @@ type InMessage =
   | { type: "prepare"; repo: string; generation: number }
   | { type: "transcribe"; repo: string; generation: number; audio: Float32Array };
 
-// Ordered by preference: fast native GPU first, portable WASM second. Each
-// is validated by a warm-up inference before being accepted.
-const DEVICE_CONFIGS: ReadonlyArray<{ device: "webgpu" | "wasm"; dtype: string }> = [
-  { device: "webgpu", dtype: "fp16" },
-  { device: "wasm", dtype: "q8" },
-];
-
 let asr: AutomaticSpeechRecognitionPipeline | null = null;
 let loadedRepo: string | null = null;
 
-/** Load + warm up the model, falling back across devices. Cached per repo. */
+/**
+ * Is WebGPU actually usable for transformers.js here? Its GPU kernels read
+ * the subgroup-size limits; some Chromium/Metal backends (e.g. this Electron
+ * build) don't expose them, and reading them throws
+ * "Cannot read properties of undefined (reading 'subgroupMinSize')". We probe
+ * the adapter and require those limits before ever selecting WebGPU, so we
+ * never trip that crash — otherwise we use WASM.
+ */
+async function webgpuUsable(): Promise<boolean> {
+  try {
+    const gpu = (navigator as unknown as { gpu?: { requestAdapter?: () => Promise<unknown> } }).gpu;
+    if (!gpu?.requestAdapter) return false;
+    const adapter = (await gpu.requestAdapter()) as { limits?: Record<string, unknown> } | null;
+    if (!adapter?.limits) return false;
+    return typeof adapter.limits.subgroupMinSize === "number";
+  } catch {
+    return false;
+  }
+}
+
+/** Load + warm up the model, choosing a safe device. Cached per repo. */
 async function ensureReady(
   repo: string,
   generation: number,
 ): Promise<AutomaticSpeechRecognitionPipeline> {
   if (asr && loadedRepo === repo) return asr;
   post({ type: "status", status: "loading", generation });
+
+  // Only attempt WebGPU when the adapter reports the limits its kernels need;
+  // always keep WASM as the fallback.
+  const configs: Array<{ device: "webgpu" | "wasm"; dtype: string }> = [];
+  if (await webgpuUsable()) configs.push({ device: "webgpu", dtype: "fp16" });
+  configs.push({ device: "wasm", dtype: "q8" });
+
+  // Aggregate per-file download progress into an overall 0-100.
+  const files = new Map<string, { loaded: number; total: number }>();
+  const progress_callback = (p: {
+    status?: string;
+    file?: string;
+    loaded?: number;
+    total?: number;
+  }): void => {
+    if (!p.file) return;
+    if (p.status === "progress" && typeof p.total === "number") {
+      files.set(p.file, { loaded: p.loaded ?? 0, total: p.total });
+    } else if (p.status === "done") {
+      const it = files.get(p.file);
+      if (it) it.loaded = it.total;
+    }
+    let loaded = 0;
+    let total = 0;
+    for (const it of files.values()) {
+      loaded += it.loaded;
+      total += it.total;
+    }
+    const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+    post({ type: "progress", pct, generation });
+  };
+
   let lastErr: unknown;
-  for (const cfg of DEVICE_CONFIGS) {
+  for (const cfg of configs) {
     try {
       const p = (await pipeline("automatic-speech-recognition", repo, {
         device: cfg.device,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         dtype: cfg.dtype as any,
+        progress_callback,
       })) as AutomaticSpeechRecognitionPipeline;
-      // Warm-up: one inference over 1s of silence. This is where a broken
-      // WebGPU backend actually throws, so it belongs inside the try.
+      // Warm-up: one inference over 1s of silence, validating the device.
       await p(new Float32Array(16000), { chunk_length_s: 30 });
       asr = p;
       loadedRepo = repo;
@@ -102,6 +147,7 @@ function extractText(output: unknown): string {
 
 type WorkerOut =
   | { type: "status"; status: "loading" | "transcribing"; generation: number }
+  | { type: "progress"; pct: number; generation: number }
   | { type: "ready"; generation: number }
   | { type: "result"; text: string; generation: number }
   | { type: "error"; message: string; generation: number };
