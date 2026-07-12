@@ -4180,19 +4180,44 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 .dictation-tail {
   display: none;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-size: 13px;
   font-style: italic;
-  color: rgba(245, 242, 234, 0.9);
-  filter: blur(0.6px);
-  opacity: 0.75;
+  color: rgba(245, 242, 234, 0.95);
+  /* Ghosted but READABLE — the blur says "not committed", the ink stays legible. */
+  filter: blur(0.4px);
+  opacity: 0.85;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
 .dictation-tail.has-text { display: block; }
+/* Ghost word-blobs: one per word HEARD (voice energy) but not yet
+   transcribed. They appear the instant you speak — proof you're being heard —
+   and crystallize into ghost words, then real prompt text, as the engine
+   catches up. */
+.dictation-blobs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+.dictation-blob {
+  height: 9px;
+  border-radius: 5px;
+  background: rgba(232, 135, 92, 0.55);
+  filter: blur(1.5px);
+  animation: dictation-blob-shimmer 1.1s ease-in-out infinite;
+}
+.dictation-blob:nth-child(2n) { animation-delay: 0.18s; }
+.dictation-blob:nth-child(3n) { animation-delay: 0.33s; }
+@keyframes dictation-blob-shimmer {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.85; }
+}
 @media (prefers-reduced-motion: reduce) {
   .dictation-fab-btn[data-state="listening"] { animation: none !important; }
+  .dictation-blob { animation: none !important; }
 }
 
 /* History (clock) button — the primary per-pane affordance that opens the

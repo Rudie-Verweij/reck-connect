@@ -21,6 +21,12 @@ export interface EngineHandlers {
   onProgress?: (pct: number) => void;
   /** Live mic amplitude (RMS, ~0–1) for the volume meter. */
   onLevel?: (level: number) => void;
+  /**
+   * Cumulative VOICED milliseconds this utterance — grows the moment you
+   * speak, long before any transcription returns. The UI turns it into
+   * ghost word-placeholders that crystallize as real text arrives.
+   */
+  onSpeechMs?: (ms: number) => void;
   onError?: (message: string) => void;
   onStateChange?: (state: DictationState) => void;
 }
@@ -29,12 +35,33 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// Sub-chunk RMS above this counts as voiced audio (same floor the local
+// provider uses to gate transcription).
+const VOICED_RMS = 0.01;
+// Analyze voiced-ness in ~32ms windows so brief inter-word gaps don't
+// inflate the speech-time estimate.
+const VOICED_WINDOW_SAMPLES = 512;
+
+/** Milliseconds of voiced audio within a capture chunk. */
+function voicedMs(chunk: Float32Array, sampleRate: number): number {
+  if (sampleRate <= 0) return 0;
+  let voicedSamples = 0;
+  for (let start = 0; start < chunk.length; start += VOICED_WINDOW_SAMPLES) {
+    const end = Math.min(start + VOICED_WINDOW_SAMPLES, chunk.length);
+    let sum = 0;
+    for (let i = start; i < end; i++) sum += chunk[i] * chunk[i];
+    if (Math.sqrt(sum / (end - start)) > VOICED_RMS) voicedSamples += end - start;
+  }
+  return (voicedSamples / sampleRate) * 1000;
+}
+
 export class TranscriptionEngine {
   private capture: AudioCapture | null = null;
   private state: DictationState = "idle";
   // Chunks captured before the provider finished starting, replayed on ready.
   private pending: Array<{ chunk: Float32Array; rate: number }> = [];
   private ready = false;
+  private speechMs = 0;
 
   constructor(
     private provider: Transcriber,
@@ -92,10 +119,16 @@ export class TranscriptionEngine {
 
     this.pending = [];
     this.ready = false;
+    this.speechMs = 0;
     this.capture = new AudioCapture({
       onChunk: (chunk, rate) => {
         // Instant volume feedback — independent of the (laggy) transcription.
         this.handlers.onLevel?.(rms(chunk));
+        const voiced = voicedMs(chunk, rate);
+        if (voiced > 0) {
+          this.speechMs += voiced;
+          this.handlers.onSpeechMs?.(this.speechMs);
+        }
         if (this.ready) this.provider.feed(chunk, rate);
         else this.pending.push({ chunk, rate });
       },

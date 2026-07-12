@@ -33,6 +33,8 @@ export interface DictationUI {
   setLevel(level: number): void;
   /** Unstable ghost-tail text (never injected into the prompt). */
   setTail(text: string): void;
+  /** Words HEARD (by voice energy) but not yet transcribed — ghost blobs. */
+  setPendingWords(count: number): void;
   setError(message: string): void;
 }
 
@@ -40,6 +42,17 @@ export interface DictationUI {
 // character on this, letting us "correct" earlier words when a later
 // transcription pass revises them.
 const DEL = "\x7f";
+
+// Speech-to-word estimate for the ghost placeholders: ~150 wpm = 2.5 words
+// per VOICED second. The blobs only bridge transcription lag, so a rough
+// rate is fine — real words replace them within a pass or two.
+const WORDS_PER_VOICED_SECOND = 2.5;
+// Never render a wall of blobs (long lag / noisy room).
+const MAX_PENDING_BLOBS = 8;
+
+function wordCount(text: string): number {
+  return text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
+}
 
 /** Collapse newlines (would submit the prompt) and trim so passes diff cleanly. */
 function normalizeTranscript(text: string): string {
@@ -68,16 +81,33 @@ export class TranscriptionController {
   private bar: DictationBar | null = null;
   // What we've typed into the target this utterance (to diff the next pass).
   private injectedText = "";
+  // Ghost-placeholder inputs: voiced-time word estimate vs words transcribed.
+  private lastTail = "";
+  private heardWords = 0;
 
   constructor(private readonly deps: TranscriptionControllerDeps) {
     this.settings = deps.settings;
     this.engine = new TranscriptionEngine(this.makeProvider(), {
-      onPartial: (t) => this.applyTranscript(t),
-      onTail: (t) => this.bar?.setTail(t),
-      onFinal: (t) => this.applyTranscript(t),
+      onPartial: (t) => {
+        this.applyTranscript(t);
+        this.syncGhosts();
+      },
+      onTail: (t) => {
+        this.lastTail = t;
+        this.bar?.setTail(t);
+        this.syncGhosts();
+      },
+      onFinal: (t) => {
+        this.applyTranscript(t);
+        this.syncGhosts();
+      },
       onStatus: (s) => this.bar?.setStatus(s),
       onProgress: (p) => this.bar?.setProgress(p),
       onLevel: (l) => this.bar?.setLevel(l),
+      onSpeechMs: (ms) => {
+        this.heardWords = Math.round((ms / 1000) * WORDS_PER_VOICED_SECOND);
+        this.syncGhosts();
+      },
       onError: (m) => {
         if (this.bar) this.bar.setError(m);
         else this.deps.onError?.(m);
@@ -126,6 +156,18 @@ export class TranscriptionController {
     this.injectedText = next;
   }
 
+  /**
+   * Ghost placeholders: words we've HEARD (voice energy) minus words already
+   * visible as text (typed stable words + the ghost tail). What remains is
+   * rendered as blurred blobs — instant "I heard that" feedback that
+   * crystallizes into words as the engine catches up.
+   */
+  private syncGhosts(): void {
+    const transcribed = wordCount(this.injectedText) + wordCount(this.lastTail);
+    const pending = Math.min(MAX_PENDING_BLOBS, Math.max(0, this.heardWords - transcribed));
+    this.bar?.setPendingWords(pending);
+  }
+
   private onStateChange(state: DictationState): void {
     this.bar?.setState(state);
     if (state === "idle") {
@@ -134,6 +176,8 @@ export class TranscriptionController {
       this.bar = null;
       this.target = null;
       this.injectedText = "";
+      this.lastTail = "";
+      this.heardWords = 0;
     }
   }
 
@@ -163,6 +207,8 @@ export class TranscriptionController {
     this.target = session.target;
     this.bar = new DictationBar(session.surface, this.modelLabel());
     this.injectedText = "";
+    this.lastTail = "";
+    this.heardWords = 0;
     await this.engine.start();
   }
 
@@ -176,6 +222,8 @@ export class TranscriptionController {
     this.bar = null;
     this.target = null;
     this.injectedText = "";
+    this.lastTail = "";
+    this.heardWords = 0;
   }
 
   isActive(): boolean {

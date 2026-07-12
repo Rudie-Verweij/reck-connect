@@ -106,6 +106,7 @@ export class DictationFab {
   readonly button: HTMLButtonElement;
   /** Side container the DictationBar mounts the meter/ghost-tail pill into. */
   readonly pillSlot: HTMLElement;
+  private readonly resizeObserver: ResizeObserver | null;
 
   constructor(
     private readonly anchor: HTMLElement,
@@ -128,6 +129,12 @@ export class DictationFab {
     this.root.append(this.button, this.pillSlot);
     this.anchor.appendChild(this.root);
     this.installDrag(opts.onToggle);
+    // Panes resize constantly — splits added/removed, dividers dragged, the
+    // window itself. Re-clamp on every size change so a mic parked far right
+    // can never end up hidden behind a new pane or off-screen.
+    this.resizeObserver =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => this.sync()) : null;
+    this.resizeObserver?.observe(this.anchor);
     this.sync();
   }
 
@@ -211,6 +218,7 @@ export class DictationFab {
   }
 
   dispose(): void {
+    this.resizeObserver?.disconnect();
     instances.delete(this);
     byAnchor.delete(this.anchor);
     this.root.remove();

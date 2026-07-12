@@ -32,6 +32,8 @@ export class DictationBar implements DictationUI {
   private readonly liveEl: HTMLElement;
   private readonly meterEl: HTMLElement;
   private readonly tailEl: HTMLElement;
+  private readonly blobsEl: HTMLElement;
+  private pendingWords = 0;
   private readonly bars: HTMLElement[] = [];
   private readonly levels: number[] = new Array(METER_BARS).fill(0);
   private state: DictationState = "idle";
@@ -92,9 +94,15 @@ export class DictationBar implements DictationUI {
     this.tailEl = document.createElement("span");
     this.tailEl.className = "dictation-tail";
 
+    // Ghost blobs: one placeholder per word HEARD (voice energy) but not yet
+    // transcribed — instant feedback that crystallizes into words.
+    this.blobsEl = document.createElement("span");
+    this.blobsEl.className = "dictation-blobs";
+    this.blobsEl.setAttribute("aria-hidden", "true");
+
     this.liveEl = document.createElement("div");
     this.liveEl.className = "dictation-live";
-    this.liveEl.append(this.meterEl, this.tailEl);
+    this.liveEl.append(this.meterEl, this.tailEl, this.blobsEl);
 
     this.el.append(this.loaderEl, this.liveEl);
     // Prefer the floating mic's pill slot; fall back to the pane corner for
@@ -115,7 +123,12 @@ export class DictationBar implements DictationUI {
     this.state = state;
     setMicButtonState(this.surface, state);
     dictationFabFor(this.surface)?.setState(state);
-    if (state === "idle" || state === "transcribing") this.setTail("");
+    // Keep the ghost tail/blobs visible through "transcribing" — the final
+    // pass is the slow part and the ghosts ARE the "still working" feedback.
+    if (state === "idle") {
+      this.setTail("");
+      this.setPendingWords(0);
+    }
     this.render();
   }
 
@@ -147,6 +160,21 @@ export class DictationBar implements DictationUI {
     this.tailEl.classList.toggle("has-text", text.length > 0);
   }
 
+  setPendingWords(count: number): void {
+    if (count === this.pendingWords) return;
+    this.pendingWords = count;
+    while (this.blobsEl.children.length > count) this.blobsEl.lastElementChild?.remove();
+    while (this.blobsEl.children.length < count) {
+      const blob = document.createElement("span");
+      blob.className = "dictation-blob";
+      // Word-ish width variety so the row reads as language, not UI.
+      blob.style.width = `${16 + ((this.blobsEl.children.length * 7) % 15)}px`;
+      this.blobsEl.appendChild(blob);
+    }
+    // While finishing up, blob changes should re-evaluate pill visibility.
+    if (this.state === "transcribing") this.render();
+  }
+
   setError(message: string): void {
     showToast(this.surface, message, { kind: "error", durationMs: 6000 });
   }
@@ -158,11 +186,19 @@ export class DictationBar implements DictationUI {
   private render(): void {
     const loading = this.isLoading();
     const listening = this.state === "listening";
-    // The pill appears while the model loads (ring) or while listening
-    // (meter + ghost tail).
-    this.el.hidden = !(loading || listening);
-    this.loaderEl.hidden = !loading;
-    this.liveEl.hidden = !listening;
+    const transcribing = this.state === "transcribing";
+    // The pill appears while the model loads (ring), while listening (meter
+    // + ghosts), and while the final pass runs (spinner + remaining ghosts) —
+    // the mic never just sits amber with no explanation.
+    this.el.hidden = !(loading || listening || transcribing);
+    this.loaderEl.hidden = !(loading || transcribing);
+    this.liveEl.hidden = !(listening || transcribing);
+    this.meterEl.hidden = !listening; // no audio flows while finishing
+    if (transcribing && !loading) {
+      this.loaderEl.dataset.mode = "indeterminate";
+      this.label.textContent = "Transcribing…";
+      return;
+    }
     if (!loading) return;
     const complete = this.ready || this.pct >= 100;
     this.loaderEl.dataset.mode = !this.sawProgress && !complete
