@@ -91,12 +91,13 @@ export function validateRsyncLocalPath(
 // --- window.open scheme allowlist -------------------------------------------
 
 /**
- * Schemes we allow to reach `shell.openExternal`. Only `https:` is in-repo
- * necessary today (no `http:` / `mailto:` / custom-scheme call sites exist
- * in renderer code). Keep this list minimal; widen only after a real caller
- * shows up.
+ * Schemes we allow to reach `shell.openExternal`. `https:` and `http:`
+ * cover clickable web URLs in terminal/source text (the URL linkifier).
+ * Everything else — `mailto:`, `file:`, `javascript:`, custom app
+ * schemes — stays rejected. Keep this list minimal; widen only after a
+ * real caller shows up.
  */
-export const ALLOWED_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set(["https:"]);
+export const ALLOWED_EXTERNAL_SCHEMES: ReadonlySet<string> = new Set(["https:", "http:"]);
 
 export type UrlSchemeCheck =
   | { ok: true; url: string }

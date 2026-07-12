@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   detectPathsInLine,
+  detectUrlsInLine,
   isPathLike,
   setExtensionlessAllowlist,
   SEEDED_EXTENSIONLESS_FILENAMES,
@@ -383,5 +384,54 @@ describe("detectPathsInLine", () => {
       expect(result.find((m) => m.text === ".secrets")).toBeTruthy();
       expect(result.find((m) => m.text === ".env")).toBeFalsy();
     });
+  });
+});
+
+describe("detectUrlsInLine", () => {
+  it("detects a plain https URL with correct offsets", () => {
+    const line = "see https://example.com/docs here";
+    const [m, ...rest] = detectUrlsInLine(line);
+    expect(rest).toEqual([]);
+    expect(m.text).toBe("https://example.com/docs");
+    expect(line.slice(m.start, m.end)).toBe("https://example.com/docs");
+  });
+
+  it("detects http URLs too", () => {
+    expect(detectUrlsInLine("go to http://x.test/y")[0].text).toBe("http://x.test/y");
+  });
+
+  it("trims trailing sentence punctuation", () => {
+    expect(detectUrlsInLine("(see https://a.com/p).")[0].text).toBe("https://a.com/p");
+    expect(detectUrlsInLine("here: https://a.com/p, ok")[0].text).toBe("https://a.com/p");
+  });
+
+  it("keeps a balanced closing paren (wiki-style)", () => {
+    expect(detectUrlsInLine("https://en.wikipedia.org/wiki/Foo_(bar)")[0].text).toBe(
+      "https://en.wikipedia.org/wiki/Foo_(bar)",
+    );
+  });
+
+  it("keeps query strings and fragments", () => {
+    expect(detectUrlsInLine("https://a.com/s?q=1&r=2#frag x")[0].text).toBe(
+      "https://a.com/s?q=1&r=2#frag",
+    );
+  });
+
+  it("detects multiple URLs on one line", () => {
+    const got = detectUrlsInLine("https://a.com and https://b.com/x");
+    expect(got.map((m) => m.text)).toEqual(["https://a.com", "https://b.com/x"]);
+  });
+
+  it("does not match non-http schemes, paths, or bare hosts", () => {
+    expect(detectUrlsInLine("file:///etc/hosts")).toEqual([]);
+    expect(detectUrlsInLine("mailto:a@b.com")).toEqual([]);
+    expect(detectUrlsInLine("open ./src/index.ts now")).toEqual([]);
+    expect(detectUrlsInLine("visit example.com")).toEqual([]);
+  });
+
+  it("returns [] for empty or non-string input", () => {
+    expect(detectUrlsInLine("")).toEqual([]);
+    // @ts-expect-error runtime guard
+    expect(detectUrlsInLine(undefined)).toEqual([]);
   });
 });

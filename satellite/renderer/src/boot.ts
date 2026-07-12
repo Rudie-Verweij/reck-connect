@@ -35,6 +35,7 @@ import { effectiveStoplight as filterEffectiveStoplight } from "./ui/effective-s
 import { AppBar, type Theme } from "./ui/app-bar";
 import { PaneLayout } from "./ui/pane-layout";
 import { installPathLinkProvider } from "./viewer/PathLinkProvider";
+import { installUrlLinkProvider } from "./viewer/UrlLinkProvider";
 import { ensurePaneControls } from "./ui/paneControls";
 import { resolveActivatePath } from "./viewer/resolveActivatePath";
 import {
@@ -108,6 +109,10 @@ import {
   loadRailMode,
   loadRailWidth,
   loadRailWiggle,
+  loadDropPromptTemplate,
+  loadDragDropAllowlist,
+  DEFAULT_DRAGDROP_EXTENSIONS,
+  DRAGDROP_MAX_BYTES,
   loadSettings,
   loadTheme,
   resolveActiveUrl,
@@ -327,6 +332,15 @@ export async function boot(splash?: StartupSplashController) {
   const savedRailWidth = await loadRailWidth();
   const savedRailMode = await loadRailMode();
   const railWiggle = await loadRailWiggle();
+  // Drop prompt template (mutable — a Preferences save updates this in
+  // place so newly-created panes pick it up without a reload).
+  let dropPromptTemplate = await loadDropPromptTemplate();
+  // Droppable-extensions allow-list (lowercase, no dot). Seeded on first
+  // run. A Preferences save reloads the renderer, so a fresh Set is read
+  // then; live panes use the snapshot captured here.
+  const dragDropAllowlist = new Set(
+    (await loadDragDropAllowlist()) ?? DEFAULT_DRAGDROP_EXTENSIONS,
+  );
   const railEl = document.getElementById("rail")!;
   // Old configs could persist up to the removed 420px upper clamp; a
   // corrupted value must not feed NaN into the grid template.
@@ -1196,6 +1210,10 @@ export async function boot(splash?: StartupSplashController) {
           })
           .catch((e) => console.warn("[click:transcript] openInViewer error", e));
       },
+      // ⌘+click an http/https URL in the transcript → OS default browser.
+      onExternalActivate: (href) => {
+        window.open(href, "_blank", "noopener");
+      },
     }),
   });
 
@@ -1313,6 +1331,14 @@ export async function boot(splash?: StartupSplashController) {
                 error: err,
               });
             });
+        },
+      });
+      // Clickable http/https URLs alongside the path linkifier. ⌘-click
+      // opens the OS default browser: window.open is intercepted by main's
+      // setWindowOpenHandler and forwarded to shell.openExternal.
+      installUrlLinkProvider(pane.getXterm(), {
+        onActivateUrl: (url) => {
+          window.open(url, "_blank", "noopener");
         },
       });
     },
@@ -1637,7 +1663,7 @@ export async function boot(splash?: StartupSplashController) {
     //
     // Errors bubble up to TerminalPane's onPasteUploadError hook; the
     // renderer doesn't toast by default — a console warning is enough.
-    onPasteUpload: async (paneId, host, blob, mime) => {
+    onPasteUpload: async (paneId, host, blob, mime, filename) => {
       const api = apiForHost(host);
       // Classify *why* we may end up on the path-typing branch so the
       // TerminalPane can emit a visible breadcrumb. Without this, the
@@ -1645,7 +1671,13 @@ export async function boot(splash?: StartupSplashController) {
       // from a bug from the user's seat. See PasteUploadResult.
       let fallbackReason: "no-capability" | "daemon-error" | "upload-only" | undefined;
       let fallbackDetail: string | undefined;
-      if (paneClipboardImage.get(paneId) === true) {
+      // The clipboard-image sidecar only handles image pasteboard writes;
+      // non-image drops (PDF, text, Scope B) go straight to /uploads. Flag
+      // it as the expected upload-only route rather than a failure.
+      const isImage = mime.toLowerCase().startsWith("image/");
+      if (!isImage) {
+        fallbackReason = "upload-only";
+      } else if (paneClipboardImage.get(paneId) === true) {
         try {
           const ok = await api.pasteImage(paneId, blob, mime);
           if (ok) return { kind: "chip" };
@@ -1681,11 +1713,32 @@ export async function boot(splash?: StartupSplashController) {
         // it so the user knows it's by design, not a bug.
         fallbackReason = "no-capability";
       }
-      const resp = await api.uploadFile(paneId, blob, mime);
+      const resp = await api.uploadFile(paneId, blob, mime, filename);
       return { kind: "path", path: resp.path, fallbackReason, fallbackDetail };
     },
     onPasteUploadError: (paneId, err, mime) => {
       console.warn("[paste-upload] failed", { paneId, mime, err });
+    },
+    // Current drop prompt template, read fresh per pane creation so a
+    // Preferences edit takes effect on the next-created pane.
+    dropPromptTemplate: () => dropPromptTemplate,
+    // Gate a dropped file against the user's allow-list + 10 MB cap.
+    validateDroppedFile: (file) => {
+      if (file.size > DRAGDROP_MAX_BYTES) return { ok: false, reason: "size" };
+      const dot = file.name.lastIndexOf(".");
+      const ext = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : "";
+      if (!ext || !dragDropAllowlist.has(ext)) return { ok: false, reason: "type" };
+      return { ok: true };
+    },
+    onDropRejected: (info) => {
+      const mb = (info.sizeBytes / (1000 * 1000)).toFixed(1);
+      const msg =
+        info.reason === "size"
+          ? `“${info.name}” is ${mb} MB — drag-drop is capped at 10 MB.`
+          : info.ext
+            ? `“.${info.ext}” files aren’t allowed. Add the type in Settings → Drag & drop files.`
+            : `“${info.name}” has no extension. Add allowed types in Settings → Drag & drop files.`;
+      showToast(document.body, msg, { kind: "error" });
     },
     // an earlier release: detach the pane to its own popout window. The flow:
     //   1. ask main for the leaf's screen rect (via getActiveLeafRect)

@@ -1050,6 +1050,10 @@ async function renderStationRemote(
 
   if (mode === "markdown-rendered") {
     const md = createMarkdownRenderer({
+      // ⌘+click an http/https URL in the rendered view → OS default browser.
+      onExternalActivate: (href) => {
+        window.open(href, "_blank", "noopener");
+      },
       onLinkActivate: (href) => {
         // Resolve relative hrefs against the station path. The
         // resulting target may itself be a station file — pass through
@@ -1082,6 +1086,10 @@ async function renderStationRemote(
     md.mount(shell.body, md.render(result.content));
   } else if (mode === "html-static") {
     const html = createHtmlRenderer({
+      // ⌘+click an http/https URL in the rendered view → OS default browser.
+      onExternalActivate: (href) => {
+        window.open(href, "_blank", "noopener");
+      },
       onLinkActivate: (href) => {
         const target = href.startsWith("/")
           ? href
@@ -1183,6 +1191,10 @@ async function renderStationRemote(
           showToast: (msg, o) =>
             showToast(shell.body, msg, { durationMs: o?.ttl, kind: o?.kind }),
         });
+      },
+      // ⌘+click a URL in the source view → OS default browser.
+      onActivateUrl: (url) => {
+        window.open(url, "_blank", "noopener");
       },
     });
     void lockBannerRef;
@@ -1434,6 +1446,10 @@ async function renderForPath(
 
   if (mode === "markdown-rendered") {
     const md = createMarkdownRenderer({
+      // ⌘+click an http/https URL in the rendered view → OS default browser.
+      onExternalActivate: (href) => {
+        window.open(href, "_blank", "noopener");
+      },
       onLinkActivate: (href) => {
         // Resolve relative hrefs against the file we're currently viewing.
         const target = href.startsWith("/")
@@ -1484,6 +1500,10 @@ async function renderForPath(
     md.mount(shell.body, md.render(result.content));
   } else if (mode === "html-static") {
     const html = createHtmlRenderer({
+      // ⌘+click an http/https URL in the rendered view → OS default browser.
+      onExternalActivate: (href) => {
+        window.open(href, "_blank", "noopener");
+      },
       onLinkActivate: (href) => {
         const target = href.startsWith("/")
           ? href
@@ -1584,6 +1604,10 @@ async function renderForPath(
           showToast: (msg, o) =>
             showToast(shell.body, msg, { durationMs: o?.ttl, kind: o?.kind }),
         });
+      },
+      // ⌘+click a URL in the source view → OS default browser.
+      onActivateUrl: (url) => {
+        window.open(url, "_blank", "noopener");
       },
     });
     // Track the banner on the session so dispose tears it down.

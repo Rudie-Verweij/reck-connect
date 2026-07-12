@@ -140,7 +140,45 @@ describe("installCodeMirrorPathLinkifier", () => {
     installCodeMirrorPathLinkifier(view, { onActivate: vi.fn() });
     const link = parent.querySelector(".reck-path-link") as HTMLElement | null;
     expect(link).not.toBeNull();
-    expect(link!.getAttribute("title")).toBe("⌘+click to open");
+    expect(link!.getAttribute("title")).toBe("⌘+click to view file");
+    view.destroy();
+  });
+
+  it("decorates http/https URLs with .reck-url-link", () => {
+    const { view, parent } = mountView("docs at https://example.com/guide here");
+    const handle = installCodeMirrorPathLinkifier(view, {
+      onActivate: vi.fn(),
+      onActivateUrl: vi.fn(),
+    });
+    const link = parent.querySelector(".reck-url-link") as HTMLElement | null;
+    expect(link).not.toBeNull();
+    expect(link!.textContent).toBe("https://example.com/guide");
+    handle.dispose();
+    view.destroy();
+  });
+
+  it("fires onActivateUrl(url, ev) on Cmd-click of a URL span", () => {
+    const onActivateUrl = vi.fn();
+    const { view, parent } = mountView("see https://a.com/x now");
+    installCodeMirrorPathLinkifier(view, { onActivate: vi.fn(), onActivateUrl });
+    const link = parent.querySelector(".reck-url-link") as HTMLElement;
+    link.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, metaKey: true }),
+    );
+    expect(onActivateUrl).toHaveBeenCalledTimes(1);
+    expect(onActivateUrl.mock.calls[0][0]).toBe("https://a.com/x");
+    view.destroy();
+  });
+
+  it("plain click (no metaKey) does NOT fire onActivateUrl", () => {
+    const onActivateUrl = vi.fn();
+    const { view, parent } = mountView("see https://a.com/x now");
+    installCodeMirrorPathLinkifier(view, { onActivate: vi.fn(), onActivateUrl });
+    const link = parent.querySelector(".reck-url-link") as HTMLElement;
+    link.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, metaKey: false }),
+    );
+    expect(onActivateUrl).not.toHaveBeenCalled();
     view.destroy();
   });
 });

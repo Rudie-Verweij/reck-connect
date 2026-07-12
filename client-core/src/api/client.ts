@@ -399,15 +399,17 @@ export class ApiClient {
     paneId: string,
     blob: Blob,
     mime: string,
+    filename?: string,
     init?: RequestInit,
   ): Promise<PaneUploadResponse> {
     const form = new FormData();
-    // Browser-side File carries a filename; the daemon discards the
-    // client-supplied name server-side, but constructing a File with a
-    // stable placeholder avoids quirks with some FormData
-    // implementations that reject bare Blobs without a filename.
+    // Pass the original filename when we have one (drag-drop) so the
+    // daemon can preserve the real extension for arbitrary file types.
+    // The daemon never trusts the *name* (it generates a random basename)
+    // — only the extension — so a hostile filename is harmless. Fall back
+    // to a MIME-derived placeholder for image paste (no filename).
     const ext = mime.split("/")[1] ?? "bin";
-    const file = new File([blob], `paste.${ext}`, { type: mime });
+    const file = new File([blob], filename ?? `paste.${ext}`, { type: mime });
     form.append("file", file);
     const headers: Record<string, string> = {
       ...((init?.headers as Record<string, string>) ?? {}),

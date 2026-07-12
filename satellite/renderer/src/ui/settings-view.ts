@@ -1,18 +1,24 @@
 import {
   DEFAULT_RAIL_WIGGLE,
   DEFAULT_RECK_CONNECT_PROMPT,
+  DEFAULT_DRAGDROP_EXTENSIONS,
+  DEFAULT_DROP_PROMPT_TEMPLATE,
   loadFileViewerExtraRoots,
   loadHoverToFocus,
   loadLinkifierAllowlist,
   loadRailWiggle,
   loadReckConnectPrompt,
   loadSettings,
+  loadDragDropAllowlist,
+  loadDropPromptTemplate,
   saveFileViewerExtraRoots,
   saveHoverToFocus,
   saveLinkifierAllowlist,
   saveRailWiggle,
   saveReckConnectPrompt,
   saveSettings,
+  saveDragDropAllowlist,
+  saveDropPromptTemplate,
 } from "../config";
 import {
   SEEDED_EXTENSIONLESS_FILENAMES,
@@ -226,6 +232,40 @@ export async function renderSettings(
           <button id="s-linkifier-save" class="secondary" type="button">Save</button>
         </div>
         <div id="s-linkifier-chips" class="linkifier-allowlist-chips"></div>
+        <div class="divider" style="margin-top:1.5rem;"></div>
+        <h3>Drag &amp; drop files</h3>
+        <p style="margin-top:0.4rem;color:var(--text-secondary);font-size:0.85rem;">
+          Drag a file onto a pane to hand it to the session. Only the extensions
+          below are accepted (up to 10&nbsp;MB each); anything else shows a toast.
+          Add an extension and press Save or Enter; hover a chip and click
+          <code>×</code> to remove.
+        </p>
+        <div class="linkifier-allowlist-input-row">
+          <input
+            id="s-dragdrop-input"
+            class="linkifier-allowlist-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="e.g. pdf"
+          />
+          <button id="s-dragdrop-save" class="secondary" type="button">Save</button>
+        </div>
+        <div id="s-dragdrop-chips" class="linkifier-allowlist-chips"></div>
+        <label for="s-dragdrop-prompt" style="display:block;margin-top:1rem;font-size:0.85rem;color:var(--text-secondary);">
+          Prompt inserted when a file is dropped. <code>{path}</code> becomes the
+          uploaded file's location and <code>{filename}</code> its original name.
+          It's pasted as one block (Claude Code collapses it only if it's long).
+        </label>
+        <textarea
+          id="s-dragdrop-prompt"
+          rows="4"
+          spellcheck="false"
+          style="width:100%;margin-top:0.4rem;font-family:var(--font-mono,monospace);font-size:0.82rem;line-height:1.4;resize:vertical;"
+        ></textarea>
+        <div class="actions" style="margin-top:0.4rem;">
+          <button id="s-dragdrop-prompt-reset" class="secondary" type="button">Reset to default</button>
+        </div>
         <div id="s-err" style="color:var(--sl-red);margin-top:0.75rem;font-size:0.85rem;display:none;"></div>
         <div class="actions">
           <button id="s-save" class="primary">Save</button>
@@ -235,7 +275,9 @@ export async function renderSettings(
   `;
   await renderFileViewerRootsSection(root);
   await renderLinkifierAllowlistSection(root);
+  await renderDragDropSection(root);
   const reckPromptEl = root.querySelector("#s-reck-prompt") as HTMLTextAreaElement;
+  const dropPromptEl = root.querySelector("#s-dragdrop-prompt") as HTMLTextAreaElement;
   const reckResetBtn = root.querySelector("#s-reck-prompt-reset") as HTMLButtonElement;
   reckResetBtn.onclick = () => {
     reckPromptEl.value = DEFAULT_RECK_CONNECT_PROMPT;
@@ -317,6 +359,8 @@ export async function renderSettings(
     });
     // No .trim() — whitespace is user intent; "" is the explicit opt-out.
     await saveReckConnectPrompt(reckPromptEl.value);
+    // Drop prompt template — blank resets to the default on next load.
+    await saveDropPromptTemplate(dropPromptEl.value);
 
     // Persist the TTS highlight colours. Reload first so a voice/rate the
     // control bar may have changed since this panel opened isn't clobbered
@@ -554,6 +598,100 @@ async function renderLinkifierAllowlistSection(
     list = [...list, raw];
     await saveLinkifierAllowlist(list);
     setExtensionlessAllowlist(list);
+    input.value = "";
+    renderChips();
+  };
+
+  saveBtn.onclick = () => void submit();
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      void submit();
+    }
+  });
+}
+
+/**
+ * Render the drag-drop settings: an editable extension allowlist (chips,
+ * auto-persisted like the linkifier list) plus the drop prompt template
+ * textarea (persisted with the main Save button; reset button here).
+ *
+ * On first render with no persisted allowlist, seed from
+ * `DEFAULT_DRAGDROP_EXTENSIONS` and persist so the defaults show as chips.
+ * Extensions are normalised on save (lowercase, no leading dot).
+ */
+async function renderDragDropSection(root: HTMLElement): Promise<void> {
+  const chipsHost = root.querySelector("#s-dragdrop-chips") as HTMLElement | null;
+  const input = root.querySelector("#s-dragdrop-input") as HTMLInputElement | null;
+  const saveBtn = root.querySelector("#s-dragdrop-save") as HTMLButtonElement | null;
+  const promptEl = root.querySelector("#s-dragdrop-prompt") as HTMLTextAreaElement | null;
+  const promptReset = root.querySelector("#s-dragdrop-prompt-reset") as HTMLButtonElement | null;
+  if (!chipsHost || !input || !saveBtn || !promptEl || !promptReset) return;
+
+  // Prompt textarea: current value, reset-to-default button.
+  promptEl.value = await loadDropPromptTemplate();
+  promptReset.onclick = () => {
+    promptEl.value = DEFAULT_DROP_PROMPT_TEMPLATE;
+  };
+
+  let list: string[];
+  const persisted = await loadDragDropAllowlist();
+  if (persisted === null) {
+    list = [...DEFAULT_DRAGDROP_EXTENSIONS];
+    await saveDragDropAllowlist(list);
+  } else {
+    list = [...persisted];
+  }
+
+  const renderChips = (): void => {
+    chipsHost.innerHTML = "";
+    for (const ext of list) {
+      const chip = document.createElement("span");
+      chip.className = "linkifier-allowlist-chip";
+      chip.setAttribute("data-name", ext);
+      const label = document.createElement("span");
+      label.className = "linkifier-chip-label";
+      label.textContent = `.${ext}`;
+      const remove = document.createElement("button");
+      remove.className = "linkifier-chip-remove";
+      remove.type = "button";
+      remove.setAttribute("aria-label", `Remove ${ext}`);
+      remove.textContent = "×";
+      remove.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const confirmed = await confirmDialog(document.body, {
+          title: "Remove file type",
+          body: `Remove ".${ext}" from the drag-drop allowlist? Dropping files of this type will be rejected.`,
+          confirmLabel: "Remove",
+        });
+        if (!confirmed) return;
+        list = list.filter((e) => e !== ext);
+        await saveDragDropAllowlist(list);
+        renderChips();
+      });
+      chip.appendChild(label);
+      chip.appendChild(remove);
+      chipsHost.appendChild(chip);
+    }
+  };
+  renderChips();
+
+  const flashError = (): void => {
+    input.classList.add("linkifier-input-error");
+    window.setTimeout(() => input.classList.remove("linkifier-input-error"), 2000);
+  };
+
+  const submit = async (): Promise<void> => {
+    // Normalise here too so the duplicate check matches persisted form.
+    const raw = input.value.trim().toLowerCase().replace(/^\.+/, "");
+    if (raw.length === 0) return;
+    if (list.includes(raw)) {
+      flashError();
+      return;
+    }
+    list = [...list, raw];
+    await saveDragDropAllowlist(list);
     input.value = "";
     renderChips();
   };

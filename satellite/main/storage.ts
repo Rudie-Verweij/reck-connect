@@ -81,6 +81,12 @@ export const CONFIG_KEYS = [
   "fileViewerExtraRoots",
   "fileViewerModePerPath",
   "linkifier.extensionlessAllowlist",
+  // Drag-drop into a pane: user-editable allowed file extensions, and the
+  // configurable prompt template inserted (as a bracketed paste) when a
+  // file is dropped into the project root. Without these allowlisted the
+  // IPC boundary silently rejects the renderer's get/set.
+  "dragDrop.allowedExtensions",
+  "dragDrop.promptTemplate",
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 

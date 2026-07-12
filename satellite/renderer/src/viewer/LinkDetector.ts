@@ -277,3 +277,53 @@ export function detectPathsInLine(line: string): PathMatch[] {
   out.sort((a, b) => a.start - b.start);
   return out;
 }
+
+export interface UrlMatch {
+  text: string;
+  start: number;
+  end: number;
+}
+
+// Clickable web URLs: http/https only. These are the schemes we open in
+// the OS browser (see ALLOWED_EXTERNAL_SCHEMES in ipc-validation.ts);
+// other `scheme://` runs are deliberately not linkified. The character
+// class stops at whitespace, quotes, and angle brackets, matching the
+// path detector's own URL-span regex.
+const URL_RE = /\bhttps?:\/\/[^\s'"`<>]+/gi;
+
+/**
+ * Scan a line for http/https URLs, returning `{text,start,end}` spans.
+ * Trailing sentence punctuation is trimmed (so `(see https://x.com).`
+ * links `https://x.com`), while a closing paren is kept when the URL has
+ * a matching open paren (wiki-style `…/Foo_(bar)`). Used by the xterm
+ * URL link provider and the CodeMirror URL linkifier.
+ */
+export function detectUrlsInLine(line: string): UrlMatch[] {
+  if (typeof line !== "string" || line.length === 0) return [];
+  const out: UrlMatch[] = [];
+  URL_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = URL_RE.exec(line)) !== null) {
+    let text = m[0];
+    const start = m.index;
+    let trimmed = true;
+    while (trimmed && text.length > 0) {
+      trimmed = false;
+      const last = text[text.length - 1];
+      if (last === ")") {
+        const opens = (text.match(/\(/g) ?? []).length;
+        const closes = (text.match(/\)/g) ?? []).length;
+        if (closes > opens) {
+          text = text.slice(0, -1);
+          trimmed = true;
+        }
+      } else if (TRAILING_PUNCT.test(last)) {
+        text = text.slice(0, -1);
+        trimmed = true;
+      }
+    }
+    if (text.length === 0) continue;
+    out.push({ text, start, end: start + text.length });
+  }
+  return out;
+}

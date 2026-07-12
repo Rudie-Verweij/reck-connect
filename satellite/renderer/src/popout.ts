@@ -17,6 +17,7 @@
 import "@xterm/xterm/css/xterm.css";
 import { TerminalPane } from "@client-core/terminal/terminal-pane";
 import { installPathLinkProvider } from "./viewer/PathLinkProvider";
+import { installUrlLinkProvider } from "./viewer/UrlLinkProvider";
 import type { HostRef } from "./host";
 // `loadSettings` reads via the same IPC channels the main renderer uses;
 // the popout's preload exposes the same `reckAPI` surface, so this works
@@ -177,6 +178,13 @@ async function bootPopout(): Promise<void> {
       });
     },
   });
+  // Clickable http/https URLs in the popout terminal too. ⌘-click →
+  // window.open → main's setWindowOpenHandler → shell.openExternal.
+  installUrlLinkProvider(term.getXterm(), {
+    onActivateUrl: (url) => {
+      window.open(url, "_blank", "noopener");
+    },
+  });
 
   // Wire the unified TTS subsystem into the popout. Detached panes share
   // the same controller + control bar + shortcuts as the main window.
@@ -247,6 +255,10 @@ async function bootPopout(): Promise<void> {
           sourceHost: paneHost,
           originalText: href,
         });
+      },
+      // ⌘+click an http/https URL in the transcript → OS default browser.
+      onExternalActivate: (href) => {
+        window.open(href, "_blank", "noopener");
       },
     }),
   });

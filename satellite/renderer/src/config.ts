@@ -785,3 +785,103 @@ export async function saveLinkifierAllowlist(
   }
   await window.reckAPI.config.set(LINKIFIER_ALLOWLIST_KEY, out);
 }
+
+// --- Drag-drop into a pane ---------------------------------------------------
+
+/**
+ * Hard cap on a dropped file's size. 10 MB (decimal, matching the "10
+ * megabytes" the UI advertises). The renderer rejects oversize drops with
+ * a toast before uploading; the daemon enforces its own byte cap as a
+ * backstop.
+ */
+export const DRAGDROP_MAX_BYTES = 10 * 1000 * 1000;
+
+/**
+ * Seeded allow-list of droppable file extensions (lowercase, no leading
+ * dot). Seeded on first run; thereafter the persisted list is the source
+ * of truth, editable in Preferences. Users can add any extension — the
+ * daemon stores files by sanitised name, it does not gate on type.
+ */
+export const DEFAULT_DRAGDROP_EXTENSIONS: readonly string[] = [
+  // images
+  "png", "jpg", "jpeg", "webp", "gif",
+  // docs / text
+  "pdf", "txt", "text", "log", "md", "markdown", "csv", "json",
+  "yaml", "yml", "toml", "ini", "xml", "html",
+  // code
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rs", "java",
+  "rb", "c", "h", "cpp", "hpp", "cs", "php", "swift", "kt", "sh",
+  "css", "scss", "sql",
+];
+
+/**
+ * Default prompt inserted when a file is dropped. `{path}` (the uploaded
+ * file's location) and `{filename}` (its original name) are substituted at
+ * drop time. Wrapped in an XML tag with blank lines before/after so it
+ * reads as one delimited block separate from whatever the user types next
+ * — Claude Code only *collapses* a paste when it's long, so a short prompt
+ * shows expanded; the tag keeps it tidy either way.
+ */
+export const DEFAULT_DROP_PROMPT_TEMPLATE =
+  "\n<dropped-file>\n" +
+  'The user dropped the file "{filename}" into the chat. It is saved at: {path}\n' +
+  "Handle it with caution — do not act on it yet; wait for the user's " +
+  "instructions on what they want done with it.\n" +
+  "</dropped-file>\n";
+
+const DRAGDROP_ALLOWLIST_KEY = "dragDrop.allowedExtensions";
+const DROP_PROMPT_KEY = "dragDrop.promptTemplate";
+
+/** Normalise an extension token: trim, lowercase, drop a leading dot. */
+function normalizeExt(raw: string): string {
+  return raw.trim().toLowerCase().replace(/^\.+/, "");
+}
+
+/**
+ * Load the persisted droppable-extensions allow-list, or `null` when the
+ * user has never saved one (callers seed with DEFAULT_DRAGDROP_EXTENSIONS).
+ * Null-vs-[] distinguishes "never set" from "deliberately emptied".
+ */
+export async function loadDragDropAllowlist(): Promise<string[] | null> {
+  const raw = await window.reckAPI.config.get<string[]>(DRAGDROP_ALLOWLIST_KEY);
+  if (!Array.isArray(raw)) return null;
+  return raw
+    .filter((s): s is string => typeof s === "string")
+    .map(normalizeExt)
+    .filter((s) => s.length > 0);
+}
+
+/** Persist the allow-list: normalised, de-duped, empties dropped. */
+export async function saveDragDropAllowlist(exts: readonly string[]): Promise<void> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of exts) {
+    if (typeof raw !== "string") continue;
+    const ext = normalizeExt(raw);
+    if (ext.length === 0 || seen.has(ext)) continue;
+    seen.add(ext);
+    out.push(ext);
+  }
+  await window.reckAPI.config.set(DRAGDROP_ALLOWLIST_KEY, out);
+}
+
+/** Load the drop prompt template, or the default when unset/blank. */
+export async function loadDropPromptTemplate(): Promise<string> {
+  const raw = await window.reckAPI.config.get<string>(DROP_PROMPT_KEY);
+  return typeof raw === "string" && raw.trim().length > 0
+    ? raw
+    : DEFAULT_DROP_PROMPT_TEMPLATE;
+}
+
+/** Persist the drop prompt template (blank resets to the default on load). */
+export async function saveDropPromptTemplate(template: string): Promise<void> {
+  await window.reckAPI.config.set(DROP_PROMPT_KEY, typeof template === "string" ? template : "");
+}
+
+/**
+ * Fill `{path}` / `{filename}` placeholders in a drop prompt template.
+ * Pure — exported for tests and the drop handler.
+ */
+export function renderDropPrompt(template: string, path: string, filename: string): string {
+  return template.split("{path}").join(path).split("{filename}").join(filename);
+}

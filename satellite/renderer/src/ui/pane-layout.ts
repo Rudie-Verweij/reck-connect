@@ -119,9 +119,32 @@ export interface PaneLayoutCallbacks {
     host: HostRef,
     blob: Blob,
     mime: string,
+    filename?: string,
   ) => Promise<PasteUploadResult>;
   /** Optional paste-upload error hook; relayed to the TerminalPane. */
   onPasteUploadError?: (paneId: string, err: unknown, mime: string) => void;
+  /**
+   * Current drop prompt template (thunk so freshly-created panes pick up
+   * a Preferences edit without a reload). Relayed to TerminalPane as
+   * `dropPromptTemplate`; when undefined a drop types the raw path.
+   */
+  dropPromptTemplate?: () => string | undefined;
+  /**
+   * Gate a dropped file against the user's allow-list + size cap. Relayed
+   * to TerminalPane as `validateDroppedFile`.
+   */
+  validateDroppedFile?: (file: {
+    name: string;
+    size: number;
+    type: string;
+  }) => { ok: true } | { ok: false; reason: "type" | "size" };
+  /** Surface a rejected drop (e.g. a toast). Relayed as `onDropRejected`. */
+  onDropRejected?: (info: {
+    name: string;
+    reason: "type" | "size";
+    ext: string;
+    sizeBytes: number;
+  }) => void;
   /**
    * Detach `paneId` to its own popout window . Called by the
    * per-pane "Detach" button and the ⌘⇧O shortcut. The callback is
@@ -664,11 +687,15 @@ export class PaneLayout {
         // TerminalPane installs no paste handler and pasted images
         // drop as before.
         onPasteUpload: this.cb.onPasteUpload
-          ? (blob, mime) => this.cb.onPasteUpload!(t.paneId, t.host, blob, mime)
+          ? (blob, mime, filename) =>
+              this.cb.onPasteUpload!(t.paneId, t.host, blob, mime, filename)
           : undefined,
         onPasteUploadError: this.cb.onPasteUploadError
           ? (err, mime) => this.cb.onPasteUploadError!(t.paneId, err, mime)
           : undefined,
+        dropPromptTemplate: this.cb.dropPromptTemplate?.(),
+        validateDroppedFile: this.cb.validateDroppedFile,
+        onDropRejected: this.cb.onDropRejected,
         theme: this.currentTheme,
       });
       wrapper.appendChild(term.container);
