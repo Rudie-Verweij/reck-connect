@@ -29,6 +29,19 @@ const IMAGE_PASTE_MIMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * True when a drag/drop event carries OS files (as opposed to a
+ * tab-reorder drag, which carries `text/plain` payloads — see the
+ * pane/rail drag handlers). We gate the file-drop handler on this so it
+ * never interferes with those in-app drags. `dataTransfer.types` is a
+ * `DOMStringList` in browsers and a plain array in tests; `Array.from`
+ * normalises both.
+ */
+function dragCarriesFiles(ev: DragEvent): boolean {
+  const types = ev.dataTransfer?.types;
+  return !!types && Array.from(types as ArrayLike<string>).includes("Files");
+}
+
+/**
  * Callback shape for uploading a pasted image to the daemon.
  * Wired from the app layer (Satellite renderer) so the TerminalPane
  * stays decoupled from ApiClient — the host passes a thunk that knows
@@ -551,6 +564,7 @@ export class TerminalPane {
     }
     if (isIOS()) this.installIOSInputFix();
     this.installPasteImageHandler();
+    this.installFileDropHandler();
     // Register on the global debug registry so devtools can reach the
     // pane without spelunking the DOM. See attachDebugHooks() for the
     // accessor contract. Called after `term.open` so the xterm
@@ -879,11 +893,24 @@ export class TerminalPane {
     // text-flavoured fallback (often a file URL or empty string) on
     // top of our path, which the user definitely doesn't want.
     ev.preventDefault();
-    // Serial uploads so the paths arrive in clipboard order. Parallel
-    // would be faster but the ordering matters: when the user pastes
-    // two screenshots back-to-back they expect the first one to
-    // reference the first image.
-    for (const { blob, mime } of images) {
+    await this.uploadBlobsAndTypePaths(images);
+  }
+
+  /**
+   * Upload each blob serially and type the returned station-side path
+   * into the PTY (trailing space, no newline — the user decides when to
+   * submit). Shared by the image-paste handler and the file-drop handler.
+   *
+   * Serial so the typed paths arrive in source order (clipboard order for
+   * paste, drop order for drag-drop); parallel would be faster but would
+   * scramble the sequence when several images arrive at once. A failed
+   * upload fires `onPasteUploadError` and is otherwise swallowed so one
+   * bad blob doesn't abort the rest.
+   */
+  private async uploadBlobsAndTypePaths(blobs: { blob: Blob; mime: string }[]): Promise<void> {
+    const upload = this.props.onPasteUpload;
+    if (!upload) return;
+    for (const { blob, mime } of blobs) {
       try {
         const result = await upload(blob, mime);
         if (result.kind === "path") {
@@ -911,6 +938,74 @@ export class TerminalPane {
         this.props.onPasteUploadError?.(err, mime);
       }
     }
+  }
+
+  /**
+   * File drag-and-drop → upload → type-path-into-PTY flow (Scope A).
+   *
+   * Reuses the same `onPasteUpload` pipeline as image paste: a file
+   * dragged from the OS onto the pane is uploaded to the daemon and its
+   * station-side absolute path is typed into the PTY. A dropped file's
+   * *local* path is meaningless here — the pane's PTY may run on a remote
+   * station — so we always upload the bytes rather than trusting
+   * `File.path`.
+   *
+   * `dragover` must preventDefault (only then does the browser fire a
+   * `drop`), which also claims the drop from Electron's default handler
+   * (which would otherwise navigate the window to the dropped `file://`).
+   * We gate on `dragCarriesFiles` so in-app tab-reorder drags pass
+   * through untouched.
+   *
+   * Not installed when `onPasteUpload` is undefined — same guard as the
+   * paste handler, so non-Satellite client-core consumers are unaffected.
+   */
+  private installFileDropHandler() {
+    if (!this.props.onPasteUpload) return;
+    const root = this.container;
+    root.addEventListener("dragover", (ev: DragEvent) => {
+      if (!dragCarriesFiles(ev)) return;
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+    });
+    root.addEventListener("drop", (ev: DragEvent) => {
+      if (!dragCarriesFiles(ev)) return;
+      // Block the browser/Electron default (navigate to the dropped file)
+      // for any file drop, even one we can't ultimately upload.
+      ev.preventDefault();
+      this.handleFileDrop(ev).catch(() => {
+        // Per-file errors are reported via onPasteUploadError inside
+        // handleFileDrop; a stray synchronous throw here must not brick
+        // the pane.
+      });
+    });
+  }
+
+  private async handleFileDrop(ev: DragEvent): Promise<void> {
+    if (!this.props.onPasteUpload) return;
+    const files = ev.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    // Scope A: images only — the daemon /uploads endpoint rejects
+    // everything else. Non-image files are surfaced via a breadcrumb
+    // rather than silently dropped; Scope B widens both this filter and
+    // the daemon allowlist.
+    const images: { blob: Blob; mime: string }[] = [];
+    let skipped = 0;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const mime = file.type.toLowerCase();
+      if (IMAGE_PASTE_MIMES.has(mime)) {
+        images.push({ blob: file, mime });
+      } else {
+        skipped++;
+      }
+    }
+    if (skipped > 0) {
+      const plural = skipped === 1 ? "file" : "files";
+      this.term.write(
+        `\r\n\x1b[33m[drag-drop: skipped ${skipped} non-image ${plural} — image drop only for now]\x1b[0m\r\n`,
+      );
+    }
+    await this.uploadBlobsAndTypePaths(images);
   }
 }
 
