@@ -15,6 +15,8 @@ export class LocalWhisperProvider implements Transcriber {
   private handlers: TranscriptionHandlers | null = null;
   // Bumped each utterance; a late result from a cancelled one is dropped.
   private generation = 0;
+  // Resolves the in-flight end() promise when the worker replies (or on cancel).
+  private pendingResolve: (() => void) | null = null;
 
   constructor(private readonly repo: string) {}
 
@@ -27,12 +29,25 @@ export class LocalWhisperProvider implements Transcriber {
       const d = e.data;
       // Drop any reply from a cancelled/superseded utterance.
       if (d.generation !== this.generation) return;
-      if (d.type === "status") this.handlers?.onStatus?.(d.status);
-      else if (d.type === "result") this.handlers?.onFinal?.(d.text);
+      if (d.type === "status") {
+        this.handlers?.onStatus?.(d.status);
+        return;
+      }
+      if (d.type === "result") this.handlers?.onFinal?.(d.text);
       else if (d.type === "error") this.handlers?.onError?.(d.message);
+      this.settle();
     };
-    this.worker.onerror = (e) => this.handlers?.onError?.(e.message || "Whisper worker failed");
+    this.worker.onerror = (e) => {
+      this.handlers?.onError?.(e.message || "Whisper worker failed");
+      this.settle();
+    };
     return this.worker;
+  }
+
+  private settle(): void {
+    const resolve = this.pendingResolve;
+    this.pendingResolve = null;
+    resolve?.();
   }
 
   async begin(handlers: TranscriptionHandlers): Promise<void> {
@@ -45,26 +60,31 @@ export class LocalWhisperProvider implements Transcriber {
     // Batch provider: nothing to do with live chunks.
   }
 
-  async end(full: Float32Array, sampleRate: number): Promise<void> {
+  /** Resolves once the worker has returned a result (or errored/cancelled). */
+  end(full: Float32Array, sampleRate: number): Promise<void> {
     if (full.length === 0) {
       this.handlers?.onFinal?.("");
-      return;
+      return Promise.resolve();
     }
     const audio = resampleLinear(full, sampleRate, WHISPER_SAMPLE_RATE);
     const worker = this.ensureWorker();
-    // Result arrives asynchronously via onmessage → onFinal.
-    worker.postMessage(
-      { type: "transcribe", audio, repo: this.repo, generation: this.generation },
-      [audio.buffer],
-    );
+    return new Promise<void>((resolve) => {
+      this.pendingResolve = resolve;
+      worker.postMessage(
+        { type: "transcribe", audio, repo: this.repo, generation: this.generation },
+        [audio.buffer],
+      );
+    });
   }
 
   cancel(): void {
-    // Invalidate any in-flight transcription result.
+    // Invalidate any in-flight result and release a waiting end().
     this.generation++;
+    this.settle();
   }
 
   dispose(): void {
+    this.cancel();
     this.worker?.terminate();
     this.worker = null;
     this.handlers = null;
