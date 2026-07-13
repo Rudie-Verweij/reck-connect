@@ -25,6 +25,7 @@ import (
 	"github.com/rudie-verweij/reck-connect/daemon/internal/httpx"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/pty"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/sessions"
+	"github.com/rudie-verweij/reck-connect/daemon/internal/usage"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/ws"
 	"github.com/rudie-verweij/reck-connect/proto"
 )
@@ -99,6 +100,11 @@ type Server struct {
 	HookNonceStore *NonceStore
 	// hookNonceStoreInit guards lazy initialisation of HookNonceStore.
 	hookNonceStoreInit sync.Once
+
+	// Usage ingests statusline usage/quota samples forwarded by the
+	// reck-statusline.sh shim. Nil when telemetry is disabled (e.g. the DB
+	// couldn't open) — the endpoint then authenticates but no-ops.
+	Usage *usage.Ingester
 }
 
 // hookNonceStore returns the server's nonce store, lazily creating one
@@ -141,6 +147,10 @@ func (s *Server) Router() *chi.Mux {
 	r.Post("/projects/{id}/sessions/dismiss", s.handleDismissSessions)
 	r.Get("/restore-candidates", s.handleRestoreCandidates)
 	r.Post("/panes/{pane_id}/agent-event", s.handleAgentEvent)
+	// Usage/quota sample from the reck-statusline.sh forwarder. Like
+	// agent-event, it is authenticated by the per-pane HMAC (not the
+	// bearer token), so it is exempted from bearer auth in authMiddleware.
+	r.Post("/panes/{pane_id}/usage-sample", s.handleUsageSample)
 	r.Get("/panes/{pane_id}/events", s.handlePaneEvents)
 	r.Post("/panes/{pane_id}/input", s.handlePaneInput)
 	r.Get("/panes/{pane_id}/output", s.handlePaneOutput)
@@ -270,7 +280,7 @@ func (s *Server) authMiddleware(next nethttp.Handler) nethttp.Handler {
 		// gone. Local processes that didn't inherit the per-pane
 		// secret now hit a 401 from the handler, which is the F4
 		// invariant.
-		if isAgentEventPath(r.URL.Path) {
+		if isAgentEventPath(r.URL.Path) || isUsageSamplePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -323,6 +333,10 @@ func WSSubprotocolFromRequest(r *nethttp.Request) string {
 
 func isAgentEventPath(p string) bool {
 	return strings.HasPrefix(p, "/panes/") && strings.HasSuffix(p, "/agent-event")
+}
+
+func isUsageSamplePath(p string) bool {
+	return strings.HasPrefix(p, "/panes/") && strings.HasSuffix(p, "/usage-sample")
 }
 
 // isLoopbackAddr reports whether remoteAddr (an http.Request.RemoteAddr
@@ -1030,6 +1044,97 @@ func (s *Server) handleAgentEvent(w nethttp.ResponseWriter, r *nethttp.Request) 
 		"data_bytes", len(data),
 	)
 	writeJSON(w, map[string]any{"ok": true, "event_id": ev.ID})
+}
+
+// handleUsageSample ingests a Claude Code statusline payload forwarded by
+// reck-statusline.sh. Auth mirrors handleAgentEvent exactly: per-pane HMAC
+// over METHOD+PATH+BODY (VerifyHookSignature), no bearer token — the shim
+// runs in the pane's child tree and can only present the RECK_HOOK_SECRET
+// the daemon injected at spawn. The payload carries usage numbers only; we
+// never persist prompt text, cwd, or transcript paths (see usage.Ingest).
+func (s *Server) handleUsageSample(w nethttp.ResponseWriter, r *nethttp.Request) {
+	paneID := chi.URLParam(r, "pane_id")
+	pane, ok := s.Manager.PaneByID(paneID)
+	if !ok {
+		nethttp.Error(w, "pane not found", nethttp.StatusNotFound)
+		return
+	}
+	agent := r.URL.Query().Get("agent")
+	if agent == "" {
+		agent = "claude-code"
+	}
+
+	// Read the raw body once — VerifyHookSignature needs the exact signed
+	// bytes, and we re-parse afterwards for project_id + the payload.
+	var raw []byte
+	if r.ContentLength != 0 && r.Body != nil {
+		r.Body = nethttp.MaxBytesReader(w, r.Body, maxAgentEventBody+1)
+		var err error
+		raw, err = io.ReadAll(r.Body)
+		if err != nil {
+			var maxErr *nethttp.MaxBytesError
+			if errors.As(err, &maxErr) {
+				nethttp.Error(w, "usage sample body too large", nethttp.StatusRequestEntityTooLarge)
+				return
+			}
+			nethttp.Error(w, "read body: "+err.Error(), nethttp.StatusBadRequest)
+			return
+		}
+		if len(raw) > maxAgentEventBody {
+			nethttp.Error(w, "usage sample body too large", nethttp.StatusRequestEntityTooLarge)
+			return
+		}
+	}
+
+	// Per-pane HMAC + nonce replay check before any parsing.
+	if hookErr := VerifyHookSignature(
+		s.hookNonceStore(), pane.HookSecret, r.Method, r.URL.Path, raw,
+		r.Header.Get(HookAuthHeaderSig), r.Header.Get(HookAuthHeaderTs), r.Header.Get(HookAuthHeaderNonce),
+	); hookErr != nil {
+		var hae *HookAuthError
+		if errors.As(hookErr, &hae) {
+			nethttp.Error(w, hae.Reason, hae.Code)
+			return
+		}
+		nethttp.Error(w, "hook auth failed", nethttp.StatusUnauthorized)
+		return
+	}
+
+	if len(raw) == 0 || !json.Valid(raw) {
+		nethttp.Error(w, "body must be valid JSON", nethttp.StatusBadRequest)
+		return
+	}
+	var envelope struct {
+		ProjectID string `json:"project_id"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		nethttp.Error(w, "body must be a JSON object with project_id", nethttp.StatusBadRequest)
+		return
+	}
+	if envelope.ProjectID != "" && envelope.ProjectID != pane.ProjectID {
+		nethttp.Error(w, "project mismatch", nethttp.StatusForbidden)
+		return
+	}
+
+	// Telemetry disabled (DB failed to open): authenticate but no-op.
+	if s.Usage == nil {
+		writeJSON(w, map[string]any{"ok": true, "ingested": false})
+		return
+	}
+	res, err := s.Usage.Ingest(usage.IngestMeta{
+		PaneID:    pane.ID,
+		ProjectID: pane.ProjectID,
+		Agent:     agent,
+	}, raw)
+	if err != nil {
+		nethttp.Error(w, "invalid usage payload", nethttp.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"ok":              true,
+		"context_written": res.ContextWritten,
+		"quota_written":   res.QuotaWritten,
+	})
 }
 
 // handlePaneEvents returns the recent events recorded for a pane. Useful

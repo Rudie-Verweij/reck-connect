@@ -26,6 +26,7 @@ import (
 	"github.com/rudie-verweij/reck-connect/daemon/internal/pty"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/sessions"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/stoplight"
+	"github.com/rudie-verweij/reck-connect/daemon/internal/usage"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/ws"
 )
 
@@ -340,6 +341,21 @@ func main() {
 		}
 	}
 
+	// Token/quota telemetry store. Best-effort like the session index —
+	// if the DB can't open we run exactly as before, just without usage
+	// tracking. Closed on shutdown below.
+	var usageStore *usage.Store
+	var usageIngester *usage.Ingester
+	if usageDir := usage.DefaultDir(); usageDir != "" {
+		if store, err := usage.Open(usageDir); err != nil {
+			logger.Warn("usage telemetry unavailable", "err", err, "dir", usageDir)
+		} else {
+			usageStore = store
+			usageIngester = usage.NewIngester(store)
+			logger.Info("usage telemetry ready", "dir", usageDir)
+		}
+	}
+
 	mgr := pty.NewManagerFromConfig(pty.ManagerConfig{
 		Projects:     reg.Projects,
 		ClaudeCmd:    []string{resolvedClaude},
@@ -356,6 +372,7 @@ func main() {
 		StartedAt:      time.Now(),
 		Version:        Version,
 		CodexAvailable: len(codexCmd) > 0,
+		Usage:          usageIngester,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -382,6 +399,9 @@ func main() {
 	// prompt has an accurate "running X seconds ago" label when the
 	// daemon subsequently crashes.
 	startBackground(func(ctx context.Context) { mgr.RunLivenessTicker(ctx, 15*time.Second) })
+	// Flush any usage samples the change-gate withheld under the per-session
+	// rate cap. Writes nothing for idle sessions — no heartbeat rows.
+	startBackground(func(ctx context.Context) { usage.RunSampler(ctx, usageIngester, time.Minute) })
 
 	// Phase 10a (an earlier release, plan rev 3.1): the phase-10 mount-loss
 	// characterization confirmed a local pane whose cwd vanishes
@@ -527,6 +547,11 @@ func main() {
 	case <-time.After(bgWaitBudget):
 		logger.Warn("shutdown: background goroutines did not exit within budget; proceeding",
 			"budget", bgWaitBudget.String())
+	}
+	// The usage sampler is one of those background runners; with it stopped
+	// it's safe to close the telemetry DB.
+	if usageStore != nil {
+		_ = usageStore.Close()
 	}
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
