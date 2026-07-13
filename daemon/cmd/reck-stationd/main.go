@@ -26,6 +26,7 @@ import (
 	"github.com/rudie-verweij/reck-connect/daemon/internal/pty"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/sessions"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/stoplight"
+	"github.com/rudie-verweij/reck-connect/daemon/internal/usage"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/ws"
 )
 
@@ -340,6 +341,23 @@ func main() {
 		}
 	}
 
+	// Token/quota telemetry store. Best-effort like the session index —
+	// if the DB can't open we run exactly as before, just without usage
+	// tracking. Closed on shutdown below.
+	var usageStore *usage.Store
+	var usageIngester *usage.Ingester
+	var usageBackfiller *usage.Backfiller
+	if usageDir := usage.DefaultDir(); usageDir != "" {
+		if store, err := usage.Open(usageDir); err != nil {
+			logger.Warn("usage telemetry unavailable", "err", err, "dir", usageDir)
+		} else {
+			usageStore = store
+			usageIngester = usage.NewIngester(store)
+			usageBackfiller = usage.NewBackfiller(store, "")
+			logger.Info("usage telemetry ready", "dir", usageDir)
+		}
+	}
+
 	mgr := pty.NewManagerFromConfig(pty.ManagerConfig{
 		Projects:     reg.Projects,
 		ClaudeCmd:    []string{resolvedClaude},
@@ -356,6 +374,8 @@ func main() {
 		StartedAt:      time.Now(),
 		Version:        Version,
 		CodexAvailable: len(codexCmd) > 0,
+		Usage:          usageIngester,
+		UsageStore:     usageStore,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -382,6 +402,29 @@ func main() {
 	// prompt has an accurate "running X seconds ago" label when the
 	// daemon subsequently crashes.
 	startBackground(func(ctx context.Context) { mgr.RunLivenessTicker(ctx, 15*time.Second) })
+	// Flush any usage samples the change-gate withheld under the per-session
+	// rate cap. Writes nothing for idle sessions — no heartbeat rows.
+	startBackground(func(ctx context.Context) { usage.RunSampler(ctx, usageIngester, time.Minute) })
+	// Backfill authoritative per-turn token counts from each live Claude
+	// session's JSONL transcript (deduped by message_id). Claude panes are
+	// exactly the panes carrying a SessionID.
+	startBackground(func(ctx context.Context) {
+		usage.RunBackfiller(ctx, usageBackfiller, func() []usage.SessionRef {
+			var refs []usage.SessionRef
+			for _, p := range mgr.AllPanes() {
+				if p.SessionID == "" {
+					continue
+				}
+				refs = append(refs, usage.SessionRef{
+					SessionID: p.SessionID,
+					Cwd:       p.Cwd,
+					ProjectID: p.ProjectID,
+					Agent:     "claude-code",
+				})
+			}
+			return refs
+		}, time.Minute)
+	})
 
 	// Phase 10a (an earlier release, plan rev 3.1): the phase-10 mount-loss
 	// characterization confirmed a local pane whose cwd vanishes
@@ -545,6 +588,12 @@ func main() {
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), ws.ShutdownCloseWait)
 	wsH.Shutdown(closeCtx)
 	closeCancel()
+	// Close the telemetry DB only after the background sampler has stopped
+	// AND the HTTP/WS servers are drained, so no in-flight usage-sample
+	// write or /usage read can hit a closed *sql.DB.
+	if usageStore != nil {
+		_ = usageStore.Close()
+	}
 	for _, p := range mgr.AllPanes() {
 		p.Kill()
 	}

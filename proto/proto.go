@@ -237,6 +237,22 @@ type Pane struct {
 	// once on create, preserved across daemon restarts, used as the
 	// resume key.
 	SlotID string `json:"slot_id,omitempty"`
+	// Usage is a minimal snapshot of this pane's latest token/quota
+	// telemetry, for a small rail badge (e.g. "ctx 43% · 5h 61%"). Nil
+	// until the pane's Claude statusline has reported at least once, and
+	// always nil for non-Claude panes. Additive on the wire — old clients
+	// ignore it. The full history lives in the usage SQLite store; this is
+	// only the live glance value.
+	Usage *PaneUsage `json:"usage,omitempty"`
+}
+
+// PaneUsage is the live usage glance for a pane. All fields are optional:
+// context fill is per-session; the 5h/weekly quota is account-level (Max
+// only, after the first response) and shared across panes.
+type PaneUsage struct {
+	ContextPct  *float64 `json:"context_pct,omitempty"`
+	FiveHourPct *float64 `json:"five_hour_pct,omitempty"`
+	SevenDayPct *float64 `json:"seven_day_pct,omitempty"`
 }
 
 type ProjectDetail struct {

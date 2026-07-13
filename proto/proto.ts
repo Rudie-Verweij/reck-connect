@@ -202,6 +202,25 @@ export interface Pane {
    * panes (they use session_id instead).
    */
   slot_id?: string;
+  /**
+   * Minimal live token/quota glance for a small rail badge (e.g.
+   * "ctx 43% · 5h 61%"). Absent until the pane's Claude statusline has
+   * reported at least once, and always absent for non-Claude panes. The
+   * full history lives in the daemon's usage SQLite store; this is only
+   * the latest value. Additive on the wire — old clients ignore it.
+   */
+  usage?: PaneUsage;
+}
+
+/**
+ * Live usage glance for a pane. context_pct is per-session; the 5h/weekly
+ * quota is account-level (Max only, after the first response) and shared
+ * across panes. All fields optional.
+ */
+export interface PaneUsage {
+  context_pct?: number;
+  five_hour_pct?: number;
+  seven_day_pct?: number;
 }
 
 export interface ProjectDetail {

@@ -94,6 +94,15 @@ interface Pane {
   auto_name?: string;    // Claude-only daemon-derived fallback — latest custom-title from the session's JSONL transcript; empty when display_name is set or no title exists yet
   slot_id?: string;      // Shell-only stable identity (Scope B)
   capabilities?: PaneCapabilities; // newer daemons always emit; older daemons omit (treat undefined as all-caps-off)
+  usage?: PaneUsage;     // Claude-only minimal token/quota glance for a rail badge; absent until the statusline reports, and for non-Claude panes; additive on the wire
+}
+// Minimal live usage glance for a Claude pane (rail badge). context_pct
+// is per-session; the 5h/weekly quota is account-level (Max only, after
+// the first response) and shared across panes. All fields optional.
+interface PaneUsage {
+  context_pct?: number;
+  five_hour_pct?: number;
+  seven_day_pct?: number;
 }
 // Per-pane optional feature flags. `clipboard_image`: true only when
 // the pane is Claude AND the daemon is darwin (the only platform with
