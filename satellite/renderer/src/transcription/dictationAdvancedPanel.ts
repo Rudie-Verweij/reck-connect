@@ -16,6 +16,13 @@ export interface AdvancedPanelOpts {
   onChange: (next: DictationAppearance) => void;
   /** Optional: called when the panel closes. */
   onClose?: () => void;
+  /**
+   * Optional anchor (the mic button's rect). When given, the panel is placed
+   * ABOVE the anchor so the live dictation pill (which sits at/next to the
+   * mic) stays visible while you drag the sliders. Falls back to below the
+   * anchor if there's no room above.
+   */
+  anchorRect?: { left: number; top: number; bottom: number };
 }
 
 /** A numeric range control's static config (label, bounds, step). */
@@ -246,13 +253,29 @@ export function showDictationAdvancedPanel(x: number, y: number, opts: AdvancedP
 
   document.body.appendChild(panel);
 
-  // Keep the panel fully on screen (mirrors languageMenu.ts clamp).
+  // Position. With an anchor (the mic), sit ABOVE it so the live pill stays
+  // visible; otherwise place at (x,y). Either way, clamp fully on screen.
   const rect = panel.getBoundingClientRect();
-  if (rect.right > window.innerWidth - 8) {
-    panel.style.left = `${Math.max(8, window.innerWidth - 8 - rect.width)}px`;
-  }
-  if (rect.bottom > window.innerHeight - 8) {
-    panel.style.top = `${Math.max(8, window.innerHeight - 8 - rect.height)}px`;
+  const margin = 8;
+  if (opts.anchorRect) {
+    const left = Math.min(
+      Math.max(margin, opts.anchorRect.left),
+      Math.max(margin, window.innerWidth - margin - rect.width),
+    );
+    const above = opts.anchorRect.top - margin - rect.height;
+    const top =
+      above >= margin
+        ? above
+        : Math.min(opts.anchorRect.bottom + margin, window.innerHeight - margin - rect.height);
+    panel.style.left = `${left}px`;
+    panel.style.top = `${Math.max(margin, top)}px`;
+  } else {
+    if (rect.right > window.innerWidth - margin) {
+      panel.style.left = `${Math.max(margin, window.innerWidth - margin - rect.width)}px`;
+    }
+    if (rect.bottom > window.innerHeight - margin) {
+      panel.style.top = `${Math.max(margin, window.innerHeight - margin - rect.height)}px`;
+    }
   }
 
   let closed = false;
