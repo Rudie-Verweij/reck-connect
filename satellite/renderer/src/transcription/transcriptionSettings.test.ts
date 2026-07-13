@@ -65,8 +65,8 @@ describe("transcriptionSettings.coerce", () => {
     expect(a.showBlobs).toBe(true);
     expect(a.pillTheme).toBe("auto");
     expect(a.ghostMode).toBe("onset");
-    expect(a.commitWordCount).toBe(6);
-    expect(a.commitPauseMs).toBe(700);
+    expect(a.commitWordCount).toBe(7);
+    expect(a.commitPauseMs).toBe(550);
     // Out-of-range numbers clamp; bad enums fall back.
     const clamped = coerce({
       appearance: {

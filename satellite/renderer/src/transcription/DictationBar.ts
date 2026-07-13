@@ -308,9 +308,10 @@ export class DictationBar implements DictationUI {
     if (seg.text === null) {
       const blob = document.createElement("span");
       blob.className = "dictation-blob";
-      // Word-ish blurred glyph run with a little length variety from the id.
+      // A soft smoke puff sized like a word (length variety from the id). The
+      // cloud look + edge-fade come from CSS; here we only set its width.
       const len = 3 + ((Math.abs(seg.id) * 2) % 4);
-      blob.textContent = "▓".repeat(len);
+      blob.style.setProperty("--blob-ch", String(len));
       return blob;
     }
     const word = document.createElement("span");

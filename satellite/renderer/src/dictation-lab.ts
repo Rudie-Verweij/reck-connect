@@ -14,6 +14,7 @@ import { DictationBar } from "./transcription/DictationBar";
 import type { DictationState } from "./transcription/TranscriptionEngine";
 import { addOnset, makeChunk, stepChunk, type ChunkState } from "./transcription/chunkModel";
 import { renderAppearanceControls } from "./transcription/appearanceControls";
+import { confirmDialog } from "./ui/confirmDialog";
 import {
   DEFAULT_APPEARANCE,
   coerceAppearance,
@@ -547,7 +548,14 @@ function boot(): void {
     }
   });
 
-  resetBtn.addEventListener("click", () => {
+  resetBtn.addEventListener("click", async () => {
+    const ok = await confirmDialog({
+      title: "Reset appearance to defaults?",
+      detail: "This discards your current tuning and restores the shipped values.",
+      confirmLabel: "Yes, reset",
+      cancelLabel: "No",
+    });
+    if (!ok) return;
     appearance = coerceAppearance(DEFAULT_APPEARANCE);
     ctrlHandle.setAll(appearance);
     engine.setAppearance(appearance);

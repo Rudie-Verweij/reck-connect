@@ -12,6 +12,7 @@ import {
   type DictationAppearance,
 } from "./transcriptionSettings";
 import { renderAppearanceControls } from "./appearanceControls";
+import { confirmDialog, confirmDialogOpen } from "../ui/confirmDialog";
 
 export interface AdvancedPanelOpts {
   current: DictationAppearance;
@@ -83,7 +84,14 @@ export function showDictationAdvancedPanel(x: number, y: number, opts: AdvancedP
   resetBtn.type = "button";
   resetBtn.className = "dictation-adv-btn dictation-adv-btn-ghost";
   resetBtn.textContent = "Reset to defaults";
-  resetBtn.addEventListener("click", () => {
+  resetBtn.addEventListener("click", async () => {
+    const ok = await confirmDialog({
+      title: "Reset appearance to defaults?",
+      detail: "This discards your current tuning and restores the shipped values.",
+      confirmLabel: "Yes, reset",
+      cancelLabel: "No",
+    });
+    if (!ok) return;
     const next = { ...DEFAULT_APPEARANCE };
     controls.setAll(next);
     opts.onChange(next);
@@ -128,9 +136,12 @@ export function showDictationAdvancedPanel(x: number, y: number, opts: AdvancedP
     opts.onClose?.();
   };
   const onOutside = (e: PointerEvent): void => {
+    // The confirm dialog sits above the panel; clicking it must not close us.
+    if (confirmDialogOpen()) return;
     if (!panel.contains(e.target as Node)) cleanup();
   };
   const onKey = (e: KeyboardEvent): void => {
+    if (confirmDialogOpen()) return; // the dialog handles its own Escape
     if (e.key === "Escape") cleanup();
   };
   // Defer so the opening right-click doesn't immediately dismiss it.

@@ -121,21 +121,21 @@ export interface DictationAppearance {
 
 export const DEFAULT_APPEARANCE: DictationAppearance = {
   crystallizeMs: 260,
-  charStaggerMs: 14,
-  blurStartPx: 6,
-  blurRestPx: 0.8,
-  settleMs: 300,
+  charStaggerMs: 36,
+  blurStartPx: 4.5,
+  blurRestPx: 0.5,
+  settleMs: 500,
   ghostResetMs: 1200,
-  tailFontPx: 13,
+  tailFontPx: 14,
   showBlobs: true,
   pillTheme: "auto",
   textOutline: true,
   ghostMode: "onset",
-  placeholderBlurPx: 7,
+  placeholderBlurPx: 4.5,
   onsetOpen: 0.02,
   onsetClose: 0.012,
-  commitWordCount: 6,
-  commitPauseMs: 700,
+  commitWordCount: 7,
+  commitPauseMs: 550,
 };
 
 export const DEFAULT_TRANSCRIPTION_SETTINGS: TranscriptionSettings = {
