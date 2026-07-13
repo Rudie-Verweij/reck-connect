@@ -57,10 +57,14 @@ export function installTranscriptionShortcuts(
     handlers.onPressEnd(held);
   }
 
-  window.addEventListener("keydown", onKeyDown);
-  window.addEventListener("keyup", onKeyUp);
+  // CAPTURE phase: the focused xterm terminal handles Enter (it's terminal
+  // input) and the event may not bubble up to window — capturing lets us see
+  // the keydown BEFORE the terminal, so "Enter sends → stop dictation" fires
+  // reliably. We still don't preventDefault Enter, so the terminal submits.
+  window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("keyup", onKeyUp, true);
   return () => {
-    window.removeEventListener("keydown", onKeyDown);
-    window.removeEventListener("keyup", onKeyUp);
+    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("keyup", onKeyUp, true);
   };
 }

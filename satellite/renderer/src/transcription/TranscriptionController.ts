@@ -60,6 +60,10 @@ const ACTIVE_FLOOR_BLOBS = 2;
 // Backlog is reconciled to the transcript after this much silence, so stale
 // blobs drain at the end of an utterance instead of squatting.
 const SILENCE_RECONCILE_MS = 1500;
+// How often the buffered transcript + ghost updates are flushed to the UI.
+// ~half a second reads as "words settling in batches" rather than a jittery
+// stream — the cadence the messy per-event rendering was missing.
+const SETTLE_INTERVAL_MS = 450;
 
 function wordCount(text: string): number {
   return text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
@@ -145,34 +149,43 @@ export class TranscriptionController {
   private lastTail = "";
   private heardWords = 0;
   private lastVoiceAt = 0;
+  // Settle/batch buffers. The transcript and ghost updates arrive far too
+  // fast to render each one (Deepgram interims many×/s, level ticks ~8×/s) —
+  // that made the pill and prompt flicker "super messy". We coalesce the
+  // latest values here and flush them on a calm ~half-second cadence, so
+  // words settle in readable batches instead of churning. The meter stays on
+  // the raw tick (it's meant to be lively); the final flushes immediately.
+  private pendingStable: string | null = null;
+  private pendingTail = "";
+  private tailDirty = false;
+  private settleTimer: number | null = null;
 
   constructor(private readonly deps: TranscriptionControllerDeps) {
     this.settings = deps.settings;
     this.engine = new TranscriptionEngine(this.makeProvider(), {
+      // Stable text (safe to type) — buffered, flushed on the settle tick.
       onPartial: (t) => {
-        this.applyTranscript(t);
-        this.syncGhosts();
+        this.pendingStable = t;
       },
+      // Unstable ghost tail — buffered; only the latest survives to the flush.
       onTail: (t) => {
-        this.lastTail = t;
-        this.bar?.setTail(t);
-        this.syncGhosts();
+        this.pendingTail = t;
+        this.tailDirty = true;
       },
+      // The complete utterance — apply immediately (no reason to wait).
       onFinal: (t) => {
-        this.applyTranscript(t);
-        this.syncGhosts();
+        this.pendingStable = t;
+        this.flushSettle();
       },
       onStatus: (s) => this.bar?.setStatus(s),
       onProgress: (p) => this.bar?.setProgress(p),
+      // Meter stays on the raw tick (lively); only note voice activity here.
       onLevel: (l) => {
         this.bar?.setLevel(l);
         if (l > 0.01) this.lastVoiceAt = performance.now();
-        // Levels tick ~8×/s, so this also drives the silence decay below.
-        this.syncGhosts();
       },
       onSpeechMs: (ms) => {
         this.heardWords = Math.round((ms / 1000) * WORDS_PER_VOICED_SECOND);
-        this.syncGhosts();
       },
       onError: (m) => {
         console.error("[dictation] error:", m);
@@ -250,6 +263,42 @@ export class TranscriptionController {
     this.bar?.setPendingWords(pending);
   }
 
+  /**
+   * Apply everything buffered since the last tick in one calm batch: the
+   * latest stable text into the prompt, the latest ghost tail into the pill,
+   * and a single blob recompute. Called on the settle interval and on final.
+   */
+  private flushSettle(): void {
+    if (this.pendingStable !== null) {
+      this.applyTranscript(this.pendingStable);
+      this.pendingStable = null;
+    }
+    if (this.tailDirty) {
+      this.lastTail = this.pendingTail;
+      this.bar?.setTail(this.pendingTail);
+      this.tailDirty = false;
+    }
+    this.syncGhosts();
+  }
+
+  private startSettleTimer(): void {
+    this.stopSettleTimer();
+    this.settleTimer = window.setInterval(() => this.flushSettle(), SETTLE_INTERVAL_MS);
+  }
+
+  private stopSettleTimer(): void {
+    if (this.settleTimer !== null) {
+      window.clearInterval(this.settleTimer);
+      this.settleTimer = null;
+    }
+  }
+
+  private resetSettleBuffers(): void {
+    this.pendingStable = null;
+    this.pendingTail = "";
+    this.tailDirty = false;
+  }
+
   private onStateChange(state: DictationState): void {
     // The lifecycle, narrated — when a state looks stuck, the console says
     // which transition never happened.
@@ -260,6 +309,12 @@ export class TranscriptionController {
     );
     this.bar?.setState(state);
     if (state === "idle") {
+      // Stop batching and DROP any unflushed buffer. The normal stop path
+      // already applied the full utterance via onFinal's immediate flush;
+      // the send/cancel path deliberately discards the buffered tail (the
+      // user pressed Enter — a late injection would land in the next prompt).
+      this.stopSettleTimer();
+      this.resetSettleBuffers();
       if (this.injectedText.length > 0 && this.settings.autoSubmit) this.target?.submit();
       this.bar?.dispose();
       this.bar = null;
@@ -301,6 +356,8 @@ export class TranscriptionController {
     this.injectedText = "";
     this.lastTail = "";
     this.heardWords = 0;
+    this.resetSettleBuffers();
+    this.startSettleTimer();
     await this.engine.start();
   }
 
@@ -319,6 +376,8 @@ export class TranscriptionController {
   }
 
   async cancel(): Promise<void> {
+    this.stopSettleTimer();
+    this.resetSettleBuffers();
     await this.engine.cancel();
     this.bar?.dispose();
     this.bar = null;
@@ -354,6 +413,7 @@ export class TranscriptionController {
   }
 
   dispose(): void {
+    this.stopSettleTimer();
     this.engine.dispose();
   }
 }
