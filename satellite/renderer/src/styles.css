@@ -4204,30 +4204,42 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   min-width: 0;
 }
 .dictation-tail.has-text { display: inline-flex; }
-/* Per-word ghost that crystallizes: a new word fades up from blurred to
-   sharp, left-anchored, so the tail reads as "firming up" left→right rather
-   than hard-popping. Committed words leave the tail already crisp. */
+/* Fluid mode paints per-character spans that carry their own blur, so drop
+   the container-level blur (chars would compound it). */
+.dictation-tail.fluid {
+  filter: none;
+  opacity: 1;
+}
 .dictation-tail-word {
   display: inline-block;
-  transform-origin: left center;
+  white-space: pre;
 }
-.dictation-tail-word.crystallize {
-  animation: dictation-crystallize 0.42s var(--ease-smooth) both;
+/* Crystallize: the character is ALREADY there as blurred text and simply
+   de-blurs in place (no fade-in, no slide). Staggered per character so the
+   word sharpens left→right. `both` holds the blurred start during the delay,
+   so the whole word shows as blurred text immediately, then resolves. */
+.dictation-tail-char {
+  display: inline-block;
+  white-space: pre;
+  animation: dictation-crystallize 0.55s var(--ease-smooth) both;
 }
 @keyframes dictation-crystallize {
   from {
-    filter: blur(3px);
-    opacity: 0.15;
-    transform: translateX(-2px) scale(0.96);
+    filter: blur(5px);
+    opacity: 0.7;
   }
   to {
-    filter: blur(0);
+    /* Settles to soft-but-readable blurred text — still a ghost, not the
+       crisp committed prompt text. */
+    filter: blur(0.8px);
     opacity: 1;
-    transform: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .dictation-tail-word.crystallize { animation: none; }
+  .dictation-tail-char {
+    animation: none;
+    filter: blur(0.8px);
+  }
 }
 /* Ghost word-blobs: one per word HEARD (voice energy) but not yet
    transcribed. They appear the instant you speak — proof you're being heard —

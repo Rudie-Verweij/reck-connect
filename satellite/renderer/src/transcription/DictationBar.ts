@@ -24,6 +24,12 @@ const RING_CIRC = 2 * Math.PI * RING_R;
 const METER_BARS = 16;
 const LEVEL_GAIN = 8;
 
+// Crystallization: each character of a new ghost word de-blurs in turn, so a
+// word reads as sharpening left→right (h,e,l,l,o). Per-char delay, capped so
+// a long batch doesn't stall.
+const CHAR_STAGGER_MS = 24;
+const MAX_CRYSTALLIZE_DELAY_MS = 500;
+
 export class DictationBar implements DictationUI {
   private readonly el: HTMLElement;
   private readonly loaderEl: HTMLElement;
@@ -173,23 +179,35 @@ export class DictationBar implements DictationUI {
     }
     if (!this.fluidMotion) {
       // Snappy: one plain span, no per-word animation.
+      this.tailEl.classList.remove("fluid");
       this.tailEl.textContent = words.join(" ");
       this.tailEl.classList.toggle("has-text", words.length > 0);
       this.tailWords = words;
       return;
     }
     // Fluid: keep spans for the unchanged leading prefix; the appended words
-    // (the leading ghost edge) crystallize in. On a revision (prefix differs)
-    // we rebuild that suffix — only the changed words re-animate.
+    // (the leading ghost edge) crystallize in — already present as blurred
+    // text, then de-blurring character by character, left→right. On a
+    // revision (prefix differs) we rebuild that suffix so only changed words
+    // re-animate, not the whole tail every flush.
+    this.tailEl.classList.add("fluid");
     let common = 0;
     const max = Math.min(words.length, this.tailWords.length);
     while (common < max && words[common] === this.tailWords[common]) common++;
     while (this.tailEl.children.length > common) this.tailEl.lastElementChild?.remove();
+    let delay = 0;
     for (let i = common; i < words.length; i++) {
-      const span = document.createElement("span");
-      span.className = "dictation-tail-word crystallize";
-      span.textContent = words[i];
-      this.tailEl.appendChild(span);
+      const wordSpan = document.createElement("span");
+      wordSpan.className = "dictation-tail-word";
+      for (const ch of [...words[i]]) {
+        const charSpan = document.createElement("span");
+        charSpan.className = "dictation-tail-char";
+        charSpan.textContent = ch;
+        charSpan.style.animationDelay = `${Math.min(delay, MAX_CRYSTALLIZE_DELAY_MS)}ms`;
+        delay += CHAR_STAGGER_MS;
+        wordSpan.appendChild(charSpan);
+      }
+      this.tailEl.appendChild(wordSpan);
     }
     this.tailEl.classList.toggle("has-text", words.length > 0);
     this.tailWords = words;
