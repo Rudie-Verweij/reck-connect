@@ -1,9 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   chunkFromBufferLines,
+  detectStatusLineRange,
+  isBorderRow,
   pixelToCell,
   resolveSpokenChunk,
+  resolveUpcomingChunk,
   snapColToWordStart,
+  STATUS_LINE_MAX_ROWS,
   type ResolverTerminal,
   type BufferLine,
 } from "./PaneTextResolver";
@@ -287,6 +291,8 @@ function fakeTerm(opts: {
   cols?: number;
   rows?: number;
   viewportY?: number;
+  baseY?: number;
+  cursorY?: number;
   selection?: string;
   selectionPosition?: {
     start: { x: number; y: number };
@@ -305,8 +311,8 @@ function fakeTerm(opts: {
     buffer: {
       active: {
         viewportY,
-        baseY: 0,
-        cursorY: 0,
+        baseY: opts.baseY ?? 0,
+        cursorY: opts.cursorY ?? 0,
         length: lines.length,
         getLine: (idx: number) => {
           if (idx < 0 || idx >= lines.length) return undefined;
@@ -440,5 +446,155 @@ describe("resolveSpokenChunk — basic non-ASCII tolerance", () => {
       expect(e.line).toBeGreaterThanOrEqual(0);
       expect(e.col).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+// ── Status-line detection ───────────────────────────────────────────
+
+/** Build a contiguous BufferLine[] from `texts`, starting at `startLine`. */
+function bufLines(startLine: number, texts: string[]): BufferLine[] {
+  return texts.map((text, i) => ({ absoluteLine: startLine + i, text }));
+}
+
+describe("isBorderRow", () => {
+  it("flags box-drawing borders and horizontal rules", () => {
+    expect(isBorderRow("╭──────────────╮")).toBe(true);
+    expect(isBorderRow("╰──────────────╯")).toBe(true);
+    expect(isBorderRow("──────────────")).toBe(true);
+    expect(isBorderRow("════════════")).toBe(true);
+  });
+
+  it("flags ASCII rules", () => {
+    expect(isBorderRow("----------------")).toBe(true);
+    expect(isBorderRow("================")).toBe(true);
+    expect(isBorderRow("________________")).toBe(true);
+  });
+
+  it("does not flag prose or an input row with the odd border glyph", () => {
+    expect(isBorderRow("The quick brown fox jumps")).toBe(false);
+    expect(isBorderRow("│ > run the tests please        │")).toBe(false);
+    expect(isBorderRow("a well-defined state machine")).toBe(false);
+  });
+
+  it("ignores surrounding whitespace; blank/empty are non-border", () => {
+    expect(isBorderRow("   ────────   ")).toBe(true);
+    expect(isBorderRow("")).toBe(false);
+    expect(isBorderRow("      ")).toBe(false);
+  });
+});
+
+describe("detectStatusLineRange", () => {
+  it("strips from the input box's top border down to the bottom", () => {
+    const lines = bufLines(10, [
+      "assistant response content here",
+      "more content explaining things",
+      "",
+      "╭────────────────────────────╮",
+      "│ > type your message        │",
+      "╰────────────────────────────╯",
+      "  ? for shortcuts    20% left",
+    ]);
+    expect(detectStatusLineRange(lines, 14)).toEqual({
+      startLine: 13,
+      endLine: 16,
+    });
+  });
+
+  it("never strips a border that sits above the bottom maxRows window", () => {
+    const lines = bufLines(0, [
+      "╭──────────╮", // border, but 7 rows above the bottom
+      "│ content  │",
+      "row two",
+      "row three",
+      "row four",
+      "row five",
+      "row six",
+      "row seven", // bottom
+    ]);
+    // With maxRows=3 the border is out of the window and the cursor is up in
+    // content → nothing is stripped.
+    expect(detectStatusLineRange(lines, 0, { maxRows: 3 })).toBeNull();
+  });
+
+  it("cursor fallback: strips the cursor's non-blank block when no border", () => {
+    const lines = bufLines(20, [
+      "content line",
+      "",
+      "prompt line one", // 22
+      "prompt line two", // 23 (cursor, bottom)
+    ]);
+    expect(detectStatusLineRange(lines, 23)).toEqual({
+      startLine: 22,
+      endLine: 23,
+    });
+  });
+
+  it("returns null when there is no status block and the cursor is in content", () => {
+    const lines = bufLines(0, ["alpha", "beta", "gamma", "delta"]);
+    expect(detectStatusLineRange(lines, 0)).toBeNull();
+  });
+
+  it("returns null for empty input; default maxRows is a positive constant", () => {
+    expect(detectStatusLineRange([], 0)).toBeNull();
+    expect(STATUS_LINE_MAX_ROWS).toBeGreaterThan(0);
+  });
+});
+
+// ── resolveUpcomingChunk / excludeStatusLine ────────────────────────
+
+describe("resolveUpcomingChunk — visible screen minus status line", () => {
+  const screen = [
+    "first visible line of content",
+    "second line of content here",
+    "╭────────────────────────────╮",
+    "│ > type your message        │",
+    "╰────────────────────────────╯",
+  ];
+
+  it("excludes the status block when excludeStatusLine is set", () => {
+    const term = fakeTerm({ lines: screen, rows: 5 });
+    const chunk = resolveUpcomingChunk(term, { excludeStatusLine: true });
+    expect(chunk.text).toBe(
+      "first visible line of content\nsecond line of content here",
+    );
+  });
+
+  it("includes the status block when excludeStatusLine is not set", () => {
+    const term = fakeTerm({ lines: screen, rows: 5 });
+    const chunk = resolveUpcomingChunk(term);
+    expect(chunk.text).toContain("type your message");
+  });
+
+  it("reads only the visible window starting at viewportY", () => {
+    const lines = ["off-screen above", "visible one", "visible two"];
+    const term = fakeTerm({ lines, rows: 2, viewportY: 1 });
+    const chunk = resolveUpcomingChunk(term, { excludeStatusLine: true });
+    expect(chunk.text).toBe("visible one\nvisible two");
+  });
+});
+
+describe("resolveSpokenChunk — excludeStatusLine (initial read)", () => {
+  it("strips the pinned status block from a point-driven read", () => {
+    const lines = [
+      "read this content aloud",
+      "and this line too",
+      "╭──────────────╮",
+      "│ > input box  │",
+      "╰──────────────╯",
+    ];
+    const term = fakeTerm({ lines, rows: 5 });
+    const chunk = resolveSpokenChunk(
+      term,
+      { line: 0, col: 0 },
+      { excludeStatusLine: true },
+    );
+    expect(chunk.text).toBe("read this content aloud\nand this line too");
+  });
+
+  it("does not strip when excludeStatusLine is off (back-compat)", () => {
+    const lines = ["content here", "╭──────╮", "│ box  │", "╰──────╯"];
+    const term = fakeTerm({ lines, rows: 4 });
+    const chunk = resolveSpokenChunk(term, { line: 0, col: 0 });
+    expect(chunk.text).toContain("box");
   });
 });

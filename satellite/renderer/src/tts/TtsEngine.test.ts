@@ -907,3 +907,118 @@ describe("utterance segmentation (long tool payloads must not wedge)", () => {
     expect(synth.spoken).toHaveLength(1);
   });
 });
+
+describe("TtsEngine — reswap (recompute upcoming words on scroll)", () => {
+  let synth: StubSynth;
+
+  beforeEach(() => {
+    synth = new StubSynth();
+  });
+
+  function mk(respliceMode?: "scheduled" | "immediate"): TtsEngine {
+    return new TtsEngine({
+      synth: synth as unknown as SpeechSynthesis,
+      UtteranceCtor: StubUtterance as unknown as typeof SpeechSynthesisUtterance,
+      heartbeatIntervalMs: 100,
+      restartDebounceMs: 0,
+      respliceMode,
+    });
+  }
+
+  it("does NOT cancel/re-speak when the upcoming tail is unchanged (zero-gap)", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    synth.spoken[0].fireBoundary(0, 5); // speaking "alpha"
+    const cancelsBefore = synth.cancelCount;
+    engine.reswap(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    expect(synth.cancelCount).toBe(cancelsBefore);
+    expect(synth.spoken).toHaveLength(1);
+    engine.dispose();
+  });
+
+  it("schedules an append swap: keeps playing, then continues into new content on end", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta"]));
+    synth.spoken[0].fireBoundary(0, 5); // "alpha"
+    engine.reswap(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    // Divergence is a pure append (past the old end) → no immediate cancel.
+    expect(synth.cancelCount).toBe(0);
+    expect(synth.spoken).toHaveLength(1);
+    synth.spoken[0].fireBoundary(6, 4); // "beta" — still before the old end
+    expect(synth.spoken).toHaveLength(1);
+    // Old chunk finishes → the append continues seamlessly into new content.
+    synth.spoken[0].fireEnd();
+    expect(synth.spoken).toHaveLength(2);
+    expect(synth.spoken[1].text).toContain("gamma");
+    engine.dispose();
+  });
+
+  it("schedules a mid-tail swap: swaps only once the cursor reaches the divergence", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    synth.spoken[0].fireBoundary(0, 5); // "alpha"
+    engine.reswap(chunkOfWords(["alpha", "beta", "DELTA", "delta"]));
+    expect(synth.cancelCount).toBe(0); // divergence ("gamma"→"DELTA") is ahead
+    synth.spoken[0].fireBoundary(6, 4); // "beta" — still before divergence
+    expect(synth.cancelCount).toBe(0);
+    synth.spoken[0].fireBoundary(11, 5); // reaches "gamma" (divCharOld) → swap
+    expect(synth.cancelCount).toBe(1);
+    expect(synth.spoken).toHaveLength(2);
+    expect(synth.spoken[1].text).toContain("DELTA");
+    engine.dispose();
+  });
+
+  it("immediate mode swaps right away, resuming at the current word", () => {
+    const engine = mk("immediate");
+    engine.start(chunkOfWords(["alpha", "beta", "gamma"]));
+    synth.spoken[0].fireBoundary(6, 4); // "beta"
+    engine.reswap(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    expect(synth.cancelCount).toBe(1);
+    expect(synth.spoken).toHaveLength(2);
+    // Resumes from the current word onward — never re-speaks past content.
+    expect(synth.spoken[1].text.startsWith("beta")).toBe(true);
+    engine.dispose();
+  });
+
+  it("immediate mode still skips the swap when the tail is unchanged", () => {
+    const engine = mk("immediate");
+    engine.start(chunkOfWords(["alpha", "beta", "gamma"]));
+    synth.spoken[0].fireBoundary(0, 5);
+    engine.reswap(chunkOfWords(["alpha", "beta", "gamma"]));
+    expect(synth.cancelCount).toBe(0);
+    expect(synth.spoken).toHaveLength(1);
+    engine.dispose();
+  });
+
+  it("is a no-op when nothing is playing", () => {
+    const engine = mk();
+    engine.reswap(chunkOfWords(["a", "b"]));
+    expect(synth.cancelCount).toBe(0);
+    expect(synth.spoken).toHaveLength(0);
+    engine.dispose();
+  });
+
+  it("is a no-op while paused, and drops any pending swap", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    synth.spoken[0].fireBoundary(0, 5);
+    engine.pause();
+    engine.reswap(chunkOfWords(["alpha", "beta", "DELTA", "delta"]));
+    expect(synth.cancelCount).toBe(0);
+    expect(synth.spoken).toHaveLength(1);
+    engine.dispose();
+  });
+
+  it("getPlaybackAnchor reports the current word in chunk coordinates", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta"]));
+    synth.spoken[0].fireBoundary(6, 4); // "beta" at charIndex 6, line 1
+    expect(engine.getPlaybackAnchor()).toEqual({
+      charIndex: 6,
+      word: "beta",
+      line: 1,
+      col: 0,
+    });
+    engine.dispose();
+  });
+});

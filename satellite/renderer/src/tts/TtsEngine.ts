@@ -1,3 +1,5 @@
+import { findTailDivergence } from "./tailDivergence";
+
 export interface RangeMapEntry {
   charStart: number;
   charEnd: number;
@@ -37,6 +39,15 @@ export interface TtsEngineOptions {
   /** Override the per-utterance char cap (see MAX_UTTERANCE_CHARS). Tests
    *  set a small value to exercise multi-segment speech cheaply. */
   maxUtteranceChars?: number;
+  /**
+   * How reswap() applies a recomputed chunk to a live utterance:
+   *  - 'scheduled' (default): let the current audio keep playing and swap at
+   *    the word boundary where old/new first diverge — the ~50-100ms cancel
+   *    gap lands at a natural word seam, and an unchanged tail never swaps.
+   *  - 'immediate': cancel + re-speak the new chunk from the current word at
+   *    once (simpler; a small gap every time the tail changes).
+   */
+  respliceMode?: "scheduled" | "immediate";
 }
 
 export interface StartOptions {
@@ -176,7 +187,15 @@ export class TtsEngine {
   private readonly heartbeatIntervalMs: number;
   private readonly restartDebounceMs: number;
   private readonly maxUtteranceChars: number;
+  private readonly respliceMode: "scheduled" | "immediate";
   private rateRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  // A recomputed chunk awaiting a scheduled swap: playback continues on the
+  // current chunk until lastBoundaryCharIndex reaches `divCharOld` (or the
+  // chunk ends, for a pure append), then we cancel + re-speak `newChunk` from
+  // `divCharNew`. Overwritten by a newer reswap; cleared on swap/stop/pause.
+  private pendingSwap:
+    | { newChunk: SpokenChunk; divCharOld: number; divCharNew: number }
+    | null = null;
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private currentUtt: SpeechSynthesisUtterance | null = null;
@@ -224,6 +243,7 @@ export class TtsEngine {
     this.heartbeatIntervalMs = opts.heartbeatIntervalMs ?? 9000;
     this.restartDebounceMs = opts.restartDebounceMs ?? 60;
     this.maxUtteranceChars = opts.maxUtteranceChars ?? MAX_UTTERANCE_CHARS;
+    this.respliceMode = opts.respliceMode ?? "scheduled";
   }
 
   on<K extends keyof EventMap>(event: K, cb: Listener<EventMap[K]>): () => void {
@@ -355,11 +375,15 @@ export class TtsEngine {
     this.segIndex = 0;
     this.segBase = 0;
     this.segmentPending = false;
+    this.pendingSwap = null;
     this.stopHeartbeat();
   }
 
   pause(): void {
     this.userPaused = true;
+    // Drop any scheduled swap — its divergence point indexes the pre-pause
+    // chunk; the next render after resume recomputes a fresh one.
+    this.pendingSwap = null;
     this.synth.pause();
   }
 
@@ -415,6 +439,94 @@ export class TtsEngine {
     this.speakInternal(remaining, this.currentVoice, this.rate);
   }
 
+  /**
+   * The word currently being spoken, in the CURRENT chunk's coordinate space,
+   * or null if nothing is playing / the cursor sits between rangemap words.
+   * Exposed for callers that want to align a recomputed chunk themselves.
+   */
+  getPlaybackAnchor():
+    | { charIndex: number; word: string; line: number; col: number }
+    | null {
+    if (!this.currentChunk) return null;
+    const idx = this.lastBoundaryCharIndex;
+    const entry = this.currentChunk.rangeMap.find(
+      (e) => idx >= e.charStart && idx < e.charEnd,
+    );
+    if (!entry) return null;
+    return {
+      charIndex: idx,
+      word: this.currentChunk.text.slice(entry.charStart, entry.charEnd),
+      line: entry.line,
+      col: entry.col,
+    };
+  }
+
+  /**
+   * Apply a freshly-resolved chunk to the in-flight utterance so the UPCOMING
+   * (not-yet-spoken) words track what's on screen — used when a TUI repaints or
+   * the user scrolls during playback. Does nothing when the upcoming tail is
+   * unchanged (the common case → no cancel, no audible gap). See
+   * `respliceMode` for scheduled vs immediate swap timing.
+   */
+  reswap(newChunk: SpokenChunk): void {
+    // Only meaningful while our own utterance is actively speaking. A paused
+    // or degenerate stream has no reliable cursor to align against.
+    if (!this.currentChunk || !this.currentUtt) return;
+    if (this.userPaused || this.boundaryDegenerate) return;
+    if (!this.synth.speaking) return;
+
+    const d = findTailDivergence(
+      this.currentChunk,
+      newChunk,
+      this.lastBoundaryCharIndex,
+    );
+    if (!d.changed) {
+      // Upcoming words are identical (or we couldn't align) — cancel any stale
+      // pending swap and leave the audio untouched.
+      this.pendingSwap = null;
+      return;
+    }
+
+    if (this.respliceMode === "immediate") {
+      // Cancel + re-speak the new chunk from the current word, now.
+      this.pendingSwap = null;
+      this.executeSwap(newChunk, d.resumeCharNew);
+      return;
+    }
+
+    if (d.divCharOld <= this.lastBoundaryCharIndex) {
+      // Divergence is already at the current word — swap now (rare; alignment
+      // normally puts the first mismatch strictly ahead of the cursor).
+      this.pendingSwap = null;
+      this.executeSwap(newChunk, d.divCharNew);
+      return;
+    }
+
+    // Scheduled: let the current audio keep playing and swap when the cursor
+    // reaches the divergence (handled in handleBoundary / handleEnd).
+    this.pendingSwap = {
+      newChunk,
+      divCharOld: d.divCharOld,
+      divCharNew: d.divCharNew,
+    };
+  }
+
+  /** Cancel the in-flight utterance and re-speak `chunk` from `fromCharIndex`.
+   *  Shares the rate-restart machinery: speakInternal detaches + cancels the
+   *  old utterance (so no stale onend chains) and re-segments the remainder. */
+  private executeSwap(chunk: SpokenChunk, fromCharIndex: number): void {
+    const remaining = sliceChunkFrom(chunk, fromCharIndex);
+    if (!remaining.text) {
+      // Nothing left to speak (e.g. content truncated to before the cursor) —
+      // end cleanly rather than leaving a wedged utterance.
+      this.stop();
+      for (const cb of this.endListeners) cb();
+      return;
+    }
+    this.lastBoundaryCharIndex = 0;
+    this.speakInternal(remaining, this.currentVoice, this.rate);
+  }
+
   getRate(): number {
     return this.rate;
   }
@@ -460,6 +572,15 @@ export class TtsEngine {
     // Track most-recent boundary so live rate changes can restart from
     // here. Recorded even when no rangemap entry matches (e.g. punctuation).
     this.lastBoundaryCharIndex = idx;
+    // Scheduled reswap: once the cursor reaches the divergence word, swap to
+    // the recomputed chunk. We do this BEFORE emitting the boundary so the
+    // highlight never flashes the about-to-be-replaced (stale) word.
+    if (this.pendingSwap && idx >= this.pendingSwap.divCharOld) {
+      const ps = this.pendingSwap;
+      this.pendingSwap = null;
+      this.executeSwap(ps.newChunk, ps.divCharNew);
+      return;
+    }
     // Degenerate-stream guard. macOS reports charIndex=0 for
     // EVERY boundary when the utterance contains a poison char (see
     // UTTERANCE_POISON_CHARS); a healthy stream's charIndex grows, so a
@@ -516,6 +637,17 @@ export class TtsEngine {
       this.speakSegment();
       return;
     }
+    // The chunk finished. A pending APPEND swap (divCharOld == old chunk end)
+    // never fires a boundary at text.length, so honour it here: continue
+    // straight into the recomputed content instead of ending. This is the
+    // seam-less continuation of "play what's on screen" as content streams in.
+    if (this.pendingSwap) {
+      const ps = this.pendingSwap;
+      this.pendingSwap = null;
+      this.currentUtt = null;
+      this.executeSwap(ps.newChunk, ps.divCharNew);
+      return;
+    }
     this.currentUtt = null;
     this.currentChunk = null;
     this.segments = [];
@@ -538,6 +670,7 @@ export class TtsEngine {
     this.segIndex = 0;
     this.segBase = 0;
     this.segmentPending = false;
+    this.pendingSwap = null;
     const err = new Error(ev.error || "speech-synthesis-error");
     for (const cb of this.errorListeners) cb(err);
   }

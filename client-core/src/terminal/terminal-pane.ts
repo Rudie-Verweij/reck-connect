@@ -15,6 +15,18 @@ import type { Stoplight } from "@proto/proto";
 export type PaneTheme = "light" | "dark";
 
 /**
+ * Mouse-wheel scroll sensitivity for the NORMAL buffer (scrollback).
+ * xterm multiplies the wheel's line-delta by this factor; its default of
+ * 1 scrolls too many lines per notch on high-resolution trackpads/mice, so
+ * we damp it. Only governs xterm's own scrollback scroll — alt-screen TUIs
+ * forward the wheel elsewhere (see OverlayScrollbar's pageStepPx). A
+ * device-agnostic value; a future user setting can override it.
+ */
+const SCROLL_SENSITIVITY = 0.5;
+/** Wheel sensitivity while the fast-scroll modifier (Alt) is held. */
+const FAST_SCROLL_SENSITIVITY = 3;
+
+/**
  * MIME types the station accepts as image-paste uploads
  * (phase 1 — must match `allowedUploadMIMEs` in
  * `daemon/internal/http/uploads.go`). Kept as a Set for O(1)
@@ -343,6 +355,8 @@ export class TerminalPane {
       cursorBlink: false,
       convertEol: false,
       scrollback: 5000,
+      scrollSensitivity: SCROLL_SENSITIVITY,
+      fastScrollSensitivity: FAST_SCROLL_SENSITIVITY,
       allowProposedApi: true,
     });
     this.fit = new FitAddon();

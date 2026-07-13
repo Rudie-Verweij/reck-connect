@@ -52,6 +52,9 @@ export class TtsController {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private voicesCache: SpeechSynthesisVoice[] = [];
   private detachEngineListeners: Array<() => void> = [];
+  // Unsubscribe from the active surface's content-change notifications (scroll
+  // / repaint). Live only while a re-resolvable surface is playing.
+  private contentChangeUnsub: (() => void) | null = null;
 
   constructor(opts: TtsControllerOptions) {
     this.opts = opts;
@@ -80,6 +83,10 @@ export class TtsController {
     this.opts.engine.start(chunk, { voice, rate: this.settings.rate });
     this.state = "playing";
     this.currentSurface = surface;
+    // Recompute the upcoming words as the surface scrolls / repaints, so a TUI
+    // status-line repaint or streamed content keeps speech tracking the
+    // screen. No-op for surfaces that don't support it (markdown / codemirror).
+    this.subscribeContentChange(surface);
     // Push the configured highlight colour to the surface so its highlight
     // uses the user's choice (surfaces are built without a theme).
     surface.setTheme?.(this.theme);
@@ -92,6 +99,7 @@ export class TtsController {
   }
 
   stop(): void {
+    this.unsubscribeContentChange();
     this.opts.engine.stop();
     this.state = "idle";
     this.currentSurface?.clearHighlight();
@@ -150,6 +158,7 @@ export class TtsController {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    this.unsubscribeContentChange();
     for (const off of this.detachEngineListeners) off();
     this.detachEngineListeners = [];
     this.currentBar?.dispose();
@@ -179,6 +188,26 @@ export class TtsController {
     return surface.resolveSpokenChunk(point ?? undefined);
   }
 
+  /** Subscribe to the surface's content-change stream and re-swap the engine's
+   *  upcoming words whenever a fresh chunk is available. Surfaces that don't
+   *  implement both hooks (markdown / codemirror) are simply never watched. */
+  private subscribeContentChange(surface: SpeakSurfaceAdapter): void {
+    this.unsubscribeContentChange();
+    if (!surface.onContentChange || !surface.resolveUpcomingChunk) return;
+    this.contentChangeUnsub = surface.onContentChange(() => {
+      if (this.state !== "playing") return;
+      const next = surface.resolveUpcomingChunk?.();
+      if (next && next.text) this.opts.engine.reswap(next);
+    });
+  }
+
+  private unsubscribeContentChange(): void {
+    if (this.contentChangeUnsub) {
+      this.contentChangeUnsub();
+      this.contentChangeUnsub = null;
+    }
+  }
+
   private ensureBar(surface: SpeakSurfaceAdapter): void {
     const container = surface.getContainerEl();
     if (this.currentBar && this.currentBarSurfaceEl === container) return;
@@ -204,11 +233,13 @@ export class TtsController {
       this.currentSurface?.highlightBoundary(b);
     });
     const offEnd = this.opts.engine.on("end", () => {
+      this.unsubscribeContentChange();
       this.state = "idle";
       this.currentSurface?.clearHighlight();
       this.currentBar?.setState("idle");
     });
     const offError = this.opts.engine.on("error", () => {
+      this.unsubscribeContentChange();
       this.state = "idle";
       this.currentSurface?.clearHighlight();
       this.currentBar?.setState("idle");

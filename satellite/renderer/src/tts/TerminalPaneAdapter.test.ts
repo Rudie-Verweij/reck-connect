@@ -216,3 +216,131 @@ describe("TerminalPaneAdapter", () => {
     expect(overlay!.style.outline).toBe("1.5px solid #090807");
   });
 });
+
+// ── Content-change re-resolution (scroll → recompute) ───────────────
+
+describe("TerminalPaneAdapter — content-change re-resolution", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  // A term whose onRender/onScroll listeners can be fired on demand, with a
+  // controllable buffer type (alt-screen vs normal).
+  function firableTerm(opts: {
+    lines: string[];
+    type?: "normal" | "alternate";
+    selection?: string;
+    selectionPosition?: { start: { x: number; y: number }; end: { x: number; y: number } };
+  }) {
+    const renderCbs: Array<() => void> = [];
+    const scrollCbs: Array<() => void> = [];
+    const sub = (arr: Array<() => void>) => (cb: () => void) => {
+      arr.push(cb);
+      return {
+        dispose() {
+          const i = arr.indexOf(cb);
+          if (i >= 0) arr.splice(i, 1);
+        },
+      };
+    };
+    const term: FakeTerm = {
+      cols: 80,
+      rows: 24,
+      getSelection: () => opts.selection ?? "",
+      getSelectionPosition: () => opts.selectionPosition,
+      buffer: {
+        active: {
+          viewportY: 0,
+          baseY: 0,
+          cursorY: 0,
+          type: opts.type ?? "alternate",
+          length: opts.lines.length,
+          getLine: (i: number) => {
+            if (i < 0 || i >= opts.lines.length) return undefined;
+            const text = opts.lines[i];
+            return { length: text.length, translateToString: () => text };
+          },
+        },
+      },
+      onRender: sub(renderCbs),
+      onScroll: sub(scrollCbs),
+      onResize: sub([]),
+    };
+    return {
+      term,
+      fireRender: () => renderCbs.forEach((f) => f()),
+      fireScroll: () => scrollCbs.forEach((f) => f()),
+    };
+  }
+
+  function mkAdapter(term: FakeTerm, contentChangeDebounceMs = 0): TerminalPaneAdapter {
+    return new TerminalPaneAdapter({
+      term,
+      xtermEl: fakeXtermEl(),
+      containerEl: fakeContainer(),
+      cellWidth: 8,
+      cellHeight: 16,
+      contentChangeDebounceMs,
+    });
+  }
+
+  it("resolveUpcomingChunk returns the visible screen minus the status line (alt-screen)", () => {
+    const { term } = firableTerm({
+      lines: ["read this line", "and this one", "╭────────╮", "│ input  │", "╰────────╯"],
+      type: "alternate",
+    });
+    const adapter = mkAdapter(term);
+    adapter.resolveSpokenChunk({ pixelX: 0, pixelY: 0 }); // non-selection point read
+    expect(adapter.resolveUpcomingChunk()?.text).toBe("read this line\nand this one");
+  });
+
+  it("resolveUpcomingChunk returns null off alt-screen (normal buffer)", () => {
+    const { term } = firableTerm({ lines: ["alpha", "beta"], type: "normal" });
+    const adapter = mkAdapter(term);
+    adapter.resolveSpokenChunk({ pixelX: 0, pixelY: 0 });
+    expect(adapter.resolveUpcomingChunk()).toBeNull();
+  });
+
+  it("resolveUpcomingChunk returns null after a selection read", () => {
+    const { term } = firableTerm({
+      lines: ["alpha beta"],
+      type: "alternate",
+      selection: "alpha",
+      selectionPosition: { start: { x: 0, y: 0 }, end: { x: 4, y: 0 } },
+    });
+    const adapter = mkAdapter(term);
+    adapter.resolveSpokenChunk({ pixelX: 0, pixelY: 0 }); // selection wins → flagged
+    expect(adapter.resolveUpcomingChunk()).toBeNull();
+  });
+
+  it("onContentChange fires on render and scroll, then stops after unsubscribe", () => {
+    const { term, fireRender, fireScroll } = firableTerm({ lines: ["x"], type: "alternate" });
+    const adapter = mkAdapter(term);
+    let calls = 0;
+    const off = adapter.onContentChange(() => {
+      calls++;
+    });
+    fireRender();
+    fireScroll();
+    expect(calls).toBe(2);
+    off();
+    fireRender();
+    fireScroll();
+    expect(calls).toBe(2);
+  });
+
+  it("onContentChange debounces a burst into a single call", async () => {
+    const { term, fireRender } = firableTerm({ lines: ["x"], type: "alternate" });
+    const adapter = mkAdapter(term, 20);
+    let calls = 0;
+    adapter.onContentChange(() => {
+      calls++;
+    });
+    fireRender();
+    fireRender();
+    fireRender();
+    expect(calls).toBe(0); // debounced
+    await new Promise((r) => setTimeout(r, 35));
+    expect(calls).toBe(1);
+  });
+});
