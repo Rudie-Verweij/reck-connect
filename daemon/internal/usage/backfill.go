@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +75,13 @@ func (b *Backfiller) Run(refs []SessionRef) {
 
 func (b *Backfiller) processOne(dir string, ref SessionRef) {
 	if ref.SessionID == "" || ref.Cwd == "" {
+		return
+	}
+	// Defense-in-depth: SessionID becomes the transcript file component in a
+	// glob (FindTranscript's doc-comment requires a validated UUID). Inputs
+	// come from daemon-minted UUIDs today, but reject anything with path /
+	// glob metacharacters so a future relaxed resume path can't traverse.
+	if !safeSessionID(ref.SessionID) {
 		return
 	}
 	path, ok := sessions.FindTranscriptUnderProject(dir, ref.Cwd, ref.SessionID)
@@ -154,7 +164,37 @@ func (b *Backfiller) scan(path string, ref SessionRef) error {
 			CacheRead:     rec.Message.Usage.CacheReadInputTokens,
 		})
 	}
-	return sc.Err()
+	if err := sc.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			// A single JSONL line exceeded the buffer cap (a giant tool
+			// result). Returning an error here would leave `seen` unset and
+			// re-scan this file every tick forever, never advancing. Treat
+			// the file as processed instead: turns after the oversized line
+			// are skipped, but the loop terminates. Rare; logged so it's
+			// diagnosable.
+			slog.Warn("usage: backfill hit an oversized transcript line; skipping remainder",
+				"path", path, "session", ref.SessionID)
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// safeSessionID rejects ids that could escape the per-session transcript
+// file component (path separators, parent refs, or shell-glob
+// metacharacters). Daemon-minted UUIDs always pass.
+func safeSessionID(id string) bool {
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		return false
+	}
+	if strings.ContainsAny(id, "*?[]") {
+		return false
+	}
+	return true
 }
 
 func parseTS(s string) time.Time {

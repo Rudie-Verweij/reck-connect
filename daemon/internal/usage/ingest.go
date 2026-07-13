@@ -3,6 +3,7 @@ package usage
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math"
 	"strings"
 	"sync"
@@ -85,17 +86,27 @@ type quotaState struct {
 	seen      *QuotaSample // most recent observation (for the live glance)
 }
 
+// sampleStore is the subset of *Store the ingester writes through. Kept as
+// an interface so tests can inject a failure-injecting fake (accept
+// interfaces, return structs). *Store satisfies it.
+type sampleStore interface {
+	InsertContextSample(ContextSample) error
+	InsertQuotaSample(QuotaSample) error
+	UpsertSession(sessionID, projectID, agent, model, displayName string, seen time.Time) error
+}
+
 // Ingester applies the change gate + rate cap to statusline payloads and
 // writes surviving samples to the store. Safe for concurrent use across
 // panes.
 type Ingester struct {
-	store *Store
+	store sampleStore
 
 	RateCap    time.Duration
 	JumpPct    float64
 	JumpTokens int64
 
-	now func() time.Time
+	now    func() time.Time
+	logger *slog.Logger
 
 	mu    sync.Mutex
 	ctx   map[string]*ctxState // keyed by session_id
@@ -110,6 +121,7 @@ func NewIngester(store *Store) *Ingester {
 		JumpPct:    DefaultJumpPct,
 		JumpTokens: DefaultJumpTokens,
 		now:        func() time.Time { return time.Now().UTC() },
+		logger:     slog.Default(),
 		ctx:        make(map[string]*ctxState),
 	}
 }
@@ -171,7 +183,11 @@ func (i *Ingester) Flush() {
 			continue
 		}
 		if !st.hasWrite || now.Sub(st.lastWrite) >= i.RateCap {
-			_ = i.store.InsertContextSample(*st.pending)
+			if err := i.store.InsertContextSample(*st.pending); err != nil {
+				// Keep pending so the next tick retries; don't advance state.
+				i.logger.Warn("usage: context flush insert failed; will retry", "err", err)
+				continue
+			}
 			st.written = *st.pending
 			st.hasWrite = true
 			st.lastWrite = now
@@ -180,11 +196,14 @@ func (i *Ingester) Flush() {
 	}
 	if i.quota.pending != nil {
 		if !i.quota.hasWrite || now.Sub(i.quota.lastWrite) >= i.RateCap {
-			_ = i.store.InsertQuotaSample(*i.quota.pending)
-			i.quota.written = *i.quota.pending
-			i.quota.hasWrite = true
-			i.quota.lastWrite = now
-			i.quota.pending = nil
+			if err := i.store.InsertQuotaSample(*i.quota.pending); err != nil {
+				i.logger.Warn("usage: quota flush insert failed; will retry", "err", err)
+			} else {
+				i.quota.written = *i.quota.pending
+				i.quota.hasWrite = true
+				i.quota.lastWrite = now
+				i.quota.pending = nil
+			}
 		}
 	}
 }
@@ -270,7 +289,15 @@ func (i *Ingester) gateContext(sid string, cand ContextSample, now time.Time) bo
 	firstOrJump := !st.hasWrite || contextIsJump(st.written, cand, i.JumpTokens, i.JumpPct)
 	capElapsed := st.hasWrite && now.Sub(st.lastWrite) >= i.RateCap
 	if firstOrJump || capElapsed {
-		_ = i.store.InsertContextSample(cand)
+		if err := i.store.InsertContextSample(cand); err != nil {
+			// Don't advance written/lastWrite on failure — that would both
+			// lose this sample and gate out the next identical reading.
+			// Stash as pending so the next Flush retries.
+			i.logger.Warn("usage: context sample insert failed; will retry", "err", err, "session", sid)
+			c := cand
+			st.pending = &c
+			return false
+		}
 		st.written = cand
 		st.hasWrite = true
 		st.lastWrite = now
@@ -314,7 +341,12 @@ func (i *Ingester) gateQuota(cand QuotaSample, now time.Time) bool {
 	firstOrJump := !q.hasWrite || quotaIsJump(q.written, cand, i.JumpPct)
 	capElapsed := q.hasWrite && now.Sub(q.lastWrite) >= i.RateCap
 	if firstOrJump || capElapsed {
-		_ = i.store.InsertQuotaSample(cand)
+		if err := i.store.InsertQuotaSample(cand); err != nil {
+			i.logger.Warn("usage: quota sample insert failed; will retry", "err", err)
+			c := cand
+			q.pending = &c
+			return false
+		}
 		q.written = cand
 		q.hasWrite = true
 		q.lastWrite = now

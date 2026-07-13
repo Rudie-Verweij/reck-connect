@@ -205,12 +205,14 @@ interface LeafView {
 
 // formatPaneUsage renders the minimal tab badge string, e.g.
 // "ctx 43% · 5h 61%". Returns "" when no usable value is present so the
-// caller can skip the DOM node entirely.
-function formatPaneUsage(u: PaneUsage | undefined): string {
+// caller can skip the DOM node entirely. Exported for unit testing.
+// Number.isFinite (not typeof === "number") guards against a NaN slipping
+// in from a locally-constructed PaneUsage.
+export function formatPaneUsage(u: PaneUsage | undefined): string {
   if (!u) return "";
   const parts: string[] = [];
-  if (typeof u.context_pct === "number") parts.push(`ctx ${Math.round(u.context_pct)}%`);
-  if (typeof u.five_hour_pct === "number") parts.push(`5h ${Math.round(u.five_hour_pct)}%`);
+  if (Number.isFinite(u.context_pct)) parts.push(`ctx ${Math.round(u.context_pct as number)}%`);
+  if (Number.isFinite(u.five_hour_pct)) parts.push(`5h ${Math.round(u.five_hour_pct as number)}%`);
   return parts.join(" · ");
 }
 
@@ -875,8 +877,11 @@ export class PaneLayout {
       tabEl.appendChild(dotEl);
       if (hostBadgeEl) tabEl.appendChild(hostBadgeEl);
       tabEl.appendChild(titleEl);
-      // Minimal usage glance on Claude tabs (deferred: a richer usage UI
-      // is a separate later pass). Updates when panes are re-fetched.
+      // Minimal usage glance on Claude tabs (deferred: a richer, live
+      // usage UI is a separate later pass). NOTE: this is a snapshot taken
+      // when the project is opened — it refreshes on the next project
+      // switch / pane re-fetch, not on the 2s rail poll (usage rides the
+      // ProjectDetail fetch, which the rail poll doesn't call).
       if (t.kind === "claude") {
         const usageText = formatPaneUsage(this.cb.getUsage?.(t.paneId));
         if (usageText) {

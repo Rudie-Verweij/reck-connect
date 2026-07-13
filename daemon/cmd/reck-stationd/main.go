@@ -571,11 +571,6 @@ func main() {
 		logger.Warn("shutdown: background goroutines did not exit within budget; proceeding",
 			"budget", bgWaitBudget.String())
 	}
-	// The usage sampler is one of those background runners; with it stopped
-	// it's safe to close the telemetry DB.
-	if usageStore != nil {
-		_ = usageStore.Close()
-	}
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	// Stop accepting new HTTP and WS upgrades first. Existing HTTP
@@ -593,6 +588,12 @@ func main() {
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), ws.ShutdownCloseWait)
 	wsH.Shutdown(closeCtx)
 	closeCancel()
+	// Close the telemetry DB only after the background sampler has stopped
+	// AND the HTTP/WS servers are drained, so no in-flight usage-sample
+	// write or /usage read can hit a closed *sql.DB.
+	if usageStore != nil {
+		_ = usageStore.Close()
+	}
 	for _, p := range mgr.AllPanes() {
 		p.Kill()
 	}

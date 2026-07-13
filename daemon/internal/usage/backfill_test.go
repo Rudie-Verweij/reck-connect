@@ -3,6 +3,7 @@ package usage
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rudie-verweij/reck-connect/daemon/internal/sessions"
@@ -67,6 +68,42 @@ func TestBackfiller_InsertsAndDedups(t *testing.T) {
 	if tot.Turns != 3 {
 		t.Fatalf("expected 3 turns after append, got %d", tot.Turns)
 	}
+}
+
+func TestBackfiller_OversizedLineDoesNotLoopAndKeepsEarlierTurns(t *testing.T) {
+	store := openTestStore(t)
+	root := t.TempDir()
+	cwd := "/Users/x/proj"
+	sid := "sess-big"
+	// A valid turn, then a single line larger than the 10 MiB scanner cap.
+	huge := `{"type":"other","blob":"` + strings.Repeat("A", 11*1024*1024) + `"}`
+	writeTranscript(t, root, cwd, sid, []string{asstLine1, huge, asstLine2})
+
+	b := NewBackfiller(store, root)
+	ref := SessionRef{SessionID: sid, Cwd: cwd, ProjectID: "p", Agent: "claude-code"}
+
+	// Must not hang or error out to an infinite re-scan. The turn before
+	// the oversized line is captured; `seen` is recorded so a second run
+	// with the same file is a no-op (no re-scan, count unchanged).
+	b.Run([]SessionRef{ref})
+	tot, _ := store.SessionTotals(sid)
+	if tot.Turns != 1 {
+		t.Fatalf("expected 1 turn captured before the oversized line, got %d", tot.Turns)
+	}
+	b.Run([]SessionRef{ref})
+	tot, _ = store.SessionTotals(sid)
+	if tot.Turns != 1 {
+		t.Fatalf("second run changed count to %d; oversized line caused a re-scan loop", tot.Turns)
+	}
+}
+
+func TestBackfiller_RejectsUnsafeSessionID(t *testing.T) {
+	store := openTestStore(t)
+	b := NewBackfiller(store, t.TempDir())
+	for _, bad := range []string{"../etc", "a/b", "..", "sess*", "s?x"} {
+		b.Run([]SessionRef{{SessionID: bad, Cwd: "/x", ProjectID: "p", Agent: "claude-code"}})
+	}
+	// No panic, nothing recorded — the guard rejected them all.
 }
 
 func TestBackfiller_MissingTranscriptNoop(t *testing.T) {
