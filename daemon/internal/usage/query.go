@@ -125,6 +125,133 @@ func (s *Store) GetSession(sessionID string) (*SessionRow, error) {
 	return &r, nil
 }
 
+// ListSessions returns all known session dimension rows, most-recently
+// seen first.
+func (s *Store) ListSessions() ([]SessionRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`
+		SELECT session_id, project_id, agent, model, display_name, first_seen, last_seen
+		FROM agent_sessions ORDER BY last_seen DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("usage: list sessions: %w", err)
+	}
+	defer rows.Close()
+	var out []SessionRow
+	for rows.Next() {
+		var r SessionRow
+		var first, last int64
+		if err := rows.Scan(&r.SessionID, &r.ProjectID, &r.Agent, &r.Model, &r.DisplayName, &first, &last); err != nil {
+			return nil, fmt.Errorf("usage: scan session: %w", err)
+		}
+		r.FirstSeen = time.Unix(first, 0).UTC()
+		r.LastSeen = time.Unix(last, 0).UTC()
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ContextSeries returns context samples for a session at or after `since`
+// (unix seconds; 0 = all), oldest first, capped at limit (0 = 5000).
+func (s *Store) ContextSeries(sessionID string, since int64, limit int) ([]ContextSample, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 5000
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`
+		SELECT ts, session_id, pane_id, project_id, agent, model,
+		       context_input_tokens, context_window_size, used_pct,
+		       cur_input, cur_output, cache_creation, cache_read, source
+		FROM context_samples WHERE session_id = ? AND ts >= ?
+		ORDER BY ts ASC, id ASC LIMIT ?`, sessionID, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("usage: context series: %w", err)
+	}
+	defer rows.Close()
+	var out []ContextSample
+	for rows.Next() {
+		var cs ContextSample
+		var ts int64
+		if err := rows.Scan(&ts, &cs.SessionID, &cs.PaneID, &cs.ProjectID, &cs.Agent, &cs.Model,
+			&cs.ContextInputTokens, &cs.ContextWindowSize, &cs.UsedPct,
+			&cs.CurInput, &cs.CurOutput, &cs.CacheCreation, &cs.CacheRead, &cs.Source); err != nil {
+			return nil, fmt.Errorf("usage: scan context: %w", err)
+		}
+		cs.TS = time.Unix(ts, 0).UTC()
+		out = append(out, cs)
+	}
+	return out, rows.Err()
+}
+
+// QuotaSeries returns account-level quota samples at or after `since`
+// (unix seconds; 0 = all), oldest first, capped at limit (0 = 5000).
+func (s *Store) QuotaSeries(since int64, limit int) ([]QuotaSample, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 5000
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`
+		SELECT ts, five_hour_pct, five_hour_resets_at,
+		       seven_day_pct, seven_day_resets_at,
+		       seven_day_opus_pct, seven_day_opus_resets_at,
+		       seven_day_sonnet_pct, seven_day_sonnet_resets_at,
+		       reported_by_session, model_family, source
+		FROM quota_samples WHERE ts >= ? ORDER BY ts ASC, id ASC LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("usage: quota series: %w", err)
+	}
+	defer rows.Close()
+	var out []QuotaSample
+	for rows.Next() {
+		var qs QuotaSample
+		var ts int64
+		var fhP, sdP, sdoP, sdsP sql.NullFloat64
+		var fhR, sdR, sdoR, sdsR sql.NullInt64
+		if err := rows.Scan(&ts, &fhP, &fhR, &sdP, &sdR, &sdoP, &sdoR, &sdsP, &sdsR,
+			&qs.ReportedBySession, &qs.ModelFamily, &qs.Source); err != nil {
+			return nil, fmt.Errorf("usage: scan quota: %w", err)
+		}
+		qs.TS = time.Unix(ts, 0).UTC()
+		qs.FiveHour = Bucket{Pct: fPtr(fhP), ResetsAt: iPtr(fhR)}
+		qs.SevenDay = Bucket{Pct: fPtr(sdP), ResetsAt: iPtr(sdR)}
+		qs.SevenDayOpus = Bucket{Pct: fPtr(sdoP), ResetsAt: iPtr(sdoR)}
+		qs.SevenDaySonnet = Bucket{Pct: fPtr(sdsP), ResetsAt: iPtr(sdsR)}
+		out = append(out, qs)
+	}
+	return out, rows.Err()
+}
+
+// SessionTotals sums the authoritative per-turn token counts recorded for
+// a session in turn_usage.
+type SessionTotals struct {
+	Turns         int64
+	InputTokens   int64
+	OutputTokens  int64
+	CacheCreation int64
+	CacheRead     int64
+}
+
+// SessionTotals returns aggregate turn_usage totals for a session.
+func (s *Store) SessionTotals(sessionID string) (SessionTotals, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var t SessionTotals
+	var in, out, cc, cr sql.NullInt64
+	err := s.db.QueryRow(`
+		SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens),
+		       SUM(cache_creation), SUM(cache_read)
+		FROM turn_usage WHERE session_id = ?`, sessionID).
+		Scan(&t.Turns, &in, &out, &cc, &cr)
+	if err != nil {
+		return t, fmt.Errorf("usage: session totals: %w", err)
+	}
+	t.InputTokens, t.OutputTokens, t.CacheCreation, t.CacheRead =
+		in.Int64, out.Int64, cc.Int64, cr.Int64
+	return t, nil
+}
+
 func fPtr(n sql.NullFloat64) *float64 {
 	if !n.Valid {
 		return nil

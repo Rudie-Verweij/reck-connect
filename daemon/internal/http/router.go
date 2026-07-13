@@ -105,6 +105,9 @@ type Server struct {
 	// reck-statusline.sh shim. Nil when telemetry is disabled (e.g. the DB
 	// couldn't open) — the endpoint then authenticates but no-ops.
 	Usage *usage.Ingester
+	// UsageStore backs the read-only GET /usage/* routes. Nil when
+	// telemetry is disabled.
+	UsageStore *usage.Store
 }
 
 // hookNonceStore returns the server's nonce store, lazily creating one
@@ -152,6 +155,10 @@ func (s *Server) Router() *chi.Mux {
 	// bearer token), so it is exempted from bearer auth in authMiddleware.
 	r.Post("/panes/{pane_id}/usage-sample", s.handleUsageSample)
 	r.Get("/panes/{pane_id}/events", s.handlePaneEvents)
+	// Read-only usage/quota views (bearer-authed like other GETs). Feed the
+	// minimal rail badge now; later the Chrome extension and a richer UI.
+	r.Get("/usage/summary", s.handleUsageSummary)
+	r.Get("/usage/series", s.handleUsageSeries)
 	r.Post("/panes/{pane_id}/input", s.handlePaneInput)
 	r.Get("/panes/{pane_id}/output", s.handlePaneOutput)
 	// Image-paste upload endpoint (phase 1). Writes a posted
@@ -420,7 +427,31 @@ func (s *Server) handleProjectDetail(w nethttp.ResponseWriter, r *nethttp.Reques
 		nethttp.Error(w, "project not found", nethttp.StatusNotFound)
 		return
 	}
+	s.attachUsageGlance(d.Panes)
 	writeJSON(w, d)
+}
+
+// attachUsageGlance fills each Claude pane's Usage from the latest
+// in-memory statusline snapshot, for the minimal rail badge. No-op when
+// telemetry is disabled or a pane has no session/sample yet.
+func (s *Server) attachUsageGlance(panes []proto.Pane) {
+	if s.Usage == nil {
+		return
+	}
+	for i := range panes {
+		if panes[i].Kind != proto.PaneKindClaude || panes[i].SessionID == "" {
+			continue
+		}
+		ctxPct, fiveH, sevenD := s.Usage.Snapshot(panes[i].SessionID)
+		if ctxPct == nil && fiveH == nil && sevenD == nil {
+			continue
+		}
+		panes[i].Usage = &proto.PaneUsage{
+			ContextPct:  ctxPct,
+			FiveHourPct: fiveH,
+			SevenDayPct: sevenD,
+		}
+	}
 }
 
 func (s *Server) handleCreatePane(w nethttp.ResponseWriter, r *nethttp.Request) {

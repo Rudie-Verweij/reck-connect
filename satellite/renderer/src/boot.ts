@@ -132,7 +132,7 @@ import {
   railDragDecision,
   railDragRelease,
 } from "./ui/rail-collapse";
-import type { PaneKind, Project, Stoplight } from "@proto/proto";
+import type { Pane, PaneKind, PaneUsage, Project, Stoplight } from "@proto/proto";
 import { mergeHybridProjects } from "./hybrid-merge";
 import type { StartupSplashController } from "./ui/startup-splash";
 
@@ -687,6 +687,18 @@ export async function boot(splash?: StartupSplashController) {
     for (const p of panes) {
       const flag = p.capabilities?.clipboard_image === true;
       paneClipboardImage.set(p.id, flag);
+    }
+  }
+
+  // Latest per-pane usage glance (context / quota %) from a daemon pane
+  // list, feeding the minimal tab badge. Populated on the same
+  // fetchHostPanes path as capabilities above; a pane without a sample
+  // clears its entry.
+  const paneUsage = new Map<string, PaneUsage>();
+  function recordPaneUsageFromHost(panes: Pane[]) {
+    for (const p of panes) {
+      if (p.usage) paneUsage.set(p.id, p.usage);
+      else paneUsage.delete(p.id);
     }
   }
 
@@ -1393,6 +1405,7 @@ export async function boot(splash?: StartupSplashController) {
       if (raw === "green" && !paneUnseenGreen.get(paneId)) return "gray";
       return raw;
     },
+    getUsage: (paneId) => paneUsage.get(paneId),
     onExit: () => {},
     onPaneConnClose: (paneId, info) => {
       // Standard WebSocket close codes — see RFC 6455 §7.4.
@@ -2435,6 +2448,7 @@ export async function boot(splash?: StartupSplashController) {
     let livePanesByHost = await fetchHostPanes(primaryPanes);
     for (const panes of Object.values(livePanesByHost)) {
       recordPaneCapabilitiesFromHost(panes);
+      recordPaneUsageFromHost(panes);
     }
 
     const saved = savedLayouts[projectId] ?? null;
@@ -2522,6 +2536,7 @@ export async function boot(splash?: StartupSplashController) {
             livePanesByHost = retried;
             for (const panes of Object.values(livePanesByHost)) {
               recordPaneCapabilitiesFromHost(panes);
+              recordPaneUsageFromHost(panes);
             }
             reconciled = reconcile(saved, livePanesByHost);
             didRetry = true;

@@ -982,6 +982,18 @@ html, body, #app {
   color: var(--claude-cream);
 }
 
+/* Minimal per-Claude-tab usage glance, e.g. "ctx 43% · 5h 61%". Dim,
+   monospace, no background so it reads as secondary next to the title.
+   A richer usage UI is a separate later pass. */
+.tab .tab-usage {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1;
+  color: var(--app-text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* Per-pane host tag (phase 11). Matches the tab-strip
    convention — station is the visual default, local stands out. */
 .pane-host-badge {

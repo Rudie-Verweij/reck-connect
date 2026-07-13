@@ -74,6 +74,7 @@ type ctxState struct {
 	lastWrite time.Time
 	pending   *ContextSample // changed but withheld by the rate cap
 	lastSeen  time.Time      // last agent_sessions.last_seen upsert
+	seen      *ContextSample // most recent observation (for the live glance)
 }
 
 type quotaState struct {
@@ -81,6 +82,7 @@ type quotaState struct {
 	hasWrite  bool
 	lastWrite time.Time
 	pending   *QuotaSample
+	seen      *QuotaSample // most recent observation (for the live glance)
 }
 
 // Ingester applies the change gate + rate cap to statusline payloads and
@@ -141,11 +143,15 @@ func (i *Ingester) Ingest(meta IngestMeta, raw []byte) (IngestResult, error) {
 
 	// Context dimension.
 	if cand, ok := i.contextCandidate(meta, &p, now); ok {
+		c := cand
+		i.ctxStateLocked(p.SessionID).seen = &c
 		res.ContextWritten = i.gateContext(p.SessionID, cand, now)
 	}
 
 	// Quota dimension (account-level, coalesced into one series).
 	if cand, ok := i.quotaCandidate(&p, now); ok {
+		c := cand
+		i.quota.seen = &c
 		res.QuotaWritten = i.gateQuota(cand, now)
 	}
 
@@ -181,6 +187,32 @@ func (i *Ingester) Flush() {
 			i.quota.pending = nil
 		}
 	}
+}
+
+// Snapshot returns the latest observed context-fill % for a session and
+// the latest account-level 5h / weekly quota %, for the live rail glance.
+// Any value with no observation yet is returned as nil. Returned pointers
+// are fresh copies, safe for the caller to retain.
+func (i *Ingester) Snapshot(sessionID string) (contextPct, fiveHourPct, sevenDayPct *float64) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if st := i.ctx[sessionID]; st != nil && st.seen != nil {
+		v := st.seen.UsedPct
+		contextPct = &v
+	}
+	if i.quota.seen != nil {
+		fiveHourPct = copyF(i.quota.seen.FiveHour.Pct)
+		sevenDayPct = copyF(i.quota.seen.SevenDay.Pct)
+	}
+	return
+}
+
+func copyF(p *float64) *float64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 func (i *Ingester) ctxStateLocked(sid string) *ctxState {
