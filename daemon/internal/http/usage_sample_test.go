@@ -2,9 +2,12 @@ package http
 
 import (
 	"bytes"
+	"encoding/json"
+	"io"
 	nethttp "net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/rudie-verweij/reck-connect/daemon/internal/usage"
 )
@@ -87,5 +90,81 @@ func TestUsageSample_unsignedRejected(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode == 200 {
 		t.Fatalf("unsigned usage-sample was accepted (status 200); HMAC gate broken")
+	}
+}
+
+func f64p(v float64) *float64 { return &v }
+
+func TestUsageSummaryAndSeries(t *testing.T) {
+	s := newServer(t)
+	store, err := usage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	s.UsageStore = store
+
+	now := time.Unix(1_700_000_000, 0).UTC()
+	_ = store.UpsertSession("sess-1", "proj-1", "claude-code", "claude-opus-4-8", "", now)
+	_ = store.InsertContextSample(usage.ContextSample{
+		TS: now, SessionID: "sess-1", PaneID: "pane-1", ProjectID: "proj-1",
+		Agent: "claude-code", ContextInputTokens: 40000, ContextWindowSize: 200000, UsedPct: 20,
+	})
+	_ = store.InsertQuotaSample(usage.QuotaSample{
+		TS: now, FiveHour: usage.Bucket{Pct: f64p(23.5)}, Source: "statusline",
+	})
+
+	h := newTestHandler(t, s)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// summary
+	resp, err := nethttp.Get(srv.URL + "/usage/summary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("summary status=%d body=%s", resp.StatusCode, body)
+	}
+	var summary struct {
+		Enabled  bool             `json:"enabled"`
+		Quota    map[string]any   `json:"quota"`
+		Sessions []map[string]any `json:"sessions"`
+	}
+	if err := json.Unmarshal(body, &summary); err != nil {
+		t.Fatalf("summary parse: %v\n%s", err, body)
+	}
+	if !summary.Enabled || len(summary.Sessions) != 1 || summary.Quota == nil {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+
+	// context series
+	resp, err = nethttp.Get(srv.URL + "/usage/series?kind=context&session_id=sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var series struct {
+		Kind   string           `json:"kind"`
+		Points []map[string]any `json:"points"`
+	}
+	if err := json.Unmarshal(body, &series); err != nil {
+		t.Fatalf("series parse: %v\n%s", err, body)
+	}
+	if series.Kind != "context" || len(series.Points) != 1 {
+		t.Fatalf("unexpected context series: %+v", series)
+	}
+
+	// context series without session_id → 400
+	resp, err = nethttp.Get(srv.URL + "/usage/series?kind=context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400 for missing session_id, got %d", resp.StatusCode)
 	}
 }
