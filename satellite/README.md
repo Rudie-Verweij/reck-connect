@@ -15,7 +15,35 @@ pnpm build          # tsc + vite build → dist/
 pnpm dist           # electron-builder → release/mac-arm64/Reck Connect Satellite.app
 ```
 
-> **Note:** `pnpm dev` is currently broken; the dev-mode wiring relies on a path that doesn't exist after the renderer split. Use `pnpm dist` for any UI testing — it produces a real `.app` bundle that's fast to rebuild and behaves identically to the shipped artefact. `pnpm typecheck` / `pnpm test` / `pnpm build` are all fine for static verification.
+## Run from source (dev mode)
+
+`pnpm dev` starts Vite + Electron against the live source. Two env vars are
+**required in the shell that runs the command** — a packaged install gets
+them baked in at build time and injected by the launcher, so this only bites
+when running from source:
+
+```bash
+# Both are the station's projects root (the same value the station uses),
+# e.g. /Users/reck-connect/projects — see INSTALL.md Stage 5.
+export RECK_STATION_ROOT=/Users/reck-connect/projects       # read by the Electron main process at launch
+export VITE_RECK_STATION_ROOT=/Users/reck-connect/projects  # inlined by Vite when the dev server starts
+
+pnpm dev
+```
+
+Without `RECK_STATION_ROOT` the main process crashes at load
+(`Error: RECK_STATION_ROOT is required`); without `VITE_RECK_STATION_ROOT`
+the renderer fails. Putting them in `~/.zshrc` works, but only for
+terminals opened **after** the edit. Note that `~/.config/reck/satellite.env`
+is only sourced by the *packaging* wrapper (`ops/build-app.sh`) — nothing
+reads it at runtime or in `pnpm dev`, so having it is not enough; the
+variables must be in the shell's environment (you can `source` it yourself:
+`set -a; . ~/.config/reck/satellite.env; set +a`).
+
+Also quit any installed `/Applications/Reck Connect Satellite.app` before
+running dev: two satellites fight over the local `reck-stationd` — the dev
+instance restarts the daemon with a fresh auth token and the packaged app
+then spams `auth rejected` polls against it.
 
 ## First launch
 

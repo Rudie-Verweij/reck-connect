@@ -185,13 +185,30 @@ describe("TtsEngine.start", () => {
     expect(synth.spoken[0].voice).toBe(voice);
   });
 
+  it("sets the utterance lang from the voice", () => {
+    const voice = { name: "Daniel", lang: "en-GB" } as SpeechSynthesisVoice;
+    engine.start(chunkOfWords(["a"]), { voice });
+    expect(synth.spoken[0].lang).toBe("en-GB");
+  });
+
   it("cancels a previous utterance when start is re-invoked", () => {
     engine.start(chunkOfWords(["one"]));
-    expect(synth.cancelCount).toBe(0);
+    const cancelsAfterFirstStart = synth.cancelCount;
     engine.start(chunkOfWords(["two"]));
-    expect(synth.cancelCount).toBe(1);
+    expect(synth.cancelCount).toBe(cancelsAfterFirstStart + 1);
     expect(synth.spoken).toHaveLength(2);
     expect(synth.spoken[1].text).toBe("two");
+  });
+
+  // The global speechSynthesis queue's paused flag survives cancel();
+  // a stale pause silently swallows every later speak(). start() must
+  // resume() so the new utterance actually plays.
+  it("clears a stale global pause so the new utterance plays", () => {
+    synth.paused = true;
+    engine.start(chunkOfWords(["hello"]));
+    expect(synth.resumeCount).toBeGreaterThan(0);
+    expect(synth.paused).toBe(false);
+    expect(synth.spoken).toHaveLength(1);
   });
 });
 
@@ -210,8 +227,16 @@ describe("TtsEngine.stop / pause / resume", () => {
 
   it("stop() cancels the synth", () => {
     engine.start(chunkOfWords(["a"]));
+    const cancelsAfterStart = synth.cancelCount;
     engine.stop();
-    expect(synth.cancelCount).toBe(1);
+    expect(synth.cancelCount).toBe(cancelsAfterStart + 1);
+  });
+
+  it("stop() while paused leaves the global queue un-wedged", () => {
+    engine.start(chunkOfWords(["a"]));
+    engine.pause();
+    engine.stop();
+    expect(synth.paused).toBe(false);
   });
 
   it("pause() pauses the synth", () => {
@@ -222,9 +247,10 @@ describe("TtsEngine.stop / pause / resume", () => {
 
   it("resume() resumes the synth", () => {
     engine.start(chunkOfWords(["a"]));
+    const resumesAfterStart = synth.resumeCount;
     engine.pause();
     engine.resume();
-    expect(synth.resumeCount).toBe(1);
+    expect(synth.resumeCount).toBe(resumesAfterStart + 1);
   });
 
   it("isSpeaking reflects synth.speaking", () => {
@@ -387,9 +413,10 @@ describe("TtsEngine setRate while speaking", () => {
     // Pretend we just heard a boundary at the start of "beta" (charIndex=6).
     synth.spoken[0].fireBoundary(6, 4);
 
+    const cancelsAfterStart = synth.cancelCount;
     engine.setRate(1.75);
     // Engine should have cancelled and re-spoken with the new rate.
-    expect(synth.cancelCount).toBe(1);
+    expect(synth.cancelCount).toBe(cancelsAfterStart + 1);
     expect(synth.spoken).toHaveLength(2);
     expect(synth.spoken[1].rate).toBe(1.75);
   });
@@ -413,8 +440,9 @@ describe("TtsEngine setRate while speaking", () => {
 
   it("does NOT restart when the new rate equals the current rate", () => {
     engine.start(chunkOfWords(["alpha"]), { rate: 1.5 });
+    const cancelsAfterStart = synth.cancelCount;
     engine.setRate(1.5);
-    expect(synth.cancelCount).toBe(0);
+    expect(synth.cancelCount).toBe(cancelsAfterStart);
     expect(synth.spoken).toHaveLength(1);
   });
 
@@ -448,17 +476,18 @@ describe("TtsEngine setRate debounce (rapid drag coalescing)", () => {
       const engine = makeEngine(synth, { restartDebounceMs: 60 });
       engine.start(chunkOfWords(["alpha", "beta", "gamma"]));
       synth.spoken[0].fireBoundary(0, 5);
+      const cancelsAfterStart = synth.cancelCount;
       // Simulate rapid slider drag.
       engine.setRate(1.5);
       engine.setRate(1.7);
       engine.setRate(2.0);
       engine.setRate(2.4);
       // Within the debounce window — no restart yet.
-      expect(synth.cancelCount).toBe(0);
+      expect(synth.cancelCount).toBe(cancelsAfterStart);
       expect(synth.spoken).toHaveLength(1);
       vi.advanceTimersByTime(80);
       // After window — exactly ONE restart, with the LAST rate.
-      expect(synth.cancelCount).toBe(1);
+      expect(synth.cancelCount).toBe(cancelsAfterStart + 1);
       expect(synth.spoken).toHaveLength(2);
       expect(synth.spoken[1].rate).toBe(2.4);
       engine.dispose();
@@ -501,13 +530,14 @@ describe("TtsEngine 10-second stall workaround (heartbeat)", () => {
 
   it("calls pause+resume on a heartbeat cadence while speaking", () => {
     engine.start(chunkOfWords(["a"]));
+    const resumesAfterStart = synth.resumeCount;
     expect(synth.pauseCount).toBe(0);
     vi.advanceTimersByTime(100);
     expect(synth.pauseCount).toBe(1);
-    expect(synth.resumeCount).toBe(1);
+    expect(synth.resumeCount).toBe(resumesAfterStart + 1);
     vi.advanceTimersByTime(100);
     expect(synth.pauseCount).toBe(2);
-    expect(synth.resumeCount).toBe(2);
+    expect(synth.resumeCount).toBe(resumesAfterStart + 2);
   });
 
   it("does NOT heartbeat after stop()", () => {

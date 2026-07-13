@@ -201,8 +201,13 @@ export class TtsEngine {
   ): void {
     if (this.currentUtt) {
       this.detachUtterance(this.currentUtt);
-      this.synth.cancel();
     }
+    // speechSynthesis is one global queue per window and its paused flag
+    // SURVIVES cancel(): once anything pauses it, every later speak() is
+    // queued silently and never plays. Always cancel + resume before
+    // speaking so a stale pause can't swallow this utterance.
+    this.synth.cancel();
+    this.synth.resume();
     this.stopHeartbeat();
 
     // Speak the sanitized text but keep the ORIGINAL in
@@ -213,7 +218,13 @@ export class TtsEngine {
     const utt = new this.UtteranceCtor(spokenText);
     utt.text = spokenText;
     utt.rate = rate;
-    if (voice) utt.voice = voice;
+    if (voice) {
+      utt.voice = voice;
+      // Keep lang consistent with the voice; with both unset Chromium
+      // resolves a platform "default" that on macOS can be a novelty
+      // voice (Albert) when the system voice is Siri.
+      utt.lang = voice.lang;
+    }
 
     this.currentChunk = chunk;
     this.currentUtt = utt;
@@ -236,6 +247,9 @@ export class TtsEngine {
     }
     if (this.currentUtt) this.detachUtterance(this.currentUtt);
     this.synth.cancel();
+    // Clear a latent pause (stop-while-paused) so the global queue isn't
+    // left wedged for the next speak() — see speakInternal.
+    this.synth.resume();
     this.currentUtt = null;
     this.currentChunk = null;
     this.currentVoice = null;
