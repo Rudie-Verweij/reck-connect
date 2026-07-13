@@ -47,6 +47,8 @@ describe("transcriptionSettings.coerce", () => {
         placeholderBlurPx: 9,
         onsetOpen: 0.03,
         onsetClose: 0.015,
+        commitWordCount: 5,
+        commitPauseMs: 800,
       },
     };
     expect(coerce(input)).toEqual(input);
@@ -63,14 +65,25 @@ describe("transcriptionSettings.coerce", () => {
     expect(a.showBlobs).toBe(true);
     expect(a.pillTheme).toBe("auto");
     expect(a.ghostMode).toBe("onset");
+    expect(a.commitWordCount).toBe(6);
+    expect(a.commitPauseMs).toBe(700);
     // Out-of-range numbers clamp; bad enums fall back.
     const clamped = coerce({
-      appearance: { crystallizeMs: 999999, tailFontPx: -5, pillTheme: "neon", settleMs: 10 },
+      appearance: {
+        crystallizeMs: 999999,
+        tailFontPx: -5,
+        pillTheme: "neon",
+        settleMs: 10,
+        commitWordCount: 99,
+        commitPauseMs: 10,
+      },
     }).appearance;
     expect(clamped.crystallizeMs).toBe(2000);
     expect(clamped.tailFontPx).toBe(9);
     expect(clamped.settleMs).toBe(80);
     expect(clamped.pillTheme).toBe("auto");
+    expect(clamped.commitWordCount).toBe(20);
+    expect(clamped.commitPauseMs).toBe(150);
   });
 
   it("defaults and sanitizes the mic offset", () => {

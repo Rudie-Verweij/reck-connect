@@ -29,8 +29,14 @@ export interface EngineHandlers {
    */
   onSpeechMs?: (ms: number) => void;
   /** A word ONSET was detected from the audio (Phase 2) — fires the instant a
-   *  word is spoken, before transcription. `count` is onsets this utterance. */
+   *  word is spoken, before transcription. `count` is onsets this utterance.
+   *  (Kept for the "estimate" ghost-mode fallback.) */
   onWordCount?: (count: number) => void;
+  /** A word onset with its stable `id` — the chunk model appends one blurred
+   *  segment per onset the instant a word starts. */
+  onWordOnset?: (id: number) => void;
+  /** The matching word ended (`durationMs` = its voiced span). */
+  onWordEnd?: (id: number, durationMs: number) => void;
   onError?: (message: string) => void;
   onStateChange?: (state: DictationState) => void;
 }
@@ -72,6 +78,10 @@ export class TranscriptionEngine {
     onOnset: (id) => {
       this.onsetCount = id;
       this.handlers.onWordCount?.(id);
+      this.handlers.onWordOnset?.(id);
+    },
+    onEnd: (id, durationMs) => {
+      this.handlers.onWordEnd?.(id, durationMs);
     },
   });
 

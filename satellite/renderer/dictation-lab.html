@@ -21,6 +21,16 @@
         --lab-text: #e8e4d8;
         --lab-muted: #9a978c;
         --lab-accent: #d98a3d;
+        /* Alias the app's control palette to the lab's, so the SHARED
+           .dict-ctrl-* component (appearanceControls.ts) renders native here.
+           These resolve at use time to whichever --lab-* the theme sets. */
+        --app-text: var(--lab-text);
+        --app-text-dim: var(--lab-text);
+        --app-text-muted: var(--lab-muted);
+        --app-border: var(--lab-border);
+        --app-bg-raised: var(--lab-panel);
+        --app-hover: rgba(127, 127, 127, 0.12);
+        --claude-orange: var(--lab-accent);
       }
       :root[data-theme="light"] {
         --lab-bg: #ece8dd;
@@ -245,7 +255,17 @@
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
-        margin-bottom: 4px;
+        margin-bottom: 8px;
+      }
+      /* Scroll container for the shared appearance controls, so every knob is
+         reachable regardless of window height. */
+      .lab-scroll {
+        max-height: calc(100vh - 220px);
+        overflow-y: auto;
+        padding-right: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
       }
       .lab-picker {
         display: flex;

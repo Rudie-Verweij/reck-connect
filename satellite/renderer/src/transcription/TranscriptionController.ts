@@ -8,6 +8,7 @@
 
 import { TranscriptionEngine, type DictationState } from "./TranscriptionEngine";
 import { DEFAULT_ONSET_CONFIG } from "./onsetDetector";
+import { addOnset, makeChunk, stepChunk, type ChunkState, type Segment } from "./chunkModel";
 import { DictationBar } from "./DictationBar";
 import { DeepgramProvider } from "./providers/DeepgramProvider";
 import { LocalWhisperProvider } from "./providers/LocalWhisperProvider";
@@ -37,6 +38,10 @@ export interface DictationUI {
   setTail(text: string): void;
   /** Words HEARD (by voice energy) but not yet transcribed — ghost blobs. */
   setPendingWords(count: number): void;
+  /** Phase-2 onset mode: the rolling sub-sentence chunk (blurred + crystallizing). */
+  setChunk(segments: readonly Segment[]): void;
+  /** Drop the whole chunk row. */
+  clearChunk(): void;
   setError(message: string): void;
 }
 
@@ -148,6 +153,14 @@ export class TranscriptionController {
   private lastTail = "";
   private heardWords = 0;
   private lastVoiceAt = 0;
+  // Phase-2 onset mode: the rolling chunk (blurred + crystallizing segments)
+  // and the latest stable/tail transcript we align onto it. Terminal text is
+  // committed phrase-by-phrase; `committedWords` (inside the chunk) is the
+  // transcript-word offset already sent to the prompt.
+  private chunk: ChunkState = makeChunk();
+  private stableText = "";
+  private tailText = "";
+  private finalPending = false;
   // Settle/batch buffers. The transcript and ghost updates arrive far too
   // fast to render each one (Deepgram interims many×/s, level ticks ~8×/s) —
   // that made the pill and prompt flicker "super messy". We coalesce the
@@ -165,15 +178,19 @@ export class TranscriptionController {
       // Stable text (safe to type) — buffered, flushed on the settle tick.
       onPartial: (t) => {
         this.pendingStable = t;
+        this.stableText = t;
       },
       // Unstable ghost tail — buffered; only the latest survives to the flush.
       onTail: (t) => {
         this.pendingTail = t;
         this.tailDirty = true;
+        this.tailText = t;
       },
       // The complete utterance — apply immediately (no reason to wait).
       onFinal: (t) => {
         this.pendingStable = t;
+        this.stableText = t;
+        this.finalPending = true;
         this.flushSettle();
       },
       onStatus: (s) => this.bar?.setStatus(s),
@@ -189,9 +206,13 @@ export class TranscriptionController {
           this.heardWords = Math.round((ms / 1000) * WORDS_PER_VOICED_SECOND);
         }
       },
-      onWordCount: (count) => {
-        // Phase 2: one placeholder per detected word onset — instant, accurate.
-        if (this.settings.appearance.ghostMode === "onset") this.heardWords = count;
+      onWordOnset: (id) => {
+        // Onset mode: append a blurred placeholder the INSTANT a word starts,
+        // and show it immediately (don't wait for the settle tick) — this is
+        // the "text always starts blurred" moment.
+        if (this.settings.appearance.ghostMode !== "onset") return;
+        this.chunk = addOnset(this.chunk, id);
+        this.bar?.setChunk(this.chunk.segments);
       },
       onError: (m) => {
         console.error("[dictation] error:", m);
@@ -269,12 +290,68 @@ export class TranscriptionController {
     this.bar?.setPendingWords(pending);
   }
 
-  /**
-   * Apply everything buffered since the last tick in one calm batch: the
-   * latest stable text into the prompt, the latest ghost tail into the pill,
-   * and a single blob recompute. Called on the settle interval and on final.
-   */
+  /** Batch the buffered updates on the settle tick. Onset mode drives the
+   *  crystallizing chunk; estimate mode is the legacy blob path. */
   private flushSettle(): void {
+    if (this.settings.appearance.ghostMode === "onset") this.flushOnset();
+    else this.flushEstimate();
+  }
+
+  /** Milliseconds since the last voiced chunk (∞ if we haven't heard any). */
+  private msSinceVoice(): number {
+    return this.lastVoiceAt > 0 ? performance.now() - this.lastVoiceAt : Number.POSITIVE_INFINITY;
+  }
+
+  private words(text: string): string[] {
+    const t = normalizeTranscript(text);
+    return t === "" ? [] : t.split(/\s+/);
+  }
+
+  /** Append committed phrase text to the terminal (never revised once sent). */
+  private commitToTerminal(text: string): void {
+    if (!this.target || text === "") return;
+    const sep = this.injectedText === "" ? "" : " ";
+    this.injectedText = this.injectedText + sep + text;
+    console.log(`[dictation] commit: +${JSON.stringify(sep + text)}`);
+    this.target.insert(sep + text);
+  }
+
+  /**
+   * Onset mode (Phase 2). Align the uncommitted transcript tail onto the chunk
+   * (words crystallize left→right in the pill), then commit the leading
+   * resolved run into the terminal once the chunk fills (commitWordCount) or
+   * the speaker pauses (commitPauseMs). On final, everything remaining lands.
+   */
+  private flushOnset(): void {
+    this.pendingStable = null;
+    this.tailDirty = false;
+    const a = this.settings.appearance;
+    const allWords = this.words(`${this.stableText} ${this.tailText}`);
+    const tailWords = allWords.slice(this.chunk.committedWords);
+
+    const { chunk, commits, cleared } = stepChunk(
+      this.chunk,
+      tailWords,
+      {
+        msSinceVoice: this.msSinceVoice(),
+        commitWordCount: a.commitWordCount,
+        commitPauseMs: a.commitPauseMs,
+        ghostResetMs: a.ghostResetMs,
+      },
+      this.finalPending,
+    );
+    for (const text of commits) this.commitToTerminal(text);
+    this.chunk = chunk;
+    this.finalPending = false;
+    if (cleared) this.bar?.clearChunk();
+    else this.bar?.setChunk(this.chunk.segments);
+  }
+
+  /**
+   * Estimate mode (legacy). Apply the latest stable text into the prompt, the
+   * latest ghost tail into the pill, and a single blob recompute.
+   */
+  private flushEstimate(): void {
     if (this.pendingStable !== null) {
       this.applyTranscript(this.pendingStable);
       this.pendingStable = null;
@@ -287,9 +364,7 @@ export class TranscriptionController {
       // Stale-ghost reset: still recording but quiet with nothing pending →
       // the last interim never resolved (a mismatch left words squatting).
       // Clear it so the pill doesn't hold phantom words.
-      const quietFor =
-        this.lastVoiceAt > 0 ? performance.now() - this.lastVoiceAt : Number.POSITIVE_INFINITY;
-      if (quietFor > this.settings.appearance.ghostResetMs) {
+      if (this.msSinceVoice() > this.settings.appearance.ghostResetMs) {
         this.lastTail = "";
         this.bar?.setTail("");
       }
@@ -318,6 +393,17 @@ export class TranscriptionController {
     this.tailDirty = false;
   }
 
+  /** Clear all per-utterance transcript/chunk state (start, cancel, idle). */
+  private resetUtteranceState(): void {
+    this.injectedText = "";
+    this.lastTail = "";
+    this.heardWords = 0;
+    this.chunk = makeChunk();
+    this.stableText = "";
+    this.tailText = "";
+    this.finalPending = false;
+  }
+
   private onStateChange(state: DictationState): void {
     // The lifecycle, narrated — when a state looks stuck, the console says
     // which transition never happened.
@@ -338,9 +424,7 @@ export class TranscriptionController {
       this.bar?.dispose();
       this.bar = null;
       this.target = null;
-      this.injectedText = "";
-      this.lastTail = "";
-      this.heardWords = 0;
+      this.resetUtteranceState();
     }
   }
 
@@ -377,9 +461,7 @@ export class TranscriptionController {
       this.settings.fluidMotion,
       this.settings.appearance,
     );
-    this.injectedText = "";
-    this.lastTail = "";
-    this.heardWords = 0;
+    this.resetUtteranceState();
     this.resetSettleBuffers();
     this.applyOnsetConfig();
     this.startSettleTimer();
@@ -407,9 +489,7 @@ export class TranscriptionController {
     this.bar?.dispose();
     this.bar = null;
     this.target = null;
-    this.injectedText = "";
-    this.lastTail = "";
-    this.heardWords = 0;
+    this.resetUtteranceState();
   }
 
   isActive(): boolean {

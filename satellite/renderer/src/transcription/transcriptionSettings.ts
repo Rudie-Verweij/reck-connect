@@ -110,6 +110,13 @@ export interface DictationAppearance {
   onsetOpen: number;
   /** Onset detection: RMS to end a word (hysteresis; below onsetOpen). */
   onsetClose: number;
+  /**
+   * Sub-sentence chunking: commit the pill's crystallized phrase into the
+   * terminal once it reaches this many words (a rolling ~sentence fragment).
+   */
+  commitWordCount: number;
+  /** …or after this much silence, whichever comes first (ms). */
+  commitPauseMs: number;
 }
 
 export const DEFAULT_APPEARANCE: DictationAppearance = {
@@ -127,6 +134,8 @@ export const DEFAULT_APPEARANCE: DictationAppearance = {
   placeholderBlurPx: 7,
   onsetOpen: 0.02,
   onsetClose: 0.012,
+  commitWordCount: 6,
+  commitPauseMs: 700,
 };
 
 export const DEFAULT_TRANSCRIPTION_SETTINGS: TranscriptionSettings = {
@@ -192,6 +201,8 @@ export function coerceAppearance(raw: unknown): DictationAppearance {
     placeholderBlurPx: coerceNum(raw.placeholderBlurPx, d.placeholderBlurPx, 0, 20),
     onsetOpen: coerceNum(raw.onsetOpen, d.onsetOpen, 0.001, 0.2),
     onsetClose: coerceNum(raw.onsetClose, d.onsetClose, 0.001, 0.2),
+    commitWordCount: Math.round(coerceNum(raw.commitWordCount, d.commitWordCount, 1, 20)),
+    commitPauseMs: coerceNum(raw.commitPauseMs, d.commitPauseMs, 150, 3000),
   };
 }
 

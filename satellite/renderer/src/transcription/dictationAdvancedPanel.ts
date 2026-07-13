@@ -1,14 +1,17 @@
 // Developer/testing panel opened by right-clicking the floating mic button.
 // Lets the user live-tune the dictation overlay's look (blur, timing, font,
-// blobs, theme) with immediate apply + persist. Mirrors the positioning,
-// clamping, and outside-click/Escape dismissal of languageMenu.ts so it feels
-// consistent with the existing mic context menu.
+// blobs, theme, chunking) with immediate apply + persist. The actual controls
+// are the SHARED `renderAppearanceControls` component — the exact same rows the
+// tuning lab uses — so tuning transfers 1:1. This file only owns the panel
+// chrome: header, footer, positioning, and outside-click/Escape dismissal
+// (mirrors languageMenu.ts so it feels like the mic context menu).
 
 import {
   coerceAppearance,
   DEFAULT_APPEARANCE,
   type DictationAppearance,
 } from "./transcriptionSettings";
+import { renderAppearanceControls } from "./appearanceControls";
 
 export interface AdvancedPanelOpts {
   current: DictationAppearance;
@@ -18,52 +21,6 @@ export interface AdvancedPanelOpts {
   onClose?: () => void;
 }
 
-/** A numeric range control's static config (label, bounds, step). */
-interface RangeFieldSpec {
-  key: NumericAppearanceKey;
-  label: string;
-  min: number;
-  max: number;
-  step: number;
-}
-
-/** Keys of DictationAppearance whose value is a number. */
-type NumericAppearanceKey =
-  | "crystallizeMs"
-  | "charStaggerMs"
-  | "blurStartPx"
-  | "blurRestPx"
-  | "settleMs"
-  | "ghostResetMs"
-  | "tailFontPx"
-  | "placeholderBlurPx"
-  | "onsetOpen"
-  | "onsetClose";
-
-const CRYSTALLIZE_FIELDS: readonly RangeFieldSpec[] = [
-  { key: "crystallizeMs", label: "Crystallize (ms)", min: 0, max: 2000, step: 1 },
-  { key: "charStaggerMs", label: "Char stagger (ms)", min: 0, max: 200, step: 1 },
-  { key: "blurStartPx", label: "Blur start (px)", min: 0, max: 20, step: 1 },
-  { key: "blurRestPx", label: "Blur rest (px)", min: 0, max: 8, step: 0.1 },
-  { key: "placeholderBlurPx", label: "Placeholder blur (px)", min: 0, max: 20, step: 1 },
-];
-
-const ONSET_FIELDS: readonly RangeFieldSpec[] = [
-  { key: "onsetOpen", label: "Onset open (RMS)", min: 0.002, max: 0.1, step: 0.001 },
-  { key: "onsetClose", label: "Onset close (RMS)", min: 0.002, max: 0.1, step: 0.001 },
-];
-
-const TIMING_FIELDS: readonly RangeFieldSpec[] = [
-  { key: "settleMs", label: "Settle (ms)", min: 80, max: 2000, step: 1 },
-  { key: "ghostResetMs", label: "Ghost reset (ms)", min: 300, max: 10000, step: 1 },
-];
-
-const LOOK_FIELDS: readonly RangeFieldSpec[] = [
-  { key: "tailFontPx", label: "Tail font (px)", min: 9, max: 28, step: 1 },
-];
-
-const PILL_THEMES: readonly DictationAppearance["pillTheme"][] = ["auto", "dark", "light"];
-
 /**
  * Open the panel with its BOTTOM edge at `y` and horizontally CENTERED on `x`
  * (the mouse position where "Advanced…" was clicked), so it grows upward from
@@ -72,9 +29,6 @@ const PILL_THEMES: readonly DictationAppearance["pillTheme"][] = ["auto", "dark"
 export function showDictationAdvancedPanel(x: number, y: number, opts: AdvancedPanelOpts): void {
   // One panel at a time.
   document.querySelector(".dictation-adv-panel")?.remove();
-
-  // Working copy — every control mutates this and we re-coerce on each change.
-  let state: DictationAppearance = coerceAppearance(opts.current);
 
   const panel = document.createElement("div");
   panel.className = "dictation-adv-panel";
@@ -101,173 +55,11 @@ export function showDictationAdvancedPanel(x: number, y: number, opts: AdvancedP
   body.className = "dictation-adv-body";
   panel.appendChild(body);
 
-  // Emit the (coerced) current state to the caller for live apply + persist.
-  const emit = (): void => {
-    state = coerceAppearance(state);
-    opts.onChange(state);
-  };
-
-  // Re-sync every control's DOM value from `state` (used by Reset).
-  const syncers: (() => void)[] = [];
-
-  const addSubHeading = (text: string): void => {
-    const h = document.createElement("div");
-    h.className = "dictation-adv-subhead";
-    h.textContent = text;
-    body.appendChild(h);
-  };
-
-  const addRangeField = (spec: RangeFieldSpec): void => {
-    const row = document.createElement("label");
-    row.className = "dictation-adv-row dictation-adv-range-row";
-
-    const labelWrap = document.createElement("span");
-    labelWrap.className = "dictation-adv-label";
-    const labelText = document.createElement("span");
-    labelText.textContent = spec.label;
-    const readout = document.createElement("span");
-    readout.className = "dictation-adv-readout";
-    labelWrap.append(labelText, readout);
-
-    const range = document.createElement("input");
-    range.type = "range";
-    range.className = "dictation-adv-range";
-    range.min = String(spec.min);
-    range.max = String(spec.max);
-    range.step = String(spec.step);
-
-    // Decimals to show = derived from the step (0.001 → 3, 0.1 → 1, 1 → 0).
-    const decimals = spec.step < 1 ? Math.max(1, Math.ceil(-Math.log10(spec.step))) : 0;
-    const fmt = (n: number): string => (decimals > 0 ? n.toFixed(decimals) : String(Math.round(n)));
-
-    const sync = (): void => {
-      const v = state[spec.key];
-      range.value = String(v);
-      readout.textContent = fmt(v);
-    };
-    sync();
-    syncers.push(sync);
-
-    range.addEventListener("input", () => {
-      const raw = Number(range.value);
-      const v = Number.isFinite(raw) ? raw : DEFAULT_APPEARANCE[spec.key];
-      state = { ...state, [spec.key]: v };
-      readout.textContent = fmt(v);
-      emit();
-    });
-
-    row.append(labelWrap, range);
-    body.appendChild(row);
-  };
-
-  const addCheckboxField = (
-    key: "showBlobs" | "textOutline",
-    label: string,
-  ): void => {
-    const row = document.createElement("label");
-    row.className = "dictation-adv-row dictation-adv-check-row";
-
-    const labelText = document.createElement("span");
-    labelText.className = "dictation-adv-label";
-    labelText.textContent = label;
-
-    const check = document.createElement("input");
-    check.type = "checkbox";
-    check.className = "dictation-adv-check";
-
-    const sync = (): void => {
-      check.checked = state[key];
-    };
-    sync();
-    syncers.push(sync);
-
-    check.addEventListener("change", () => {
-      state = { ...state, [key]: check.checked };
-      emit();
-    });
-
-    row.append(labelText, check);
-    body.appendChild(row);
-  };
-
-  const addThemeField = (): void => {
-    const row = document.createElement("label");
-    row.className = "dictation-adv-row dictation-adv-select-row";
-
-    const labelText = document.createElement("span");
-    labelText.className = "dictation-adv-label";
-    labelText.textContent = "Pill theme";
-
-    const select = document.createElement("select");
-    select.className = "dictation-adv-select";
-    for (const theme of PILL_THEMES) {
-      const option = document.createElement("option");
-      option.value = theme;
-      option.textContent = theme;
-      select.appendChild(option);
-    }
-
-    const sync = (): void => {
-      select.value = state.pillTheme;
-    };
-    sync();
-    syncers.push(sync);
-
-    select.addEventListener("change", () => {
-      const v = select.value;
-      const pillTheme: DictationAppearance["pillTheme"] =
-        v === "dark" || v === "light" ? v : "auto";
-      state = { ...state, pillTheme };
-      emit();
-    });
-
-    row.append(labelText, select);
-    body.appendChild(row);
-  };
-
-  const addGhostModeField = (): void => {
-    const row = document.createElement("label");
-    row.className = "dictation-adv-row dictation-adv-select-row";
-    const labelText = document.createElement("span");
-    labelText.className = "dictation-adv-label";
-    labelText.textContent = "Ghost mode";
-    const select = document.createElement("select");
-    select.className = "dictation-adv-select";
-    for (const mode of ["onset", "estimate"] as const) {
-      const option = document.createElement("option");
-      option.value = mode;
-      option.textContent = mode;
-      select.appendChild(option);
-    }
-    const sync = (): void => {
-      select.value = state.ghostMode;
-    };
-    sync();
-    syncers.push(sync);
-    select.addEventListener("change", () => {
-      state = { ...state, ghostMode: select.value === "estimate" ? "estimate" : "onset" };
-      emit();
-    });
-    row.append(labelText, select);
-    body.appendChild(row);
-  };
-
-  // --- Build groups ---
-  addSubHeading("Crystallize");
-  for (const spec of CRYSTALLIZE_FIELDS) addRangeField(spec);
-
-  addSubHeading("Word detection");
-  addGhostModeField();
-  for (const spec of ONSET_FIELDS) addRangeField(spec);
-
-  addSubHeading("Timing");
-  for (const spec of TIMING_FIELDS) addRangeField(spec);
-
-  addSubHeading("Look");
-  for (const spec of LOOK_FIELDS) addRangeField(spec);
-  addCheckboxField("showBlobs", "Show word placeholders");
-  addThemeField();
-  addCheckboxField("textOutline", "Text outline");
+  // The shared controls — identical to the lab's. Coerce + emit on every change.
+  const controls = renderAppearanceControls(body, {
+    current: coerceAppearance(opts.current),
+    onChange: (next) => opts.onChange(next),
+  });
 
   // Link to the full tuning lab (replayable timelines + every knob).
   const labRow = document.createElement("div");
@@ -292,9 +84,9 @@ export function showDictationAdvancedPanel(x: number, y: number, opts: AdvancedP
   resetBtn.className = "dictation-adv-btn dictation-adv-btn-ghost";
   resetBtn.textContent = "Reset to defaults";
   resetBtn.addEventListener("click", () => {
-    state = { ...DEFAULT_APPEARANCE };
-    for (const sync of syncers) sync();
-    emit();
+    const next = { ...DEFAULT_APPEARANCE };
+    controls.setAll(next);
+    opts.onChange(next);
   });
 
   const doneBtn = document.createElement("button");

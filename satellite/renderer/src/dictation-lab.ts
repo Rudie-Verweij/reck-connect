@@ -12,6 +12,8 @@
 import "./styles.css";
 import { DictationBar } from "./transcription/DictationBar";
 import type { DictationState } from "./transcription/TranscriptionEngine";
+import { addOnset, makeChunk, stepChunk, type ChunkState } from "./transcription/chunkModel";
+import { renderAppearanceControls } from "./transcription/appearanceControls";
 import {
   DEFAULT_APPEARANCE,
   coerceAppearance,
@@ -19,239 +21,198 @@ import {
 } from "./transcription/transcriptionSettings";
 
 // ---------------------------------------------------------------------------
-// Timeline model
+// Script model — a spoken utterance as timed word events
 // ---------------------------------------------------------------------------
 
-/** One scheduled instruction fed to the DictationBar at time `atMs`. */
-type Step =
-  | { atMs: number; kind: "state"; state: DictationState }
-  | { atMs: number; kind: "level"; level: number }
-  | { atMs: number; kind: "pending"; count: number }
-  | { atMs: number; kind: "tail"; text: string }
-  | { atMs: number; kind: "commit"; text: string };
-
-interface Timeline {
-  steps: Step[];
-  durationMs: number;
-}
-
-/** A single spoken word's lifecycle in the simulation. */
-interface WordSpec {
+/** One spoken word's timeline in the simulation. */
+interface LabWord {
   /** Final, correct spelling (what lands in the prompt). */
   final: string;
-  /** When its onset is "heard" — a ghost blob appears. */
+  /** ms: the onset is "heard" → a blurred blob appears instantly. */
   onset: number;
-  /** When it enters the crystallizing ghost tail. */
-  enter: number;
-  /** When it leaves the tail and commits into the prompt line. */
-  commit: number;
+  /** ms: transcription resolves the word → it crystallizes (interim or final). */
+  resolveAt: number;
   /** Optional wrong interim spelling, shown until `correctAt`. */
   interim?: string;
-  /** When the interim spelling is revised to `final` (crystallize-on-revision). */
+  /** ms: the interim is revised to `final` (re-crystallize on revision). */
   correctAt?: number;
 }
 
-interface ScriptSpec {
+interface LabScript {
   id: string;
   name: string;
-  /** "preparing" (model-load) duration before listening starts. */
+  /** "preparing" (model-load) time before listening starts. */
   prepMs: number;
-  /** Final "transcribing" tail duration before returning to idle. */
-  transcribeMs: number;
-  words: WordSpec[];
+  words: LabWord[];
 }
 
 /** Steady-cadence word layout — models even speech. */
 function layout(
   phrase: string,
-  opts: { start: number; gap: number; tailLead: number; commitLag: number },
-): WordSpec[] {
+  opts: { start: number; gap: number; resolveLag: number },
+): LabWord[] {
   return phrase.split(" ").map((final, i) => {
     const onset = opts.start + i * opts.gap;
-    const enter = onset + opts.tailLead;
-    return { final, onset, enter, commit: enter + opts.commitLag };
+    return { final, onset, resolveAt: onset + opts.resolveLag };
   });
 }
 
 // --- The hand-authored scripts --------------------------------------------
 
-function shortPhraseScript(): ScriptSpec {
+function shortPhraseScript(): LabScript {
   return {
     id: "short",
     name: "Short phrase",
     prepMs: 250,
-    transcribeMs: 380,
-    words: layout("list the open files", {
-      start: 300,
-      gap: 240,
-      tailLead: 200,
-      commitLag: 460,
-    }),
+    words: layout("list the open files", { start: 300, gap: 240, resolveLag: 220 }),
   };
 }
 
-function longSentenceScript(): ScriptSpec {
+function longSentenceScript(): LabScript {
   return {
     id: "long",
     name: "Long sentence",
     prepMs: 320,
-    transcribeMs: 520,
     words: layout(
       "please refactor the authentication module and add unit tests for the token refresh path",
-      { start: 360, gap: 250, tailLead: 190, commitLag: 560 },
+      { start: 360, gap: 250, resolveLag: 200 },
     ),
   };
 }
 
-function noisyRevisingScript(): ScriptSpec {
-  // Slower, laggier speech with two spots where the interim guess is wrong
-  // and later revised — exercising the crystallize-on-revision path (the tail
-  // rebuilds the changed suffix, re-animating only the corrected words).
+function noisyRevisingScript(): LabScript {
+  // Slower, laggier speech with two spots where the interim guess is wrong and
+  // later revised — exercising the re-crystallize-on-revision path (only the
+  // corrected word re-animates).
   const words = layout("fix the auth bug in the login flow", {
     start: 340,
     gap: 300,
-    tailLead: 230,
-    commitLag: 720,
+    resolveLag: 260,
   });
-  // "auth" is first heard as "aurth", then corrected while still in the tail.
-  const auth = words[2];
-  auth.interim = "aurth";
-  auth.correctAt = auth.enter + 360;
-  auth.commit = auth.correctAt + 520;
+  // "auth" first heard as "aurth", corrected shortly after it resolves.
+  words[2].interim = "aurth";
+  words[2].correctAt = words[2].resolveAt + 360;
   // "login" first mis-heard as "log", corrected shortly after.
-  const login = words[6];
-  login.interim = "log";
-  login.correctAt = login.enter + 300;
-  login.commit = login.correctAt + 480;
-  return { id: "noisy", name: "Noisy / revising", prepMs: 300, transcribeMs: 560, words };
+  words[6].interim = "log";
+  words[6].correctAt = words[6].resolveAt + 300;
+  return { id: "noisy", name: "Noisy / revising", prepMs: 300, words };
 }
 
-const SCRIPTS: ScriptSpec[] = [
+const SCRIPTS: LabScript[] = [
   shortPhraseScript(),
   longSentenceScript(),
   noisyRevisingScript(),
 ];
 
-// --- Timeline compiler -----------------------------------------------------
+// --- Derived timing --------------------------------------------------------
 
-function tailAt(words: WordSpec[], t: number): string {
-  const parts: string[] = [];
-  for (const w of words) {
-    if (w.enter <= t && t < w.commit) {
-      const spell = w.interim !== undefined && (w.correctAt === undefined || t < w.correctAt)
-        ? w.interim
-        : w.final;
-      parts.push(spell);
-    }
-  }
-  return parts.join(" ");
+// Voiced window per word (ms) — used only to compute "silence since last word"
+// so the pause-flush (commitPauseMs) fires realistically between phrases.
+const VOICED_MS = 240;
+// Silence after the last word before the "transcribing" final pass runs. Long
+// enough that a trailing pause-flush commits the last phrase first.
+const FINAL_TAIL_MS = 1500;
+const IDLE_TAIL_MS = 400;
+
+interface Timing {
+  listenStart: number;
+  finalAt: number;
+  idleAt: number;
+  durationMs: number;
 }
 
-function committedAt(words: WordSpec[], t: number): string {
-  return words.filter((w) => w.commit <= t).map((w) => w.final).join(" ");
+function timingFor(script: LabScript): Timing {
+  const listenStart = script.prepMs;
+  const lastActivity = script.words.reduce(
+    (m, w) => Math.max(m, w.onset, w.resolveAt, w.correctAt ?? 0),
+    listenStart,
+  );
+  const finalAt = lastActivity + FINAL_TAIL_MS;
+  const idleAt = finalAt + IDLE_TAIL_MS;
+  return { listenStart, finalAt, idleAt, durationMs: idleAt + 200 };
 }
 
-/** Words heard (onset passed) but not yet showing in the tail — the blobs. */
-function pendingAt(words: WordSpec[], t: number): number {
-  return words.filter((w) => w.onset <= t && w.enter > t).length;
+/** The word's spelling at time `t` (interim until corrected), once resolved. */
+function spellingAt(w: LabWord, t: number): string {
+  return w.interim !== undefined && (w.correctAt === undefined || t < w.correctAt)
+    ? w.interim
+    : w.final;
+}
+
+/** Full transcript (all resolved words, current spelling) at time `t`. */
+function transcriptAt(words: LabWord[], t: number): string[] {
+  const out: string[] = [];
+  for (const w of words) if (w.resolveAt <= t) out.push(spellingAt(w, t));
+  return out;
+}
+
+/** End of the most recent voiced window at `t` (−∞ if none) — for msSinceVoice. */
+function voiceEndAt(words: LabWord[], t: number): number {
+  let end = Number.NEGATIVE_INFINITY;
+  for (const w of words) if (w.onset <= t) end = Math.max(end, w.onset + VOICED_MS);
+  return end;
 }
 
 /** Simulated mic level (0..0.5): bumps while each word is being voiced. */
-function levelAt(words: WordSpec[], t: number): number {
-  let level = 0.03;
+function levelAt(words: LabWord[], t: number): number {
+  let level = 0.04;
   for (const w of words) {
-    const center = (w.onset + w.enter) / 2;
-    const half = Math.max(90, (w.enter - w.onset) / 2 + 80);
+    const center = w.onset + VOICED_MS / 2;
+    const half = VOICED_MS / 2 + 90;
     const d = Math.abs(t - center);
-    if (d < half) {
-      const bump = (1 - d / half) * 0.42;
-      level = Math.max(level, 0.06 + bump);
-    }
+    if (d < half) level = Math.max(level, 0.07 + (1 - d / half) * 0.4);
   }
-  // A little jitter so the meter reads as live speech, not a smooth ramp.
   const jitter = (Math.sin(t / 47) + Math.sin(t / 91)) * 0.02;
   return Math.max(0, Math.min(0.5, level + jitter));
 }
 
-function compile(script: ScriptSpec): Timeline {
-  const steps: Step[] = [];
-  const listenStart = script.prepMs;
-  const lastCommit = Math.max(...script.words.map((w) => w.commit));
-  const listenEnd = lastCommit;
-  const transcribeStart = listenEnd;
-  const idleAt = transcribeStart + script.transcribeMs;
-
-  steps.push({ atMs: 0, kind: "state", state: "preparing" });
-  steps.push({ atMs: listenStart, kind: "state", state: "listening" });
-
-  // Sample tail / committed / pending on a 40ms grid, emitting only on change.
-  let lastTail = "";
-  let lastCommitted = "";
-  let lastPending = 0;
-  for (let t = listenStart; t <= listenEnd; t += 40) {
-    const tail = tailAt(script.words, t);
-    if (tail !== lastTail) {
-      steps.push({ atMs: t, kind: "tail", text: tail });
-      lastTail = tail;
-    }
-    const committed = committedAt(script.words, t);
-    if (committed !== lastCommitted) {
-      steps.push({ atMs: t, kind: "commit", text: committed });
-      lastCommitted = committed;
-    }
-    const pending = pendingAt(script.words, t);
-    if (pending !== lastPending) {
-      steps.push({ atMs: t, kind: "pending", count: pending });
-      lastPending = pending;
-    }
-  }
-
-  // Meter ticks (80ms) across the whole listening window.
-  for (let t = listenStart; t <= listenEnd; t += 80) {
-    steps.push({ atMs: t, kind: "level", level: levelAt(script.words, t) });
-  }
-
-  // Wrap-up: clear the tail/blobs, run the final "transcribing" pass, idle.
-  steps.push({ atMs: transcribeStart, kind: "state", state: "transcribing" });
-  steps.push({ atMs: transcribeStart, kind: "tail", text: "" });
-  steps.push({ atMs: transcribeStart, kind: "pending", count: 0 });
-  steps.push({ atMs: idleAt, kind: "state", state: "idle" });
-
-  steps.sort((a, b) => a.atMs - b.atMs);
-  return { steps, durationMs: idleAt + 200 };
+function phaseAt(t: number, tm: Timing): DictationState {
+  if (t < tm.listenStart) return "preparing";
+  if (t < tm.finalAt) return "listening";
+  if (t < tm.idleAt) return "transcribing";
+  return "idle";
 }
 
 // ---------------------------------------------------------------------------
-// Replay engine
+// Replay engine — drives the REAL chunk model + DictationBar (no fakes)
 // ---------------------------------------------------------------------------
 
 class ReplayEngine {
   private bar: DictationBar | null = null;
-  private timeline: Timeline;
-  private nextIdx = 0;
+  private script: LabScript;
+  private timing: Timing;
   private position = 0; // ms playhead
   private playing = false;
   private wallStart = 0;
   private raf = 0;
+
+  // Simulation state (reset on seek / rebuild).
+  private chunk: ChunkState = makeChunk();
   private committed = "";
+  private firedOnsets = 0;
+  private nextSettleAt = 0;
+  private finalDone = false;
+  private curPhase: DictationState | null = null;
 
   constructor(
     private readonly stage: HTMLElement,
     private appearance: DictationAppearance,
     private readonly onTick: (position: number, duration: number, playing: boolean) => void,
     private readonly onCommitted: (text: string) => void,
-    script: ScriptSpec,
+    script: LabScript,
   ) {
-    this.timeline = compile(script);
-    this.rebuildBar();
+    this.script = script;
+    this.timing = timingFor(script);
+    this.reset();
   }
 
   get durationMs(): number {
-    return this.timeline.durationMs;
+    return this.timing.durationMs;
   }
 
-  setScript(script: ScriptSpec): void {
-    this.timeline = compile(script);
+  setScript(script: LabScript): void {
+    this.script = script;
+    this.timing = timingFor(script);
     this.seek(0);
   }
 
@@ -260,63 +221,106 @@ class ReplayEngine {
     this.bar?.applyAppearance(a);
   }
 
-  private rebuildBar(): void {
+  private reset(): void {
     this.bar?.dispose();
     this.bar = new DictationBar(this.stage, "Whisper Base", true, this.appearance);
+    this.chunk = makeChunk();
     this.committed = "";
+    this.firedOnsets = 0;
+    this.nextSettleAt = this.timing.listenStart;
+    this.finalDone = false;
+    this.curPhase = null;
     this.onCommitted("");
   }
 
-  private applyStep(step: Step): void {
-    if (!this.bar) return;
-    switch (step.kind) {
-      case "state":
-        this.bar.setState(step.state);
-        break;
-      case "level":
-        this.bar.setLevel(step.level);
-        break;
-      case "pending":
-        this.bar.setPendingWords(step.count);
-        break;
-      case "tail":
-        this.bar.setTail(step.text);
-        break;
-      case "commit":
-        this.committed = step.text;
-        this.onCommitted(step.text);
-        break;
-    }
+  /** Keep the bar's coarse state (loader/meter/spinner) in sync with `t`. */
+  private ensurePhase(t: number): void {
+    const phase = phaseAt(t, this.timing);
+    if (phase === this.curPhase) return;
+    this.curPhase = phase;
+    this.bar?.setState(phase);
   }
 
-  /** Dispatch every step whose time has arrived, advancing the cursor. */
-  private dispatchUpTo(t: number): void {
-    const { steps } = this.timeline;
-    while (this.nextIdx < steps.length && steps[this.nextIdx].atMs <= t) {
-      this.applyStep(steps[this.nextIdx]);
-      this.nextIdx++;
+  /** Fire word onsets whose time has passed — instant blurred blobs. */
+  private fireOnsetsUpTo(t: number): void {
+    let fired = false;
+    while (
+      this.firedOnsets < this.script.words.length &&
+      this.script.words[this.firedOnsets].onset <= t
+    ) {
+      this.chunk = addOnset(this.chunk, this.firedOnsets + 1);
+      this.firedOnsets++;
+      fired = true;
+    }
+    if (fired) this.bar?.setChunk(this.chunk.segments);
+  }
+
+  /** One settle tick: align the tail, commit due phrases (the SAME stepChunk
+   *  the live controller runs), and render. */
+  private settleStep(ts: number): void {
+    const a = this.appearance;
+    const allWords = transcriptAt(this.script.words, ts);
+    const tailWords = allWords.slice(this.chunk.committedWords);
+    const final = ts >= this.timing.finalAt && !this.finalDone;
+    const msSinceVoice = ts - voiceEndAt(this.script.words, ts);
+    const { chunk, commits, cleared } = stepChunk(
+      this.chunk,
+      tailWords,
+      {
+        msSinceVoice,
+        commitWordCount: a.commitWordCount,
+        commitPauseMs: a.commitPauseMs,
+        ghostResetMs: a.ghostResetMs,
+      },
+      final,
+    );
+    if (commits.length > 0) {
+      this.committed = [this.committed, ...commits].filter((s) => s !== "").join(" ");
+      this.onCommitted(this.committed);
+    }
+    this.chunk = chunk;
+    if (final) this.finalDone = true;
+    if (cleared) this.bar?.clearChunk();
+    else this.bar?.setChunk(this.chunk.segments);
+  }
+
+  /** Advance the simulation deterministically to sim time `t`. */
+  private advanceTo(t: number): void {
+    const settle = Math.max(80, this.appearance.settleMs);
+    while (this.nextSettleAt <= t) {
+      this.ensurePhase(this.nextSettleAt);
+      this.fireOnsetsUpTo(this.nextSettleAt);
+      if (phaseAt(this.nextSettleAt, this.timing) !== "preparing") {
+        this.settleStep(this.nextSettleAt);
+      }
+      this.nextSettleAt += settle;
+    }
+    // Instant blobs for onsets between the last settle tick and now.
+    this.fireOnsetsUpTo(t);
+    this.ensurePhase(t);
+    if (this.bar && phaseAt(t, this.timing) === "listening") {
+      this.bar.setLevel(levelAt(this.script.words, t));
     }
   }
 
   private loop = (): void => {
     if (!this.playing) return;
     this.position = performance.now() - this.wallStart;
-    if (this.position >= this.timeline.durationMs) {
-      this.position = this.timeline.durationMs;
-      this.dispatchUpTo(this.position);
+    if (this.position >= this.timing.durationMs) {
+      this.position = this.timing.durationMs;
+      this.advanceTo(this.position);
       this.playing = false;
-      this.onTick(this.position, this.timeline.durationMs, false);
+      this.onTick(this.position, this.timing.durationMs, false);
       return;
     }
-    this.dispatchUpTo(this.position);
-    this.onTick(this.position, this.timeline.durationMs, true);
+    this.advanceTo(this.position);
+    this.onTick(this.position, this.timing.durationMs, true);
     this.raf = requestAnimationFrame(this.loop);
   };
 
   play(): void {
     if (this.playing) return;
-    // Reaching the end then hitting Play restarts from 0.
-    if (this.position >= this.timeline.durationMs) this.seek(0);
+    if (this.position >= this.timing.durationMs) this.seek(0);
     this.playing = true;
     this.wallStart = performance.now() - this.position;
     this.raf = requestAnimationFrame(this.loop);
@@ -325,7 +329,7 @@ class ReplayEngine {
   pause(): void {
     this.playing = false;
     cancelAnimationFrame(this.raf);
-    this.onTick(this.position, this.timeline.durationMs, false);
+    this.onTick(this.position, this.timing.durationMs, false);
   }
 
   replay(): void {
@@ -333,17 +337,16 @@ class ReplayEngine {
     this.play();
   }
 
-  /** Seek to `t` — rebuild the bar from scratch and fast-forward instantly. */
+  /** Seek to `t` — rebuild from scratch and re-simulate up to `t` (deterministic). */
   seek(t: number): void {
     const wasPlaying = this.playing;
     this.playing = false;
     cancelAnimationFrame(this.raf);
-    const clamped = Math.max(0, Math.min(t, this.timeline.durationMs));
-    this.rebuildBar();
-    this.nextIdx = 0;
+    const clamped = Math.max(0, Math.min(t, this.timing.durationMs));
+    this.reset();
     this.position = clamped;
-    this.dispatchUpTo(clamped);
-    this.onTick(this.position, this.timeline.durationMs, wasPlaying);
+    this.advanceTo(clamped);
+    this.onTick(this.position, this.timing.durationMs, wasPlaying);
     if (wasPlaying) this.play();
   }
 
@@ -354,163 +357,6 @@ class ReplayEngine {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Appearance-control descriptors
-// ---------------------------------------------------------------------------
-
-interface SliderDesc {
-  kind: "slider";
-  key: keyof DictationAppearance;
-  label: string;
-  help: string;
-  min: number;
-  max: number;
-  step: number;
-  unit: string;
-}
-interface CheckDesc {
-  kind: "check";
-  key: keyof DictationAppearance;
-  label: string;
-  help: string;
-}
-interface SelectDesc {
-  kind: "select";
-  key: keyof DictationAppearance;
-  label: string;
-  help: string;
-  options: string[];
-}
-type ControlDesc = SliderDesc | CheckDesc | SelectDesc;
-
-const CONTROLS: ControlDesc[] = [
-  {
-    kind: "slider",
-    key: "crystallizeMs",
-    label: "crystallizeMs",
-    help: "Per-character de-blur duration. Lower = each letter snaps sharp faster.",
-    min: 0,
-    max: 2000,
-    step: 10,
-    unit: "ms",
-  },
-  {
-    kind: "slider",
-    key: "charStaggerMs",
-    label: "charStaggerMs",
-    help: "Delay between successive letters de-blurring — the left→right sweep speed.",
-    min: 0,
-    max: 200,
-    step: 1,
-    unit: "ms",
-  },
-  {
-    kind: "slider",
-    key: "blurStartPx",
-    label: "blurStartPx",
-    help: "Starting blur of a fresh crystallizing char — how illegible it begins.",
-    min: 0,
-    max: 20,
-    step: 0.5,
-    unit: "px",
-  },
-  {
-    kind: "slider",
-    key: "blurRestPx",
-    label: "blurRestPx",
-    help: "Resting blur once crystallized — the lingering 'still a ghost' softness.",
-    min: 0,
-    max: 8,
-    step: 0.1,
-    unit: "px",
-  },
-  {
-    kind: "slider",
-    key: "placeholderBlurPx",
-    label: "placeholderBlurPx",
-    help: "Heavy blur of an unknown-word blob (▓ run) before it crystallizes into a word.",
-    min: 0,
-    max: 20,
-    step: 0.5,
-    unit: "px",
-  },
-  {
-    kind: "slider",
-    key: "tailFontPx",
-    label: "tailFontPx",
-    help: "Font size of the ghost-tail text.",
-    min: 9,
-    max: 28,
-    step: 1,
-    unit: "px",
-  },
-  {
-    kind: "slider",
-    key: "settleMs",
-    label: "settleMs",
-    help: "Live controller: how often buffered updates flush to the pill. (Replay is pre-baked, so this is captured in JSON but not re-timed here.)",
-    min: 80,
-    max: 2000,
-    step: 10,
-    unit: "ms",
-  },
-  {
-    kind: "slider",
-    key: "ghostResetMs",
-    label: "ghostResetMs",
-    help: "Live controller: clear stale ghost text after this much silence with nothing pending. (Captured in JSON; not exercised by the pre-baked replay.)",
-    min: 300,
-    max: 10000,
-    step: 100,
-    unit: "ms",
-  },
-  {
-    kind: "slider",
-    key: "onsetOpen",
-    label: "onsetOpen",
-    help: "Live mic: RMS energy to START a word (higher = needs louder speech). Not used in simulation.",
-    min: 0.001,
-    max: 0.2,
-    step: 0.001,
-    unit: "",
-  },
-  {
-    kind: "slider",
-    key: "onsetClose",
-    label: "onsetClose",
-    help: "Live mic: RMS energy to END a word (hysteresis, below onsetOpen). Not used in simulation.",
-    min: 0.001,
-    max: 0.2,
-    step: 0.001,
-    unit: "",
-  },
-  {
-    kind: "check",
-    key: "showBlobs",
-    label: "showBlobs",
-    help: "Show the leading 'words heard' blobs — the blurred cluster ahead of the text.",
-  },
-  {
-    kind: "check",
-    key: "textOutline",
-    label: "textOutline",
-    help: "Draw a contrast outline behind ghost text for legibility over any pane content.",
-  },
-  {
-    kind: "select",
-    key: "pillTheme",
-    label: "pillTheme",
-    help: "Pill background theme. 'auto' follows the app theme (toggle it on the left).",
-    options: ["auto", "dark", "light"],
-  },
-  {
-    kind: "select",
-    key: "ghostMode",
-    label: "ghostMode",
-    help: "How blobs are counted live: 'onset' = one per detected word onset; 'estimate' = voiced-time guess. (Simulation always models onsets.)",
-    options: ["onset", "estimate"],
-  },
-];
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -529,10 +375,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 function fmtTime(ms: number, total: number): string {
   return `${(ms / 1000).toFixed(1)}s / ${(total / 1000).toFixed(1)}s`;
-}
-
-function asNumber(v: DictationAppearance[keyof DictationAppearance]): number {
-  return typeof v === "number" ? v : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -672,89 +514,19 @@ function boot(): void {
   toolbar.append(copyBtn, resetBtn);
   ctrlCard.append(toolbar);
 
-  // Re-rendered whenever a full reset happens.
-  const fieldsHost = el("div");
-  ctrlCard.append(fieldsHost);
+  // The SHARED controls (identical to the app's Advanced panel), inside a
+  // scrollable container so every knob is reachable no matter the window height.
+  const scrollHost = el("div", "lab-scroll");
+  ctrlCard.append(scrollHost);
   rightCol.append(ctrlCard);
 
-  function applyLive(): void {
-    engine.setAppearance(appearance);
-  }
-
-  function update<K extends keyof DictationAppearance>(
-    key: K,
-    value: DictationAppearance[K],
-  ): void {
-    // Immutable update, then coerce so out-of-range values are clamped exactly
-    // as the real settings loader would clamp them.
-    appearance = coerceAppearance({ ...appearance, [key]: value });
-    applyLive();
-  }
-
-  function renderFields(): void {
-    fieldsHost.textContent = "";
-    for (const c of CONTROLS) {
-      if (c.kind === "slider") {
-        const field = el("div", "lab-field");
-        const top = el("div", "lab-field-top");
-        const label = el("label", undefined, c.label);
-        const val = el("span", "val");
-        top.append(label, val);
-        const input = el("input");
-        input.type = "range";
-        input.min = String(c.min);
-        input.max = String(c.max);
-        input.step = String(c.step);
-        const setVal = (n: number): void => {
-          val.textContent = `${n}${c.unit}`;
-        };
-        const cur = asNumber(appearance[c.key]);
-        input.value = String(cur);
-        setVal(cur);
-        input.addEventListener("input", () => {
-          const n = Number(input.value);
-          update(c.key, n as DictationAppearance[typeof c.key]);
-          setVal(asNumber(appearance[c.key]));
-        });
-        field.append(top, input, el("div", "help", c.help));
-        fieldsHost.append(field);
-      } else if (c.kind === "check") {
-        const field = el("div", "lab-field inline");
-        const left = el("div");
-        const input = el("input");
-        input.type = "checkbox";
-        input.checked = Boolean(appearance[c.key]);
-        const label = el("label", undefined, ` ${c.label}`);
-        const row = el("div", "lab-row");
-        row.append(input, label);
-        left.append(row, el("div", "help", c.help));
-        input.addEventListener("change", () => {
-          update(c.key, input.checked as DictationAppearance[typeof c.key]);
-        });
-        field.append(left);
-        fieldsHost.append(field);
-      } else {
-        const field = el("div", "lab-field");
-        const top = el("div", "lab-field-top");
-        top.append(el("label", undefined, c.label));
-        const select = el("select");
-        for (const o of c.options) {
-          const opt = el("option");
-          opt.value = o;
-          opt.textContent = o;
-          select.append(opt);
-        }
-        select.value = String(appearance[c.key]);
-        top.append(select);
-        select.addEventListener("change", () => {
-          update(c.key, select.value as DictationAppearance[typeof c.key]);
-        });
-        field.append(top, el("div", "help", c.help));
-        fieldsHost.append(field);
-      }
-    }
-  }
-  renderFields();
+  const ctrlHandle = renderAppearanceControls(scrollHost, {
+    current: appearance,
+    onChange: (next) => {
+      appearance = next;
+      engine.setAppearance(appearance);
+    },
+  });
 
   // --- Toolbar actions -----------------------------------------------------
   const toast = el("div", "lab-toast");
@@ -766,7 +538,7 @@ function boot(): void {
   }
 
   copyBtn.addEventListener("click", () => {
-    const json = JSON.stringify(appearance, null, 2);
+    const json = JSON.stringify(ctrlHandle.getValue(), null, 2);
     const done = (): void => showToast("Settings JSON copied");
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(json).then(done, () => fallbackCopy(json, done));
@@ -777,8 +549,8 @@ function boot(): void {
 
   resetBtn.addEventListener("click", () => {
     appearance = coerceAppearance(DEFAULT_APPEARANCE);
-    applyLive();
-    renderFields();
+    ctrlHandle.setAll(appearance);
+    engine.setAppearance(appearance);
     showToast("Reset to defaults");
   });
 }

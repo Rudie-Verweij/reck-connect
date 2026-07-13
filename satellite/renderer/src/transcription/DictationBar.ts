@@ -14,6 +14,7 @@ import { dictationFabFor } from "./micOverlay";
 import type { DictationState } from "./TranscriptionEngine";
 import type { DictationUI } from "./TranscriptionController";
 import type { TranscriberStatus } from "./providers/types";
+import type { Segment } from "./chunkModel";
 import { DEFAULT_APPEARANCE, type DictationAppearance } from "./transcriptionSettings";
 
 // Ring geometry (viewBox 28×28, r=10 → circumference ≈ 62.83).
@@ -34,6 +35,9 @@ export class DictationBar implements DictationUI {
   private readonly meterEl: HTMLElement;
   private readonly tailEl: HTMLElement;
   private readonly blobsEl: HTMLElement;
+  private readonly chunkEl: HTMLElement;
+  // Rendered chunk segments, keyed by id, so only new/changed words re-animate.
+  private readonly chunkNodes = new Map<number, { el: HTMLElement; text: string | null }>();
   private pendingWords = 0;
   private readonly bars: HTMLElement[] = [];
   private readonly levels: number[] = new Array(METER_BARS).fill(0);
@@ -110,9 +114,16 @@ export class DictationBar implements DictationUI {
     this.blobsEl.className = "dictation-blobs";
     this.blobsEl.setAttribute("aria-hidden", "true");
 
+    // Phase-2 chunk row: the rolling sub-sentence — a mix of blurred blobs
+    // (heard, not yet transcribed) and crystallizing words — that commits into
+    // the terminal phrase-by-phrase. Used in the default "onset" ghost mode;
+    // the separate tail/blobs above serve the legacy "estimate" mode.
+    this.chunkEl = document.createElement("span");
+    this.chunkEl.className = "dictation-chunk";
+
     this.liveEl = document.createElement("div");
     this.liveEl.className = "dictation-live";
-    this.liveEl.append(this.meterEl, this.tailEl, this.blobsEl);
+    this.liveEl.append(this.meterEl, this.tailEl, this.blobsEl, this.chunkEl);
 
     this.el.append(this.loaderEl, this.liveEl);
     // Prefer the floating mic's pill slot; fall back to the pane corner for
@@ -161,6 +172,7 @@ export class DictationBar implements DictationUI {
     if (state === "idle") {
       this.setTail("");
       this.setPendingWords(0);
+      this.clearChunk();
     }
     this.render();
   }
@@ -252,6 +264,80 @@ export class DictationBar implements DictationUI {
     }
     // While finishing up, placeholder changes should re-evaluate visibility.
     if (this.state === "transcribing") this.render();
+  }
+
+  /**
+   * Render the current chunk (Phase-2 onset mode): an ordered row of segments —
+   * blurred `▓` placeholders for heard-but-untranscribed words, and per-char
+   * crystallizing spans for resolved ones. Keyed by segment id so only new or
+   * revised words re-animate; unchanged words keep their settled node.
+   */
+  setChunk(segments: readonly Segment[]): void {
+    const seen = new Set<number>();
+    let prevEl: HTMLElement | null = null;
+    for (const seg of segments) {
+      seen.add(seg.id);
+      const entry = this.chunkNodes.get(seg.id);
+      // Rebuild when brand new, when the resolved word changed, or when a
+      // blurred placeholder just gained its word (null → text).
+      if (!entry || entry.text !== seg.text) {
+        const el = this.buildSegmentEl(seg);
+        if (entry) {
+          entry.el.replaceWith(el);
+        } else if (prevEl) {
+          prevEl.after(el);
+        } else {
+          this.chunkEl.prepend(el);
+        }
+        this.chunkNodes.set(seg.id, { el, text: seg.text });
+        prevEl = el;
+      } else {
+        prevEl = entry.el;
+      }
+    }
+    for (const [id, entry] of this.chunkNodes) {
+      if (!seen.has(id)) {
+        entry.el.remove();
+        this.chunkNodes.delete(id);
+      }
+    }
+  }
+
+  /** Build one segment's DOM: a blurred blob, or a crystallizing/plain word. */
+  private buildSegmentEl(seg: Segment): HTMLElement {
+    if (seg.text === null) {
+      const blob = document.createElement("span");
+      blob.className = "dictation-blob";
+      // Word-ish blurred glyph run with a little length variety from the id.
+      const len = 3 + ((Math.abs(seg.id) * 2) % 4);
+      blob.textContent = "▓".repeat(len);
+      return blob;
+    }
+    const word = document.createElement("span");
+    word.className = "dictation-chunk-word";
+    if (!this.fluidMotion || seg.state === "sharp") {
+      // Snappy mode, or an already-settled word — plain text, no (re)animation.
+      word.textContent = seg.text;
+      return word;
+    }
+    // Crystallize: the word is already blurred text that de-blurs left→right,
+    // first letter first (the delay resets per word so a burst doesn't stall).
+    let charIndex = 0;
+    for (const ch of [...seg.text]) {
+      const c = document.createElement("span");
+      c.className = "dictation-tail-char";
+      c.textContent = ch;
+      c.style.animationDelay = `${charIndex * this.appearance.charStaggerMs}ms`;
+      charIndex++;
+      word.appendChild(c);
+    }
+    return word;
+  }
+
+  /** Drop the whole chunk row (utterance ended or was committed+cleared). */
+  clearChunk(): void {
+    for (const entry of this.chunkNodes.values()) entry.el.remove();
+    this.chunkNodes.clear();
   }
 
   setError(message: string): void {

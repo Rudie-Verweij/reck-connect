@@ -2264,6 +2264,129 @@ html, body, #app {
   filter: brightness(1.05);
 }
 
+/* === Shared dictation appearance controls (.dict-ctrl-*) ===
+   ONE component rendered by BOTH the Advanced panel and the tuning lab
+   (appearanceControls.ts). Themed via the host's --app-* variables; the lab
+   aliases those to its own palette so the rows look native in either place. */
+.dict-ctrl-subhead {
+  margin-top: 10px;
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--claude-orange);
+}
+.dict-ctrl-subhead:first-child {
+  margin-top: 0;
+}
+.dict-ctrl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+.dict-ctrl-slider {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.dict-ctrl-labelrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dict-ctrl-check,
+.dict-ctrl-select {
+  justify-content: space-between;
+  cursor: pointer;
+}
+.dict-ctrl-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--app-text-dim);
+}
+.dict-ctrl-readout {
+  font-variant-numeric: tabular-nums;
+  color: var(--claude-orange);
+  font-weight: 600;
+}
+.dict-ctrl-range {
+  width: 100%;
+  accent-color: var(--claude-orange);
+  cursor: pointer;
+}
+.dict-ctrl-checkbox {
+  flex: 0 0 auto;
+  accent-color: var(--claude-orange);
+  cursor: pointer;
+}
+.dict-ctrl-selectbox {
+  flex: 0 0 auto;
+  background: var(--app-bg-raised);
+  color: var(--app-text);
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.dict-ctrl-selectbox:focus-visible {
+  outline: none;
+  border-color: var(--claude-orange);
+}
+/* The ℹ️ info affordance + its hover/focus tooltip. */
+.dict-ctrl-info {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--app-text-muted);
+  cursor: help;
+  opacity: 0.7;
+}
+.dict-ctrl-info:hover,
+.dict-ctrl-info:focus-visible {
+  opacity: 1;
+  color: var(--claude-orange);
+  outline: none;
+}
+.dict-ctrl-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 1200;
+  width: max-content;
+  max-width: 220px;
+  padding: 7px 9px;
+  background: var(--app-bg-raised);
+  color: var(--app-text);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: normal;
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.dict-ctrl-info:hover .dict-ctrl-tip,
+.dict-ctrl-info:focus-visible .dict-ctrl-tip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 /* === Startup splash (first paint → first project rendered) ===
    Seeded in index.html so it's on screen before any JS runs. Controlled
    by src/ui/startup-splash.ts as boot milestones complete. */
@@ -4450,6 +4573,32 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 }
 .dictation-blob:nth-child(2n) { animation-delay: 0.2s; }
 .dictation-blob:nth-child(3n) { animation-delay: 0.4s; }
+
+/* Phase-2 chunk row: the rolling sub-sentence in the pill — blurred blobs and
+   crystallizing words side by side, committing to the terminal phrase-by-phrase.
+   Reuses .dictation-blob and .dictation-tail-char for the two segment looks. */
+.dictation-chunk {
+  display: none;
+  align-items: baseline;
+  gap: 0.32em;
+  min-width: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--dict-tail-font, 13px);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dictation-chunk:not(:empty) {
+  display: inline-flex;
+}
+.dictation-chunk-word {
+  display: inline-block;
+  white-space: pre;
+}
+.dictation-bar.outline .dictation-chunk-word {
+  text-shadow: 0 0 3px var(--dict-outline, rgba(0, 0, 0, 0.75));
+}
 @keyframes dictation-blob-shimmer {
   0%, 100% { opacity: 0.42; }
   50% { opacity: 0.72; }
