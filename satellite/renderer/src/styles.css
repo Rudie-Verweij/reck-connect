@@ -2972,25 +2972,179 @@ html, body, #app {
 }
 
 .tts-control-bar .tts-rate-label {
+  appearance: none;
+  background: transparent;
+  border: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 1px 2px;
+  margin: 0;
+  border-radius: 4px;
   min-width: 32px;
   font-variant-numeric: tabular-nums;
   text-align: right;
   opacity: 0.85;
+  transition: opacity 160ms ease;
+}
+
+.tts-control-bar .tts-rate-label:hover {
+  opacity: 1;
+}
+
+.tts-control-bar .tts-rate-label[hidden] { display: none; }
+
+/* Slight, mellow pulse when the rate changes via the ± steppers or a
+   typed value — a soft scale-up that settles back. */
+.tts-control-bar .tts-rate-label.tts-rate-pulse {
+  animation: tts-rate-pulse 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes tts-rate-pulse {
+  0% { transform: scale(1); }
+  35% {
+    transform: scale(1.16);
+    color: var(--tts-control-accent, #60a5fa);
+    opacity: 1;
+  }
+  100% { transform: scale(1); }
+}
+
+/* Inline rate editor shown in place of the readout. */
+.tts-control-bar .tts-rate-input {
+  width: 44px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--tts-control-accent, #60a5fa);
+  border-radius: 4px;
+  padding: 0 4px;
+  text-align: right;
+  outline: none;
+}
+
+.tts-control-bar .tts-rate-input[hidden] { display: none; }
+
+/* ± rate steppers flanking the slider. */
+.tts-control-bar .tts-rate-step {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  min-width: 18px;
+  transition: transform 160ms ease;
+}
+
+.tts-control-bar .tts-rate-step:active {
+  transform: scale(0.88);
 }
 
 .tts-control-bar .tts-voice-label {
-  max-width: 120px;
+  appearance: none;
+  background: transparent;
+  border: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 140px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   opacity: 0.7;
   border-left: 1px solid var(--tts-control-border, rgba(255, 255, 255, 0.16));
-  padding-left: 8px;
+  border-radius: 4px;
+  padding: 2px 4px 2px 8px;
   margin-left: 2px;
 }
 
-.tts-control-bar .tts-voice-label:empty {
-  display: none;
+.tts-control-bar .tts-voice-label:hover,
+.tts-control-bar.tts-bar-expanded .tts-voice-label {
+  opacity: 1;
+}
+
+.tts-control-bar .tts-voice-caret {
+  font-size: 9px;
+  opacity: 0.8;
+}
+
+/* ── Voice picker: the bar "expands" into a two-column panel anchored
+   to its bottom edge — languages on the left, voices on the right. ── */
+.tts-control-bar .tts-voice-picker {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 11;
+  display: flex;
+  width: 320px;
+  max-height: 260px;
+  border-radius: 8px;
+  background: var(--tts-control-bg, rgba(30, 30, 32, 0.96));
+  border: 1px solid var(--tts-control-border, rgba(255, 255, 255, 0.16));
+  color: var(--tts-control-text, #f3f4f6);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  overflow: hidden;
+}
+
+.tts-control-bar .tts-voice-picker[hidden] { display: none; }
+
+.tts-voice-picker .tts-voice-langs {
+  flex: 0 0 118px;
+  overflow-y: auto;
+  border-right: 1px solid var(--tts-control-border, rgba(255, 255, 255, 0.16));
+  padding: 4px;
+}
+
+.tts-voice-picker .tts-voice-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.tts-voice-picker button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 4px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tts-voice-picker button:hover {
+  background: rgba(127, 127, 127, 0.18);
+}
+
+.tts-voice-picker .tts-voice-lang.is-active,
+.tts-voice-picker .tts-voice-option.is-selected {
+  background: var(--tts-control-accent, #60a5fa);
+  color: white;
+}
+
+.tts-voice-picker .tts-voice-count,
+.tts-voice-picker .tts-voice-region {
+  font-size: 10px;
+  opacity: 0.7;
+  flex: none;
+}
+
+.tts-voice-picker .tts-voice-auto {
+  font-style: italic;
+  margin-bottom: 2px;
 }
 
 /* Speak/TTS control bar inside the file viewer popup. Pinned TOP-right
