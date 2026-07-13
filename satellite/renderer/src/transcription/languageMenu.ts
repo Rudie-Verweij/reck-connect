@@ -10,8 +10,9 @@ export interface LanguageMenuProps {
   onPick: (code: string) => void;
   /** When set, adds a "Hide dictation button" item below Language. */
   onHide?: () => void;
-  /** When set, adds an "Advanced…" item (developer appearance panel). */
-  onAdvanced?: () => void;
+  /** When set, adds an "Advanced…" item. Receives the click position so the
+   *  panel can anchor its bottom-center there. */
+  onAdvanced?: (x: number, y: number) => void;
   /**
    * The mic button's rect. When given, the menu opens ABOVE the icon (aligned
    * to its left edge) rather than at the cursor — so it never covers the mic
@@ -99,9 +100,9 @@ export function showDictationContextMenu(x: number, y: number, props: LanguageMe
     advItem.type = "button";
     advItem.className = "dictation-menu-item";
     advItem.innerHTML = `<span>Advanced…</span>`;
-    advItem.addEventListener("click", () => {
+    advItem.addEventListener("click", (ev) => {
       cleanup();
-      props.onAdvanced?.();
+      props.onAdvanced?.(ev.clientX, ev.clientY);
     });
     advItem.addEventListener("mouseenter", () => {
       if (submenuOpen) {

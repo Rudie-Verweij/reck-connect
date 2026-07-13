@@ -98,17 +98,16 @@ export async function initTranscription(
         controller.updateSettings(next);
         void saveTranscriptionSettings(next);
       },
-      onAdvanced: () => {
-        // Anchor the panel ABOVE the mic so the live pill stays visible while
-        // dragging sliders. Auto-start dictation if idle so there's a live
-        // pill to preview against; stop it again when the panel closes (only
-        // if WE started it — don't cut off an in-progress dictation).
-        const anchorRect = micRect;
+      onAdvanced: (ax, ay) => {
+        // The panel anchors its bottom-center at the click point (ax, ay) —
+        // above the mic — so the live pill stays visible while dragging
+        // sliders. Auto-start dictation if idle so there's a live pill to
+        // preview against; stop it again when the panel closes (only if WE
+        // started it — don't cut off an in-progress dictation).
         const autoStarted = settings.enabled && !controller.isActive();
         if (autoStarted) void controller.toggle();
-        showDictationAdvancedPanel(menuX, menuY, {
+        showDictationAdvancedPanel(ax, ay, {
           current: controller.getSettings().appearance,
-          anchorRect,
           onChange: (appearance) => {
             // Live-apply to the running pill, then persist.
             controller.updateAppearance(appearance);

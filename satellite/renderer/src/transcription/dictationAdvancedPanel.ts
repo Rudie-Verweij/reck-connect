@@ -16,13 +16,6 @@ export interface AdvancedPanelOpts {
   onChange: (next: DictationAppearance) => void;
   /** Optional: called when the panel closes. */
   onClose?: () => void;
-  /**
-   * Optional anchor (the mic button's rect). When given, the panel is placed
-   * ABOVE the anchor so the live dictation pill (which sits at/next to the
-   * mic) stays visible while you drag the sliders. Falls back to below the
-   * anchor if there's no room above.
-   */
-  anchorRect?: { left: number; top: number; bottom: number };
 }
 
 /** A numeric range control's static config (label, bounds, step). */
@@ -62,6 +55,11 @@ const LOOK_FIELDS: readonly RangeFieldSpec[] = [
 
 const PILL_THEMES: readonly DictationAppearance["pillTheme"][] = ["auto", "dark", "light"];
 
+/**
+ * Open the panel with its BOTTOM edge at `y` and horizontally CENTERED on `x`
+ * (the mouse position where "Advanced…" was clicked), so it grows upward from
+ * the cursor and never covers the mic or the live pill below it.
+ */
 export function showDictationAdvancedPanel(x: number, y: number, opts: AdvancedPanelOpts): void {
   // One panel at a time.
   document.querySelector(".dictation-adv-panel")?.remove();
@@ -71,8 +69,9 @@ export function showDictationAdvancedPanel(x: number, y: number, opts: AdvancedP
 
   const panel = document.createElement("div");
   panel.className = "dictation-adv-panel";
-  panel.style.left = `${x}px`;
-  panel.style.top = `${y}px`;
+  // Off-screen first so measuring doesn't flash at (0,0).
+  panel.style.left = "-9999px";
+  panel.style.top = "-9999px";
 
   // --- Header (title + close button) ---
   const header = document.createElement("div");
@@ -253,30 +252,19 @@ export function showDictationAdvancedPanel(x: number, y: number, opts: AdvancedP
 
   document.body.appendChild(panel);
 
-  // Position. With an anchor (the mic), sit ABOVE it so the live pill stays
-  // visible; otherwise place at (x,y). Either way, clamp fully on screen.
+  // Position: bottom edge at `y`, centered on `x`, clamped fully on screen.
   const rect = panel.getBoundingClientRect();
   const margin = 8;
-  if (opts.anchorRect) {
-    const left = Math.min(
-      Math.max(margin, opts.anchorRect.left),
-      Math.max(margin, window.innerWidth - margin - rect.width),
-    );
-    const above = opts.anchorRect.top - margin - rect.height;
-    const top =
-      above >= margin
-        ? above
-        : Math.min(opts.anchorRect.bottom + margin, window.innerHeight - margin - rect.height);
-    panel.style.left = `${left}px`;
-    panel.style.top = `${Math.max(margin, top)}px`;
-  } else {
-    if (rect.right > window.innerWidth - margin) {
-      panel.style.left = `${Math.max(margin, window.innerWidth - margin - rect.width)}px`;
-    }
-    if (rect.bottom > window.innerHeight - margin) {
-      panel.style.top = `${Math.max(margin, window.innerHeight - margin - rect.height)}px`;
-    }
-  }
+  const left = Math.min(
+    Math.max(margin, x - rect.width / 2),
+    Math.max(margin, window.innerWidth - margin - rect.width),
+  );
+  const top = Math.min(
+    Math.max(margin, y - rect.height),
+    Math.max(margin, window.innerHeight - margin - rect.height),
+  );
+  panel.style.left = `${left}px`;
+  panel.style.top = `${top}px`;
 
   let closed = false;
   const cleanup = (): void => {
