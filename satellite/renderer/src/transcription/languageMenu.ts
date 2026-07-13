@@ -12,6 +12,12 @@ export interface LanguageMenuProps {
   onHide?: () => void;
   /** When set, adds an "Advanced…" item (developer appearance panel). */
   onAdvanced?: () => void;
+  /**
+   * The mic button's rect. When given, the menu opens ABOVE the icon (aligned
+   * to its left edge) rather than at the cursor — so it never covers the mic
+   * or the live pill. Falls back to below the icon if there's no room above.
+   */
+  anchorRect?: { left: number; top: number; bottom: number };
 }
 
 export function showDictationContextMenu(x: number, y: number, props: LanguageMenuProps): void {
@@ -108,10 +114,33 @@ export function showDictationContextMenu(x: number, y: number, props: LanguageMe
 
   document.body.appendChild(menu);
 
-  // Keep the root menu on screen.
+  // Position. With an anchor (the mic), open ABOVE the icon aligned to its
+  // left edge, so the menu never covers the mic or the live pill; fall back
+  // to below if there's no room above. Otherwise position at (x,y). Clamp on
+  // screen either way.
   const rect = menu.getBoundingClientRect();
-  if (rect.right > window.innerWidth - 8) menu.style.left = `${window.innerWidth - 8 - rect.width}px`;
-  if (rect.bottom > window.innerHeight - 8) menu.style.top = `${window.innerHeight - 8 - rect.height}px`;
+  const margin = 8;
+  if (props.anchorRect) {
+    const a = props.anchorRect;
+    const left = Math.min(
+      Math.max(margin, a.left),
+      Math.max(margin, window.innerWidth - margin - rect.width),
+    );
+    const above = a.top - margin - rect.height;
+    const top =
+      above >= margin
+        ? above
+        : Math.min(a.bottom + margin, window.innerHeight - margin - rect.height);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${Math.max(margin, top)}px`;
+  } else {
+    if (rect.right > window.innerWidth - margin) {
+      menu.style.left = `${window.innerWidth - margin - rect.width}px`;
+    }
+    if (rect.bottom > window.innerHeight - margin) {
+      menu.style.top = `${window.innerHeight - margin - rect.height}px`;
+    }
+  }
 
   const cleanup = (): void => {
     menu.remove();

@@ -86,8 +86,13 @@ export async function initTranscription(
     e.stopPropagation();
     const menuX = e.clientX;
     const menuY = e.clientY;
+    // The mic button's rect — both the menu and the Advanced panel anchor
+    // ABOVE it (not at the cursor) so nothing covers the mic or the pill.
+    const micBtn = mic.querySelector(".dictation-fab-btn") ?? mic;
+    const micRect = micBtn.getBoundingClientRect();
     showDictationContextMenu(menuX, menuY, {
       currentCode: controller.getSettings().language,
+      anchorRect: micRect,
       onPick: (code) => {
         const next = { ...controller.getSettings(), language: code };
         controller.updateSettings(next);
@@ -98,8 +103,7 @@ export async function initTranscription(
         // dragging sliders. Auto-start dictation if idle so there's a live
         // pill to preview against; stop it again when the panel closes (only
         // if WE started it — don't cut off an in-progress dictation).
-        const btn = mic.querySelector(".dictation-fab-btn") ?? mic;
-        const anchorRect = btn.getBoundingClientRect();
+        const anchorRect = micRect;
         const autoStarted = settings.enabled && !controller.isActive();
         if (autoStarted) void controller.toggle();
         showDictationAdvancedPanel(menuX, menuY, {
