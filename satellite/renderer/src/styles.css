@@ -2095,6 +2095,163 @@ html, body, #app {
   animation: dictation-menu-in 0.14s var(--ease-smooth) both;
 }
 
+/* === Advanced dictation appearance panel (right-click mic → Advanced) ===
+   Developer/testing panel that live-tunes the dictation overlay. Reuses the
+   context-menu look (raised bg, orange accents) but is a taller, scrollable
+   form of labeled range/checkbox/select rows. */
+.dictation-adv-panel {
+  position: fixed;
+  z-index: 1000;
+  width: 280px;
+  max-height: min(80vh, 640px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  color: var(--app-text);
+  transform-origin: top left;
+  animation: dictation-menu-in 0.16s var(--ease-smooth) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dictation-adv-panel {
+    animation: none !important;
+  }
+}
+.dictation-adv-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--app-bg-raised);
+  border-bottom: 1px solid var(--app-border);
+}
+.dictation-adv-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.dictation-adv-close {
+  background: transparent;
+  border: 0;
+  color: var(--app-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.dictation-adv-close:hover {
+  color: var(--app-text);
+  background: var(--app-hover);
+}
+.dictation-adv-body {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dictation-adv-subhead {
+  margin-top: 8px;
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--claude-orange);
+}
+.dictation-adv-subhead:first-child {
+  margin-top: 0;
+}
+.dictation-adv-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.dictation-adv-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--app-text-dim);
+}
+.dictation-adv-readout {
+  font-variant-numeric: tabular-nums;
+  color: var(--claude-orange);
+  font-weight: 600;
+}
+.dictation-adv-range-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.dictation-adv-range {
+  width: 100%;
+  accent-color: var(--claude-orange);
+  cursor: pointer;
+}
+.dictation-adv-check {
+  flex: 0 0 auto;
+  accent-color: var(--claude-orange);
+  cursor: pointer;
+}
+.dictation-adv-select {
+  flex: 0 0 auto;
+  background: var(--app-bg-raised);
+  color: var(--app-text);
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.dictation-adv-select:focus-visible {
+  outline: none;
+  border-color: var(--claude-orange);
+}
+.dictation-adv-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--app-bg-raised);
+  border-top: 1px solid var(--app-border);
+}
+.dictation-adv-btn {
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text-dim);
+}
+.dictation-adv-btn-ghost:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+.dictation-adv-btn-primary {
+  border-color: var(--claude-orange);
+  background: var(--claude-orange);
+  color: #fff;
+}
+.dictation-adv-btn-primary:hover {
+  filter: brightness(1.05);
+}
+
 /* === Startup splash (first paint → first project rendered) ===
    Seeded in index.html so it's on screen before any JS runs. Controlled
    by src/ui/startup-splash.ts as boot milestones complete. */
@@ -4000,11 +4157,22 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   gap: 8px;
   padding: 6px 14px;
   border-radius: 999px;
+  /* Default (dark) pill. Theme is data-pill: dark | light | auto. */
   background: rgba(20, 20, 19, 0.92);
   color: #f5f2ea;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  --dict-outline: rgba(0, 0, 0, 0.75);
   font-size: 12px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   pointer-events: none;
+}
+/* Explicit light pill, and auto-follow-app-theme when the app is in light. */
+.dictation-bar[data-pill="light"],
+:root[data-theme="light"] .dictation-bar[data-pill="auto"] {
+  background: rgba(247, 244, 237, 0.96);
+  color: #2a2927;
+  border-color: rgba(0, 0, 0, 0.1);
+  --dict-outline: rgba(255, 255, 255, 0.85);
 }
 .dictation-bar[hidden] { display: none; }
 
@@ -4190,9 +4358,9 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   align-items: baseline;
   gap: 0.32em;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 13px;
+  font-size: var(--dict-tail-font, 13px);
   font-style: italic;
-  color: rgba(245, 242, 234, 0.95);
+  color: inherit;
   /* Ghosted but READABLE — the blur says "not committed", ink stays legible.
      (Snappy mode renders plain text here; fluid mode fills it with word
      spans that carry their own blur, so keep this base subtle.) */
@@ -4202,6 +4370,10 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+/* Contrast outline so blurred ghost text stays legible over any content. */
+.dictation-bar.outline .dictation-tail {
+  text-shadow: 0 0 3px var(--dict-outline, rgba(0, 0, 0, 0.75));
 }
 .dictation-tail.has-text { display: inline-flex; }
 /* Fluid mode paints per-character spans that carry their own blur, so drop
@@ -4221,24 +4393,24 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 .dictation-tail-char {
   display: inline-block;
   white-space: pre;
-  animation: dictation-crystallize 0.55s var(--ease-smooth) both;
+  animation: dictation-crystallize var(--dict-crystallize-ms, 260ms) var(--ease-smooth) both;
 }
 @keyframes dictation-crystallize {
   from {
-    filter: blur(5px);
+    filter: blur(var(--dict-blur-start, 6px));
     opacity: 0.7;
   }
   to {
     /* Settles to soft-but-readable blurred text — still a ghost, not the
-       crisp committed prompt text. */
-    filter: blur(0.8px);
+       crisp committed prompt text. Both endpoints are live-tunable. */
+    filter: blur(var(--dict-blur-rest, 0.8px));
     opacity: 1;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .dictation-tail-char {
     animation: none;
-    filter: blur(0.8px);
+    filter: blur(var(--dict-blur-rest, 0.8px));
   }
 }
 /* Ghost word-blobs: one per word HEARD (voice energy) but not yet

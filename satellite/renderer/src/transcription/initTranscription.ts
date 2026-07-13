@@ -9,6 +9,7 @@ import {
   type DictationSession,
 } from "./TranscriptionController";
 import { showDictationContextMenu } from "./languageMenu";
+import { showDictationAdvancedPanel } from "./dictationAdvancedPanel";
 import { setDictationFabsVisible } from "./micOverlay";
 import { installTranscriptionShortcuts } from "./transcriptionShortcuts";
 import {
@@ -83,12 +84,24 @@ export async function initTranscription(
     if (!mic) return;
     e.preventDefault();
     e.stopPropagation();
-    showDictationContextMenu(e.clientX, e.clientY, {
+    const menuX = e.clientX;
+    const menuY = e.clientY;
+    showDictationContextMenu(menuX, menuY, {
       currentCode: controller.getSettings().language,
       onPick: (code) => {
         const next = { ...controller.getSettings(), language: code };
         controller.updateSettings(next);
         void saveTranscriptionSettings(next);
+      },
+      onAdvanced: () => {
+        showDictationAdvancedPanel(menuX, menuY, {
+          current: controller.getSettings().appearance,
+          onChange: (appearance) => {
+            // Live-apply to the running pill, then persist.
+            controller.updateAppearance(appearance);
+            void saveTranscriptionSettings({ ...controller.getSettings(), appearance });
+          },
+        });
       },
       onHide: () => {
         void (async () => {

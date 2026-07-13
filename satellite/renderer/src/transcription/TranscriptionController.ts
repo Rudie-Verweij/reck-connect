@@ -15,6 +15,7 @@ import {
   EMBEDDED_MODELS,
   embeddedModelRepo,
   loadTranscriptionSettings,
+  type DictationAppearance,
   type TranscriptionSettings,
 } from "./transcriptionSettings";
 
@@ -61,10 +62,6 @@ const ACTIVE_FLOOR_BLOBS = 2;
 // blobs drain at the end of an utterance instead of squatting (kept short so
 // the ghosts don't linger after you stop talking).
 const SILENCE_RECONCILE_MS = 800;
-// How often the buffered transcript + ghost updates are flushed to the UI.
-// ~half a second reads as "words settling in batches" rather than a jittery
-// stream — the cadence the messy per-event rendering was missing.
-const SETTLE_INTERVAL_MS = 450;
 
 function wordCount(text: string): number {
   return text.trim() === "" ? 0 : text.trim().split(/\s+/).length;
@@ -278,13 +275,26 @@ export class TranscriptionController {
       this.lastTail = this.pendingTail;
       this.bar?.setTail(this.pendingTail);
       this.tailDirty = false;
+    } else if (this.lastTail !== "" && this.engine.getState() === "listening") {
+      // Stale-ghost reset: still recording but quiet with nothing pending →
+      // the last interim never resolved (a mismatch left words squatting).
+      // Clear it so the pill doesn't hold phantom words.
+      const quietFor =
+        this.lastVoiceAt > 0 ? performance.now() - this.lastVoiceAt : Number.POSITIVE_INFINITY;
+      if (quietFor > this.settings.appearance.ghostResetMs) {
+        this.lastTail = "";
+        this.bar?.setTail("");
+      }
     }
     this.syncGhosts();
   }
 
   private startSettleTimer(): void {
     this.stopSettleTimer();
-    this.settleTimer = window.setInterval(() => this.flushSettle(), SETTLE_INTERVAL_MS);
+    this.settleTimer = window.setInterval(
+      () => this.flushSettle(),
+      this.settings.appearance.settleMs,
+    );
   }
 
   private stopSettleTimer(): void {
@@ -353,7 +363,12 @@ export class TranscriptionController {
       return;
     }
     this.target = session.target;
-    this.bar = new DictationBar(session.surface, this.modelLabel(), this.settings.fluidMotion);
+    this.bar = new DictationBar(
+      session.surface,
+      this.modelLabel(),
+      this.settings.fluidMotion,
+      this.settings.appearance,
+    );
     this.injectedText = "";
     this.lastTail = "";
     this.heardWords = 0;
@@ -411,6 +426,17 @@ export class TranscriptionController {
   /** Current settings snapshot (the language menu reads + rewrites these). */
   getSettings(): TranscriptionSettings {
     return this.settings;
+  }
+
+  /**
+   * Live-apply the appearance knobs (from the Advanced panel): update the
+   * running pill immediately and re-time the settle loop to the new cadence.
+   * Caller persists.
+   */
+  updateAppearance(next: DictationAppearance): void {
+    this.settings = { ...this.settings, appearance: next };
+    this.bar?.applyAppearance(next);
+    if (this.settleTimer !== null) this.startSettleTimer();
   }
 
   dispose(): void {

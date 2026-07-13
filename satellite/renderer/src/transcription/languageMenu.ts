@@ -10,6 +10,8 @@ export interface LanguageMenuProps {
   onPick: (code: string) => void;
   /** When set, adds a "Hide dictation button" item below Language. */
   onHide?: () => void;
+  /** When set, adds an "Advanced…" item (developer appearance panel). */
+  onAdvanced?: () => void;
 }
 
 export function showDictationContextMenu(x: number, y: number, props: LanguageMenuProps): void {
@@ -84,6 +86,24 @@ export function showDictationContextMenu(x: number, y: number, props: LanguageMe
       }
     });
     menu.appendChild(hideItem);
+  }
+
+  if (props.onAdvanced) {
+    const advItem = document.createElement("button");
+    advItem.type = "button";
+    advItem.className = "dictation-menu-item";
+    advItem.innerHTML = `<span>Advanced…</span>`;
+    advItem.addEventListener("click", () => {
+      cleanup();
+      props.onAdvanced?.();
+    });
+    advItem.addEventListener("mouseenter", () => {
+      if (submenuOpen) {
+        submenuOpen = false;
+        submenu.remove();
+      }
+    });
+    menu.appendChild(advItem);
   }
 
   document.body.appendChild(menu);

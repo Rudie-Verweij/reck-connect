@@ -67,7 +67,50 @@ export interface TranscriptionSettings {
    * they firm up, instead of hard-popping. Purely cosmetic; off = snappy.
    */
   fluidMotion: boolean;
+  /** Live-tunable dictation-overlay appearance (the "Advanced" panel). */
+  appearance: DictationAppearance;
 }
+
+/**
+ * View-only knobs for the dictation overlay. All are tweakable live from the
+ * right-click "Advanced" panel and persisted, so the look can be tuned by
+ * feel rather than by editing code.
+ */
+export interface DictationAppearance {
+  /** De-blur duration per character (ms). Lower = snappier crystallize. */
+  crystallizeMs: number;
+  /** Delay between successive characters (ms) — the left→right sweep speed. */
+  charStaggerMs: number;
+  /** Starting blur of a fresh ghost char (px) — how illegible it begins. */
+  blurStartPx: number;
+  /** Resting blur once crystallized (px) — the "still a ghost" softness. */
+  blurRestPx: number;
+  /** How often buffered updates flush to the UI (ms). */
+  settleMs: number;
+  /** Clear stale ghost text after this much silence with nothing pending (ms). */
+  ghostResetMs: number;
+  /** Ghost-tail font size (px). */
+  tailFontPx: number;
+  /** Show the leading "words heard" blobs (the orange cluster). */
+  showBlobs: boolean;
+  /** Pill background theme. "auto" follows the app theme. */
+  pillTheme: "auto" | "dark" | "light";
+  /** Draw a contrast outline behind ghost text (legibility over any content). */
+  textOutline: boolean;
+}
+
+export const DEFAULT_APPEARANCE: DictationAppearance = {
+  crystallizeMs: 260,
+  charStaggerMs: 14,
+  blurStartPx: 6,
+  blurRestPx: 0.8,
+  settleMs: 300,
+  ghostResetMs: 1200,
+  tailFontPx: 13,
+  showBlobs: false,
+  pillTheme: "auto",
+  textOutline: true,
+};
 
 export const DEFAULT_TRANSCRIPTION_SETTINGS: TranscriptionSettings = {
   enabled: true,
@@ -80,6 +123,7 @@ export const DEFAULT_TRANSCRIPTION_SETTINGS: TranscriptionSettings = {
   showMicButton: true,
   micOffset: { dx: 14, dy: 14 },
   fluidMotion: true,
+  appearance: { ...DEFAULT_APPEARANCE },
 };
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -104,6 +148,32 @@ function coerceBool(v: unknown, fallback: boolean): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
 
+function coerceNum(v: unknown, fallback: number, min: number, max: number): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  return Math.min(max, Math.max(min, v));
+}
+
+function coercePillTheme(v: unknown): DictationAppearance["pillTheme"] {
+  return v === "dark" || v === "light" ? v : "auto";
+}
+
+export function coerceAppearance(raw: unknown): DictationAppearance {
+  const d = DEFAULT_APPEARANCE;
+  if (!isPlainObject(raw)) return { ...d };
+  return {
+    crystallizeMs: coerceNum(raw.crystallizeMs, d.crystallizeMs, 0, 2000),
+    charStaggerMs: coerceNum(raw.charStaggerMs, d.charStaggerMs, 0, 200),
+    blurStartPx: coerceNum(raw.blurStartPx, d.blurStartPx, 0, 20),
+    blurRestPx: coerceNum(raw.blurRestPx, d.blurRestPx, 0, 8),
+    settleMs: coerceNum(raw.settleMs, d.settleMs, 80, 2000),
+    ghostResetMs: coerceNum(raw.ghostResetMs, d.ghostResetMs, 300, 10000),
+    tailFontPx: coerceNum(raw.tailFontPx, d.tailFontPx, 9, 28),
+    showBlobs: coerceBool(raw.showBlobs, d.showBlobs),
+    pillTheme: coercePillTheme(raw.pillTheme),
+    textOutline: coerceBool(raw.textOutline, d.textOutline),
+  };
+}
+
 export function coerce(raw: unknown): TranscriptionSettings {
   if (!isPlainObject(raw)) return { ...DEFAULT_TRANSCRIPTION_SETTINGS };
   return {
@@ -122,6 +192,7 @@ export function coerce(raw: unknown): TranscriptionSettings {
     showMicButton: coerceBool(raw.showMicButton, DEFAULT_TRANSCRIPTION_SETTINGS.showMicButton),
     micOffset: coerceOffset(raw.micOffset),
     fluidMotion: coerceBool(raw.fluidMotion, DEFAULT_TRANSCRIPTION_SETTINGS.fluidMotion),
+    appearance: coerceAppearance(raw.appearance),
   };
 }
 

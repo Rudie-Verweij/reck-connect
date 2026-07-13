@@ -14,6 +14,7 @@ import { dictationFabFor } from "./micOverlay";
 import type { DictationState } from "./TranscriptionEngine";
 import type { DictationUI } from "./TranscriptionController";
 import type { TranscriberStatus } from "./providers/types";
+import { DEFAULT_APPEARANCE, type DictationAppearance } from "./transcriptionSettings";
 
 // Ring geometry (viewBox 28×28, r=10 → circumference ≈ 62.83).
 const RING_R = 10;
@@ -23,12 +24,6 @@ const RING_CIRC = 2 * Math.PI * RING_R;
 // it up for a lively display.
 const METER_BARS = 16;
 const LEVEL_GAIN = 8;
-
-// Crystallization: each character of a new ghost word de-blurs in turn, so a
-// word reads as sharpening left→right (h,e,l,l,o). Per-char delay, capped so
-// a long batch doesn't stall.
-const CHAR_STAGGER_MS = 24;
-const MAX_CRYSTALLIZE_DELAY_MS = 500;
 
 export class DictationBar implements DictationUI {
   private readonly el: HTMLElement;
@@ -52,12 +47,15 @@ export class DictationBar implements DictationUI {
   // so only NEWLY-appended words get the crystallize animation (revisions
   // just re-render, avoiding a whole-tail re-animate every flush).
   private tailWords: string[] = [];
+  private appearance: DictationAppearance;
 
   constructor(
     private readonly surface: HTMLElement,
     private readonly modelLabel: string | null = null,
     private readonly fluidMotion: boolean = true,
+    appearance: DictationAppearance = DEFAULT_APPEARANCE,
   ) {
+    this.appearance = appearance;
     this.el = document.createElement("div");
     this.el.className = "dictation-bar";
     this.el.setAttribute("role", "status");
@@ -126,7 +124,23 @@ export class DictationBar implements DictationUI {
     } else {
       this.surface.appendChild(this.el);
     }
+    this.applyAppearance(appearance);
     this.render();
+  }
+
+  /** Apply the appearance knobs — CSS vars for the animation/blur/font, plus
+   *  the outline, pill theme, and blob visibility. Safe to call live. */
+  applyAppearance(a: DictationAppearance): void {
+    this.appearance = a;
+    const s = this.el.style;
+    s.setProperty("--dict-crystallize-ms", `${a.crystallizeMs}ms`);
+    s.setProperty("--dict-blur-start", `${a.blurStartPx}px`);
+    s.setProperty("--dict-blur-rest", `${a.blurRestPx}px`);
+    s.setProperty("--dict-tail-font", `${a.tailFontPx}px`);
+    this.el.classList.toggle("outline", a.textOutline);
+    this.el.dataset.pill = a.pillTheme;
+    // Blob visibility is a hard gate — clear them immediately when turned off.
+    if (!a.showBlobs) this.setPendingWords(0);
   }
 
   setState(state: DictationState): void {
@@ -195,16 +209,20 @@ export class DictationBar implements DictationUI {
     const max = Math.min(words.length, this.tailWords.length);
     while (common < max && words[common] === this.tailWords[common]) common++;
     while (this.tailEl.children.length > common) this.tailEl.lastElementChild?.remove();
-    let delay = 0;
+    // Each NEW word crystallizes on its own left→right sweep (delay resets per
+    // word), so a burst of words doesn't cascade into a long stall — every
+    // word resolves in ~word-length × stagger + crystallizeMs, fast.
+    const stagger = this.appearance.charStaggerMs;
     for (let i = common; i < words.length; i++) {
       const wordSpan = document.createElement("span");
       wordSpan.className = "dictation-tail-word";
+      let charIndex = 0;
       for (const ch of [...words[i]]) {
         const charSpan = document.createElement("span");
         charSpan.className = "dictation-tail-char";
         charSpan.textContent = ch;
-        charSpan.style.animationDelay = `${Math.min(delay, MAX_CRYSTALLIZE_DELAY_MS)}ms`;
-        delay += CHAR_STAGGER_MS;
+        charSpan.style.animationDelay = `${charIndex * stagger}ms`;
+        charIndex++;
         wordSpan.appendChild(charSpan);
       }
       this.tailEl.appendChild(wordSpan);
@@ -214,6 +232,9 @@ export class DictationBar implements DictationUI {
   }
 
   setPendingWords(count: number): void {
+    // The leading "words heard" blobs are opt-in (the crystallizing tail is
+    // usually clearer). When off, never render them.
+    if (!this.appearance.showBlobs) count = 0;
     if (count === this.pendingWords) return;
     this.pendingWords = count;
     while (this.blobsEl.children.length > count) this.blobsEl.lastElementChild?.remove();

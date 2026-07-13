@@ -32,6 +32,18 @@ describe("transcriptionSettings.coerce", () => {
       showMicButton: false,
       micOffset: { dx: 40, dy: 22 },
       fluidMotion: false,
+      appearance: {
+        crystallizeMs: 200,
+        charStaggerMs: 10,
+        blurStartPx: 5,
+        blurRestPx: 0.6,
+        settleMs: 250,
+        ghostResetMs: 1000,
+        tailFontPx: 14,
+        showBlobs: true,
+        pillTheme: "dark" as const,
+        textOutline: false,
+      },
     };
     expect(coerce(input)).toEqual(input);
   });
@@ -39,6 +51,21 @@ describe("transcriptionSettings.coerce", () => {
   it("defaults fluidMotion on", () => {
     expect(coerce({}).fluidMotion).toBe(true);
     expect(coerce({ fluidMotion: false }).fluidMotion).toBe(false);
+  });
+
+  it("defaults and clamps the appearance knobs", () => {
+    const a = coerce({}).appearance;
+    expect(a.crystallizeMs).toBe(260);
+    expect(a.showBlobs).toBe(false);
+    expect(a.pillTheme).toBe("auto");
+    // Out-of-range numbers clamp; bad enums fall back.
+    const clamped = coerce({
+      appearance: { crystallizeMs: 999999, tailFontPx: -5, pillTheme: "neon", settleMs: 10 },
+    }).appearance;
+    expect(clamped.crystallizeMs).toBe(2000);
+    expect(clamped.tailFontPx).toBe(9);
+    expect(clamped.settleMs).toBe(80);
+    expect(clamped.pillTheme).toBe("auto");
   });
 
   it("defaults and sanitizes the mic offset", () => {
