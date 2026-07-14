@@ -456,6 +456,12 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
           stroke: sage,
           width: 1.5,
           spanGaps: true,
+          // Stepped, not interpolated: quota is state — the consumed %
+          // holds until the next sample changes it. The daemon
+          // forward-fills sample-less bins with the last known value
+          // (up to "now"), so the line runs to the present even across
+          // idle stretches.
+          paths: uPlot.paths.stepped!({ align: 1 }),
           // Point markers read well on coarse bins but fuzz the line
           // into a caterpillar at hundreds of bins.
           points: { show: !asLine, size: 4 },
@@ -467,6 +473,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
           stroke: mustard,
           width: 1.5,
           spanGaps: true,
+          paths: uPlot.paths.stepped!({ align: 1 }),
           points: { show: !asLine, size: 4 },
         },
       ],

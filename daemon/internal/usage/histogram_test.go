@@ -50,10 +50,12 @@ func histTestStore(t *testing.T) (*Store, int64) {
 
 func TestHistogramDayBins(t *testing.T) {
 	s, base := histTestStore(t)
+	// Now pinned inside day 2, so day 3 stays a future bin (nil quota).
 	bins, err := s.Histogram(HistogramParams{
 		Bucket: BucketDay,
 		Since:  base,
 		Until:  base + 3*86400,
+		Now:    base + 86400 + 7200,
 	})
 	if err != nil {
 		t.Fatalf("histogram: %v", err)
@@ -78,7 +80,8 @@ func TestHistogramDayBins(t *testing.T) {
 	if d1.SevenDayPeak == nil || *d1.SevenDayPeak != 31 {
 		t.Errorf("day1 seven-day peak: want 31, got %v", d1.SevenDayPeak)
 	}
-	// Day 2: m4 only; five-hour reported, seven-day absent.
+	// Day 2: m4 only; five-hour reported. Seven-day had no sample, but
+	// quota is state — day 1's 31% carries forward.
 	d2 := bins[1]
 	if d2.Input != 800 || d2.Turns != 1 {
 		t.Errorf("day2 sums wrong: %+v", d2)
@@ -86,13 +89,14 @@ func TestHistogramDayBins(t *testing.T) {
 	if d2.FiveHourPeak == nil || *d2.FiveHourPeak != 5 {
 		t.Errorf("day2 five-hour peak: want 5, got %v", d2.FiveHourPeak)
 	}
-	if d2.SevenDayPeak != nil {
-		t.Errorf("day2 seven-day peak: want nil, got %v", *d2.SevenDayPeak)
+	if d2.SevenDayPeak == nil || *d2.SevenDayPeak != 31 {
+		t.Errorf("day2 seven-day peak: want carried 31, got %v", d2.SevenDayPeak)
 	}
-	// Day 3: zero-filled.
+	// Day 3: zero tokens, and its bin starts after Now → no quota fill
+	// into the future.
 	d3 := bins[2]
-	if d3.Total != 0 || d3.Turns != 0 || d3.FiveHourPeak != nil {
-		t.Errorf("day3 should be zero-filled: %+v", d3)
+	if d3.Total != 0 || d3.Turns != 0 || d3.FiveHourPeak != nil || d3.SevenDayPeak != nil {
+		t.Errorf("day3 should be zero-filled with nil future quota: %+v", d3)
 	}
 }
 
@@ -248,6 +252,43 @@ func TestHistogramFourHourBins(t *testing.T) {
 	// m1 (0:10), m2 (1:01), m3 (2:01) all land in the first 4h bin.
 	if bins[0].Turns != 3 || bins[0].Input != 700 {
 		t.Errorf("first 4h bin: want 3 turns / 700 input, got %+v", bins[0])
+	}
+}
+
+func TestHistogramQuotaForwardFill(t *testing.T) {
+	s, base := histTestStore(t)
+	// Day 3 has no quota samples at all. The fill seeds from the latest
+	// samples BEFORE the range (5h=5 from day 2, 7d=31 from day 1) and
+	// carries them into every elapsed bin — but not past Now.
+	day3 := base + 2*86400
+	now := day3 + 2*3600 + 1800 // 02:30 into day 3
+	bins, err := s.Histogram(HistogramParams{
+		Bucket: BucketHour,
+		Since:  day3,
+		Until:  day3 + 86400,
+		Now:    now,
+	})
+	if err != nil {
+		t.Fatalf("histogram: %v", err)
+	}
+	if len(bins) != 24 {
+		t.Fatalf("want 24 hour bins, got %d", len(bins))
+	}
+	for i := 0; i <= 2; i++ { // bins starting 00/01/02 h are elapsed
+		if bins[i].FiveHourPeak == nil || *bins[i].FiveHourPeak != 5 {
+			t.Errorf("bin %d five-hour: want carried 5, got %v", i, bins[i].FiveHourPeak)
+		}
+		if bins[i].SevenDayPeak == nil || *bins[i].SevenDayPeak != 31 {
+			t.Errorf("bin %d seven-day: want carried 31, got %v", i, bins[i].SevenDayPeak)
+		}
+		if bins[i].Total != 0 {
+			t.Errorf("bin %d tokens must stay zero (events, not state): %+v", i, bins[i])
+		}
+	}
+	for i := 3; i < 24; i++ { // future bins stay unknown
+		if bins[i].FiveHourPeak != nil || bins[i].SevenDayPeak != nil {
+			t.Errorf("bin %d is in the future, want nil quota: %+v", i, bins[i])
+		}
 	}
 }
 

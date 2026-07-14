@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"database/sql"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -81,13 +82,20 @@ type HistogramParams struct {
 	Until       int64
 	ProjectID   string // empty = all projects
 	TZOffsetMin int
+	// Now bounds the quota forward-fill (bins starting after Now stay
+	// nil — the future has no quota state yet). Zero means time.Now();
+	// tests pin it for determinism.
+	Now int64
 }
 
 // HistogramBin is one dense bin of the result. Token sums come from
 // turn_usage (authoritative per-turn counts); the quota peaks are the
-// MAX 5h/7d used-% sampled inside the bin, nil when no quota sample
-// landed there. Quota is account-level, so it is deliberately NOT
-// filtered by ProjectID.
+// MAX 5h/7d used-% sampled inside the bin. Quota is account-level
+// STATE, not an event: a bin with no sample still has a consumed
+// percentage, so empty bins carry the last known value forward
+// (seeded from the latest sample before the range), staying nil only
+// before the first-ever sample and after Now. Quota is deliberately
+// NOT filtered by ProjectID.
 type HistogramBin struct {
 	T             int64 // bin start, unix seconds
 	Input         int64
@@ -249,6 +257,12 @@ func (s *Store) Histogram(p HistogramParams) ([]HistogramBin, error) {
 		}
 	}
 
+	// Seeds for the quota forward-fill: the latest known value of each
+	// bucket from before the range, so a quiet Monday morning still
+	// shows Sunday night's consumed percentage.
+	seed5 := s.lastQuotaBeforeLocked("five_hour_pct", p.Since)
+	seed7 := s.lastQuotaBeforeLocked("seven_day_pct", p.Since)
+
 	out := make([]HistogramBin, 0, len(starts))
 	for i, start := range starts {
 		bin := HistogramBin{T: start}
@@ -266,5 +280,44 @@ func (s *Store) Histogram(p HistogramParams) ([]HistogramBin, error) {
 		}
 		out = append(out, bin)
 	}
+
+	// Forward-fill quota state through sample-less bins, but never past
+	// Now — the future has no quota state yet.
+	now := p.Now
+	if now == 0 {
+		now = time.Now().Unix()
+	}
+	last5, last7 := seed5, seed7
+	for i := range out {
+		b := &out[i]
+		if b.FiveHourPeak != nil {
+			last5 = b.FiveHourPeak
+		} else if b.T <= now && last5 != nil {
+			v := *last5
+			b.FiveHourPeak = &v
+		}
+		if b.SevenDayPeak != nil {
+			last7 = b.SevenDayPeak
+		} else if b.T <= now && last7 != nil {
+			v := *last7
+			b.SevenDayPeak = &v
+		}
+	}
 	return out, nil
+}
+
+// lastQuotaBeforeLocked returns the most recent non-null value of one
+// quota column strictly before ts, or nil when none exists. col is one
+// of the two fixed column names above — never caller input. Caller
+// must hold s.mu.
+func (s *Store) lastQuotaBeforeLocked(col string, ts int64) *float64 {
+	var v sql.NullFloat64
+	q := fmt.Sprintf(
+		`SELECT %s FROM quota_samples WHERE ts < ? AND %s IS NOT NULL ORDER BY ts DESC, id DESC LIMIT 1`,
+		col, col)
+	if err := s.db.QueryRow(q, ts).Scan(&v); err != nil || !v.Valid {
+		return nil
+	}
+	f := v.Float64
+	return &f
 }

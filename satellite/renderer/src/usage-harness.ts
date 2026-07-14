@@ -76,6 +76,16 @@ function synthHistogram(params: UsageHistogramParams): UsageHistogramResponse {
       cur = next;
     }
   }
+  // Mimic the daemon's quota forward-fill: quota is state, so
+  // sample-less bins carry the last known percentage forward.
+  let last5: number | undefined;
+  let last7: number | undefined;
+  for (const b of bins) {
+    if (b.five_hour_peak !== undefined) last5 = b.five_hour_peak;
+    else if (last5 !== undefined) b.five_hour_peak = last5;
+    if (b.seven_day_peak !== undefined) last7 = b.seven_day_peak;
+    else if (last7 !== undefined) b.seven_day_peak = last7;
+  }
   return { enabled: true, bucket: params.bucket, since: params.since, until: params.until, bins };
 }
 

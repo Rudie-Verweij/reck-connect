@@ -53,6 +53,13 @@ is capped at 12000 (`maxHistogramBins` — densest offered ask is a week of
 `/usage/series` row clamp would. Validation lives on
 `usage.HistogramParams.Validate` → 400; store failures → 500.
 
+**Quota is state, not events.** Token sums are events (an idle bin is honestly
+zero), but the 5h/7d consumed-% persists between messages — so sample-less
+bins carry the last known value forward, seeded from the latest sample
+*before* the range, and never past "now" (future bins stay null; tests pin
+`HistogramParams.Now`). The renderer draws quota with stepped paths (value
+holds until the next sample) rather than linear interpolation.
+
 ### Renderer
 
 - `ui/usage-range.ts` — pure math, no DOM: per-view bin-width options
