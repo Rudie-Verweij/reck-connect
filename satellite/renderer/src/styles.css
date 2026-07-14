@@ -5133,15 +5133,50 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   margin-top: 0.3rem;
 }
 
-/* uPlot chrome, reck-toned. The legend doubles as series toggles. */
-.usage-chart .u-legend {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  color: var(--app-text-dim);
+/* Series toggle pills (uPlot's own legend is disabled — these own
+   visibility, and their state survives chart rebuilds). */
+.usage-legend {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
 
-.usage-chart .u-legend .u-marker {
+.usage-series-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--app-text-dim);
+  cursor: pointer;
+  transition: color 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth),
+    opacity 0.15s var(--ease-smooth);
+}
+
+.usage-series-toggle:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+
+.usage-series-toggle.off {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.usage-series-toggle.off .usage-series-swatch {
+  background: var(--app-text-muted) !important;
+}
+
+.usage-series-swatch {
+  width: 10px;
+  height: 10px;
   border-radius: 2px;
+  flex-shrink: 0;
 }
 
 .usage-chart .u-over {

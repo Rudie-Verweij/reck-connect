@@ -72,6 +72,10 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
   let periodStart = periodFor(granularity, new Date()).start;
   let projectId = ""; // "" = all projects
   let bins: UsageHistogramBin[] = [];
+  // Series visibility, keyed to uPlot series index 1/2/3. Owned here
+  // (not by uPlot's legend) so toggles survive the chart rebuilds that
+  // every granularity/bin/theme change triggers.
+  const shown = { tokens: true, fiveHour: true, sevenDay: true };
   let inflight: AbortController | null = null;
   let chart: uPlot | null = null;
   let ro: ResizeObserver | null = null;
@@ -104,6 +108,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
         <div class="usage-chart"></div>
         <div class="usage-note" hidden></div>
       </div>
+      <div class="usage-legend" role="group" aria-label="Series"></div>
       <div class="usage-readout" aria-live="polite"></div>
       <div class="usage-stats"></div>
     </div>
@@ -118,8 +123,45 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
   const noteEl = overlay.querySelector(".usage-note") as HTMLElement;
   const readoutEl = overlay.querySelector(".usage-readout") as HTMLElement;
   const statsEl = overlay.querySelector(".usage-stats") as HTMLElement;
+  const legendEl = overlay.querySelector(".usage-legend") as HTMLElement;
   const binsSel = overlay.querySelector(".usage-bins") as HTMLSelectElement;
   const projectSel = overlay.querySelector(".usage-project:not(.usage-bins)") as HTMLSelectElement;
+
+  // Series toggles: one pill per data series (swatch + label). State
+  // lives in `shown`; an existing chart is flipped in place via
+  // setSeries, and renderChart re-applies the flags on rebuild.
+  const SERIES_TOGGLES: Array<{
+    key: keyof typeof shown;
+    label: string;
+    cssColor: string;
+    seriesIdx: number;
+  }> = [
+    { key: "tokens", label: "Tokens", cssColor: "--claude-orange", seriesIdx: 1 },
+    { key: "fiveHour", label: "5h quota", cssColor: "--wes-sage", seriesIdx: 2 },
+    { key: "sevenDay", label: "7d quota", cssColor: "--wes-mustard", seriesIdx: 3 },
+  ];
+  for (const t of SERIES_TOGGLES) {
+    const btn = document.createElement("button");
+    btn.className = "usage-series-toggle";
+    btn.dataset.series = t.key;
+    btn.setAttribute("aria-pressed", "true");
+    btn.title = `Show/hide ${t.label}`;
+    const swatch = document.createElement("span");
+    swatch.className = "usage-series-swatch";
+    swatch.style.background = `var(${t.cssColor})`;
+    btn.appendChild(swatch);
+    btn.appendChild(document.createTextNode(t.label));
+    btn.addEventListener("click", () => {
+      shown[t.key] = !shown[t.key];
+      btn.classList.toggle("off", !shown[t.key]);
+      btn.setAttribute("aria-pressed", String(shown[t.key]));
+      // Full rebuild (instant at ≤2k points) rather than setSeries, so
+      // an axis with no visible series disappears instead of showing a
+      // meaningless autoscaled 0–10 scale.
+      renderChart();
+    });
+    legendEl.appendChild(btn);
+  }
 
   for (const g of GRANULARITIES) {
     const chip = document.createElement("button");
@@ -338,12 +380,14 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
     const opt: uPlot.Options = {
       width,
       height: 300,
-      padding: [12, 8, 0, 8],
+      // Extra left padding when the token axis is hidden, so the first
+      // x tick label doesn't clip at the card edge.
+      padding: [12, 8, 0, shown.tokens ? 8 : 28],
       cursor: { drag: { x: false, y: false } },
-      // Non-live legend: labels + show/hide toggles only. A live legend
-      // resizes itself as hover values stream in, which shifted the
-      // whole card layout on every mouse move.
-      legend: { live: false },
+      // uPlot's built-in legend is off entirely: the .usage-legend
+      // toggle pills own series visibility (uPlot's legend also
+      // resized itself on hover when live, shifting the card layout).
+      legend: { show: false },
       scales: {
         x: { time: false, range: [-0.5, bins.length - 0.5] },
         tok: { range: (_u, _min, max) => [0, Math.max(max, 10)] },
@@ -363,6 +407,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
         },
         {
           scale: "tok",
+          show: shown.tokens,
           stroke: textDim,
           grid: { stroke: gridCol, width: 1 },
           ticks: { show: false },
@@ -373,6 +418,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
         {
           scale: "pct",
           side: 1,
+          show: shown.fiveHour || shown.sevenDay,
           stroke: textDim,
           grid: { show: false },
           ticks: { show: false },
@@ -387,6 +433,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
           ? {
               label: "Tokens",
               scale: "tok",
+              show: shown.tokens,
               stroke: orange,
               width: 1.5,
               fill: orange + "2e", // ~18% alpha area under the curve
@@ -396,6 +443,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
           : {
               label: "Tokens",
               scale: "tok",
+              show: shown.tokens,
               stroke: orange,
               fill: orange + "d9", // ~85% alpha over the theme background
               paths: uPlot.paths.bars!({ size: [0.6, 100] }),
@@ -404,6 +452,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
         {
           label: "5h quota",
           scale: "pct",
+          show: shown.fiveHour,
           stroke: sage,
           width: 1.5,
           spanGaps: true,
@@ -414,6 +463,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
         {
           label: "7d quota",
           scale: "pct",
+          show: shown.sevenDay,
           stroke: mustard,
           width: 1.5,
           spanGaps: true,

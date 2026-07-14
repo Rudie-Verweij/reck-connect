@@ -89,6 +89,39 @@ test("drill-down resets the bin width to the finer view's default", async ({ pag
   await expect(page.locator(".usage-drill-up")).toBeDisabled();
 });
 
+test("series toggles hide/show data and survive re-renders", async ({ page }) => {
+  await openHarness(page);
+  const tokens = page.locator('.usage-series-toggle[data-series="tokens"]');
+  const fiveHour = page.locator('.usage-series-toggle[data-series="fiveHour"]');
+  const sevenDay = page.locator('.usage-series-toggle[data-series="sevenDay"]');
+  await expect(tokens).toBeVisible();
+
+  // Hiding a series is visible on the canvas: capture the plot with
+  // everything on, toggle tokens off, and the pixels must change.
+  const chart = page.locator(".usage-chart");
+  const before = await chart.screenshot();
+  await tokens.click();
+  await expect(tokens).toHaveClass(/off/);
+  await expect(tokens).toHaveAttribute("aria-pressed", "false");
+  const after = await chart.screenshot();
+  expect(before.equals(after)).toBe(false);
+
+  // Toggle state survives a chart rebuild (bin-width change refetches
+  // and reconstructs the uPlot instance).
+  await sevenDay.click();
+  await page.locator(".usage-bins").selectOption("4h");
+  await page.waitForTimeout(200);
+  await expect(tokens).toHaveClass(/off/);
+  await expect(sevenDay).toHaveClass(/off/);
+  await expect(fiveHour).not.toHaveClass(/off/);
+  await page.screenshot({ path: "e2e/artifacts/usage-toggles-5h-only.png" });
+
+  // Back on.
+  await tokens.click();
+  await expect(tokens).not.toHaveClass(/off/);
+  await expect(tokens).toHaveAttribute("aria-pressed", "true");
+});
+
 test("dark theme renders and looks right", async ({ page }) => {
   await openHarness(page, "dark");
   await page.locator(".usage-bins").selectOption("1h");
