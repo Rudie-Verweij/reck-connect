@@ -26,14 +26,18 @@ import {
   BIN_OPTIONS,
   binLabelFor,
   binOptionLabel,
+  bucketSeconds,
   defaultBinFor,
+  defaultWidthForSpan,
   drillDown,
   drillUp,
   labelFor,
   nextDisabled,
   periodFor,
+  rangeLabelFor,
   stepPeriod,
   tzOffsetMin,
+  widthsForSpan,
   type Granularity,
 } from "./usage-range";
 import { iconClose } from "./icons";
@@ -70,6 +74,12 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
   let granularity: Granularity = "week";
   let bucket: UsageHistogramBucket = defaultBinFor(granularity);
   let periodStart = periodFor(granularity, new Date()).start;
+  // Drag-zoom range. Non-null replaces the calendar period with an
+  // arbitrary [since, until) span; ↑ or a granularity chip exits.
+  let custom: { since: Date; until: Date } | null = null;
+  // Set by uPlot's setSelect hook so the click handler on the same
+  // mouseup doesn't ALSO fire a drill-down.
+  let justSelected = false;
   let projectId = ""; // "" = all projects
   let bins: UsageHistogramBin[] = [];
   // Series visibility, keyed to uPlot series index 1/2/3. Owned here
@@ -169,7 +179,8 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
     chip.dataset.g = g;
     chip.textContent = g[0].toUpperCase() + g.slice(1);
     chip.addEventListener("click", () => {
-      if (g === granularity) return;
+      if (g === granularity && custom === null) return;
+      custom = null;
       granularity = g;
       bucket = defaultBinFor(g);
       periodStart = periodFor(g, new Date()).start;
@@ -185,12 +196,30 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
 
   overlay.querySelectorAll<HTMLButtonElement>(".usage-pager").forEach((btn) => {
     btn.addEventListener("click", () => {
-      periodStart = stepPeriod(granularity, periodStart, Number(btn.dataset.dir) as 1 | -1);
+      const dir = Number(btn.dataset.dir) as 1 | -1;
+      if (custom) {
+        // Page a zoomed range by its own span.
+        const span = custom.until.getTime() - custom.since.getTime();
+        custom = {
+          since: new Date(custom.since.getTime() + span * dir),
+          until: new Date(custom.until.getTime() + span * dir),
+        };
+      } else {
+        periodStart = stepPeriod(granularity, periodStart, dir);
+      }
       void refresh();
     });
   });
 
   drillUpBtn.addEventListener("click", () => {
+    if (custom) {
+      // Exit zoom back to the calendar view containing the range start.
+      periodStart = periodFor(granularity, custom.since).start;
+      custom = null;
+      bucket = defaultBinFor(granularity);
+      void refresh();
+      return;
+    }
     const up = drillUp(granularity);
     if (!up) return;
     granularity = up;
@@ -255,8 +284,14 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
     noteEl.hidden = msg === "";
   }
 
+  function currentRange(): { start: Date; until: Date } {
+    if (custom) return { start: custom.since, until: custom.until };
+    return periodFor(granularity, periodStart);
+  }
+
   function rebuildBinOptions(): void {
-    const options = BIN_OPTIONS[granularity];
+    const spanSec = (currentRange().until.getTime() - currentRange().start.getTime()) / 1000;
+    const options = custom ? widthsForSpan(spanSec) : BIN_OPTIONS[granularity];
     binsSel.innerHTML = "";
     for (const b of options) {
       const o = document.createElement("option");
@@ -264,26 +299,33 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
       o.textContent = binOptionLabel(b);
       binsSel.appendChild(o);
     }
-    if (!options.includes(bucket)) bucket = defaultBinFor(granularity);
+    if (!options.includes(bucket)) {
+      bucket = custom ? defaultWidthForSpan(spanSec) : defaultBinFor(granularity);
+    }
     binsSel.value = bucket;
   }
 
   async function refresh(): Promise<void> {
     // Reflect state in the chrome immediately, then fetch.
     chipsEl.querySelectorAll<HTMLElement>(".usage-chip").forEach((c) => {
-      c.classList.toggle("active", c.dataset.g === granularity);
+      c.classList.toggle("active", custom === null && c.dataset.g === granularity);
     });
     rebuildBinOptions();
-    periodEl.textContent = labelFor(granularity, periodStart);
-    drillUpBtn.disabled = drillUp(granularity) === null;
-    nextBtn.disabled = nextDisabled(granularity, periodStart, new Date());
+    periodEl.textContent = custom
+      ? rangeLabelFor(custom.since, custom.until)
+      : labelFor(granularity, periodStart);
+    drillUpBtn.disabled = custom === null && drillUp(granularity) === null;
+    drillUpBtn.title = custom ? "Exit zoom" : "Zoom out";
+    nextBtn.disabled = custom
+      ? custom.until.getTime() > Date.now()
+      : nextDisabled(granularity, periodStart, new Date());
     chartWrap.classList.add("loading");
     note("");
 
     inflight?.abort();
     const ac = new AbortController();
     inflight = ac;
-    const { start, until } = periodFor(granularity, periodStart);
+    const { start, until } = currentRange();
     try {
       const resp = await opts.api.getUsageHistogram(
         {
@@ -324,6 +366,47 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
+  // Granularity used for bin LABELS only: a zoomed range labels like a
+  // day when it stays inside one, like a week when it crosses days.
+  function labelGranularity(): Granularity {
+    if (!custom) return granularity;
+    const s = custom.since;
+    const u = new Date(custom.until.getTime() - 1);
+    const sameDay =
+      s.getFullYear() === u.getFullYear() &&
+      s.getMonth() === u.getMonth() &&
+      s.getDate() === u.getDate();
+    return sameDay ? "day" : "week";
+  }
+
+  // Translate a drag selection (fractional bin indices) into a custom
+  // range and re-fetch at a width suited to the new span.
+  function zoomToSelection(i0: number, i1: number): void {
+    if (bins.length === 0) return;
+    let lo = Math.round(Math.min(i0, i1));
+    let hi = Math.round(Math.max(i0, i1));
+    lo = Math.max(0, Math.min(bins.length - 1, lo));
+    hi = Math.max(0, Math.min(bins.length - 1, hi));
+    if (hi <= lo) hi = Math.min(bins.length - 1, lo + 1);
+    if (hi === lo) return; // single-bin view: nothing to zoom into
+    const sec = bucketSeconds(bucket);
+    const endT =
+      hi + 1 < bins.length
+        ? bins[hi + 1].t
+        : sec !== null
+          ? bins[hi].t + sec
+          : Math.floor(
+              new Date(
+                new Date(bins[hi].t * 1000).getFullYear(),
+                new Date(bins[hi].t * 1000).getMonth() + 1,
+                1,
+              ).getTime() / 1000,
+            );
+    custom = { since: new Date(bins[lo].t * 1000), until: new Date(endT * 1000) };
+    bucket = defaultWidthForSpan(endT - bins[lo].t);
+    void refresh();
+  }
+
   function renderStats(): void {
     const total = bins.reduce((a, b) => a + b.total, 0);
     const turns = bins.reduce((a, b) => a + b.turns, 0);
@@ -342,7 +425,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
       return;
     }
     const b = bins[idx];
-    const when = binLabelFor(granularity, bucket, new Date(b.t * 1000));
+    const when = binLabelFor(labelGranularity(), bucket, new Date(b.t * 1000));
     const parts = [
       `${when}`,
       `${fmtTokens(b.total)} tokens (in ${fmtTokens(b.input)} · out ${fmtTokens(b.output)} · cache ${fmtTokens(b.cache_creation + b.cache_read)})`,
@@ -383,7 +466,10 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
       // Extra left padding when the token axis is hidden, so the first
       // x tick label doesn't clip at the card edge.
       padding: [12, 8, 0, shown.tokens ? 8 : 28],
-      cursor: { drag: { x: false, y: false } },
+      // Horizontal drag selects a time span to zoom into (setScale off:
+      // WE re-fetch the span at a finer bin width instead of letting
+      // uPlot crop the loaded data).
+      cursor: { drag: { x: true, y: false, setScale: false } },
       // uPlot's built-in legend is off entirely: the .usage-legend
       // toggle pills own series visibility (uPlot's legend also
       // resized itself on hover when live, shifting the card layout).
@@ -402,7 +488,9 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
           space: 70,
           values: (_u, splits) =>
             splits.map((s) =>
-              Number.isInteger(s) && bins[s] ? binLabelFor(granularity, bucket, new Date(bins[s].t * 1000)) : "",
+              Number.isInteger(s) && bins[s]
+                ? binLabelFor(labelGranularity(), bucket, new Date(bins[s].t * 1000))
+                : "",
             ),
         },
         {
@@ -484,14 +572,32 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
             renderReadout(typeof idx === "number" ? idx : null);
           },
         ],
+        setSelect: [
+          (u) => {
+            if (u.select.width < 8) return; // a twitchy click, not a drag
+            const i0 = u.posToVal(u.select.left, "x");
+            const i1 = u.posToVal(u.select.left + u.select.width, "x");
+            justSelected = true;
+            zoomToSelection(i0, i1);
+          },
+        ],
         init: [
           (u) => {
             u.over.addEventListener("click", () => {
+              // The mouseup that ends a drag-zoom also fires click.
+              if (justSelected) {
+                justSelected = false;
+                return;
+              }
+              // Inside a zoomed range, drag is the navigation tool;
+              // the calendar drill ladder doesn't apply.
+              if (custom) return;
               const idx = u.cursor.idx;
               const down = drillDown(granularity);
               if (typeof idx !== "number" || !bins[idx] || !down) return;
               const binDate = new Date(bins[idx].t * 1000);
               granularity = down;
+              bucket = defaultBinFor(down);
               periodStart = periodFor(down, binDate).start;
               void refresh();
             });

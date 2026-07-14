@@ -122,6 +122,45 @@ test("series toggles hide/show data and survive re-renders", async ({ page }) =>
   await expect(tokens).toHaveAttribute("aria-pressed", "true");
 });
 
+test("drag-selecting a span zooms into that time frame", async ({ page }) => {
+  await openHarness(page);
+  await expect(page.locator(".usage-period")).toContainText("Week of");
+
+  // Drag across the middle ~30% of the plot.
+  const chart = page.locator(".usage-chart .u-over");
+  const box = (await chart.boundingBox())!;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + box.width * 0.35, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.65, y, { steps: 8 });
+  await page.mouse.up();
+
+  // Now in a zoomed range: the label shows a time range (– between
+  // endpoints), granularity chips deactivate, the bin width auto-picks
+  // something finer than the week default.
+  await expect(page.locator(".usage-period")).toContainText("–");
+  await expect(page.locator(".usage-chip.active")).toHaveCount(0);
+  const zoomBucket = await page.locator(".usage-bins").inputValue();
+  expect(zoomBucket).not.toBe("1d");
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: "e2e/artifacts/usage-drag-zoom.png" });
+
+  // Zooming again inside the zoom narrows further.
+  const label1 = await page.locator(".usage-period").textContent();
+  await page.mouse.move(box.x + box.width * 0.4, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.6, y, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.locator(".usage-period")).not.toHaveText(label1!);
+  await expect(page.locator(".usage-period")).toContainText("–");
+
+  // ↑ exits the zoom back to the calendar week.
+  await page.locator(".usage-drill-up").click();
+  await expect(page.locator(".usage-period")).toContainText("Week of");
+  await expect(page.locator('.usage-chip[data-g="week"]')).toHaveClass(/active/);
+  await expect(page.locator(".usage-bins")).toHaveValue("1d");
+});
+
 test("dark theme renders and looks right", async ({ page }) => {
   await openHarness(page, "dark");
   await page.locator(".usage-bins").selectOption("1h");

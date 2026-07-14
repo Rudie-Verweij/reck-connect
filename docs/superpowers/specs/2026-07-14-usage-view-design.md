@@ -78,6 +78,14 @@ holds until the next sample) rather than linear interpolation.
   drop their point markers. States: loading (dimmed), empty period,
   `enabled:false` store, unreachable station. The period label is the design
   signature — Playfair italic, the wordmark's voice.
+- **Drag-to-zoom:** a horizontal drag on the plot selects a time span and
+  re-fetches THAT range from the daemon at an auto-picked finer bin width
+  (finest ≤ ~240 bins — real detail, not a crop of loaded data). In a zoomed
+  range: the period label shows the span (`Tue 14 Jul · 09:12–14:30`), the
+  chips deactivate, ‹ › page by the span's own width, the Bins list is
+  derived from the span (`widthsForSpan`), dragging again zooms deeper, and
+  ↑ exits back to the calendar view containing the range start. Click-drill
+  is suppressed on the mouseup that ends a drag and inside zoom mode.
 - **Hover must never change layout** (v1 field bug: the card grew on hover).
   Three defenses: uPlot's legend is non-live (`legend.live: false` — labels
   and toggles only), the readout line has a reserved min-height with

@@ -54,6 +54,62 @@ export function bucketSeconds(bucket: UsageHistogramBucket): number | null {
   return n * unit;
 }
 
+/** All fixed bin widths, finest → coarsest (calendar "month" excluded —
+ * it has no fixed width and never fits an arbitrary zoom span). */
+export const FIXED_WIDTHS: UsageHistogramBucket[] = [
+  "1m",
+  "2m",
+  "5m",
+  "10m",
+  "30m",
+  "1h",
+  "4h",
+  "1d",
+];
+
+/** Bin widths that make sense for an arbitrary drag-zoom span: at
+ * least ~6 bins (else there's nothing to see) and at most 2016 (the
+ * densest count the standard views offer). Ultra-short spans fall back
+ * to the finest width we have. */
+export function widthsForSpan(spanSec: number): UsageHistogramBucket[] {
+  const out = FIXED_WIDTHS.filter((b) => {
+    const s = bucketSeconds(b);
+    if (s === null) return false;
+    const n = spanSec / s;
+    return n >= 6 && n <= 2016;
+  });
+  return out.length > 0 ? out : [FIXED_WIDTHS[0]];
+}
+
+/** Default width for a zoom span: the finest choice that stays at or
+ * under ~240 bins — detailed, but not fuzz. */
+export function defaultWidthForSpan(spanSec: number): UsageHistogramBucket {
+  const options = widthsForSpan(spanSec);
+  for (const b of options) {
+    const s = bucketSeconds(b);
+    if (s !== null && spanSec / s <= 240) return b;
+  }
+  return options[options.length - 1];
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** Label for an arbitrary zoomed range, e.g. "Tue 14 Jul · 09:12–14:30"
+ * (same local day) or "13 Jul 14:00 – 14 Jul 02:00" (crossing days).
+ * `until` is the exclusive end and is shown as-is. */
+export function rangeLabelFor(since: Date, until: Date): string {
+  const hm = (d: Date) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const dm = (d: Date) => `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}`;
+  const sameDay =
+    since.getFullYear() === until.getFullYear() &&
+    since.getMonth() === until.getMonth() &&
+    since.getDate() === until.getDate();
+  if (sameDay) {
+    return `${DAYS[since.getDay()]} ${dm(since)} · ${hm(since)}–${hm(until)}`;
+  }
+  return `${dm(since)} ${hm(since)} – ${dm(until)} ${hm(until)}`;
+}
+
 /** Human label for a bin-width option, e.g. "5 min", "1 hour", "Month". */
 export function binOptionLabel(bucket: UsageHistogramBucket): string {
   if (bucket === "month") return "Month";

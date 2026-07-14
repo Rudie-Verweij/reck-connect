@@ -5,12 +5,15 @@ import {
   binOptionLabel,
   bucketSeconds,
   defaultBinFor,
+  defaultWidthForSpan,
   drillDown,
   drillUp,
   labelFor,
   nextDisabled,
   periodFor,
+  rangeLabelFor,
   stepPeriod,
+  widthsForSpan,
 } from "./usage-range";
 
 // 2026-07-14 is a Tuesday.
@@ -149,6 +152,35 @@ describe("labels", () => {
     expect(binLabelFor("month", "4h", new Date(2026, 6, 14, 12))).toBe("14 · 12:00");
     // Year with day bins shows the date.
     expect(binLabelFor("year", "1d", new Date(2026, 6, 14))).toBe("14 Jul");
+  });
+});
+
+describe("drag-zoom spans", () => {
+  it("offers sane widths for a span", () => {
+    // 2 hours: 1 min (120 bins) up to 10 min (12); coarser gives <6 bins.
+    expect(widthsForSpan(2 * 3600)).toEqual(["1m", "2m", "5m", "10m"]);
+    // A week: 5 min (2016) through 1 day (7).
+    expect(widthsForSpan(7 * 86400)).toEqual(["5m", "10m", "30m", "1h", "4h", "1d"]);
+    // Ultra-short spans fall back to the finest width.
+    expect(widthsForSpan(120)).toEqual(["1m"]);
+  });
+
+  it("defaults to the finest width at or under ~240 bins", () => {
+    expect(defaultWidthForSpan(2 * 3600)).toBe("1m"); // 120 bins
+    expect(defaultWidthForSpan(24 * 3600)).toBe("10m"); // 144 bins
+    expect(defaultWidthForSpan(7 * 86400)).toBe("1h"); // 168 bins
+  });
+
+  it("labels a same-day range with day and clock times", () => {
+    const since = new Date(2026, 6, 14, 9, 12);
+    const until = new Date(2026, 6, 14, 14, 30);
+    expect(rangeLabelFor(since, until)).toBe("Tue 14 Jul · 09:12–14:30");
+  });
+
+  it("labels a cross-day range with both dates", () => {
+    const since = new Date(2026, 6, 13, 14, 0);
+    const until = new Date(2026, 6, 14, 2, 0);
+    expect(rangeLabelFor(since, until)).toBe("13 Jul 14:00 – 14 Jul 02:00");
   });
 });
 

@@ -5182,3 +5182,10 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 .usage-chart .u-over {
   cursor: pointer;
 }
+
+/* Drag-to-zoom selection region. */
+.usage-chart .u-select {
+  background: rgba(212, 104, 58, 0.14);
+  border-left: 1px solid var(--claude-orange);
+  border-right: 1px solid var(--claude-orange);
+}
