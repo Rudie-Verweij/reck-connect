@@ -162,3 +162,80 @@ func (s *Server) handleUsageSeries(w nethttp.ResponseWriter, r *nethttp.Request)
 		nethttp.Error(w, "unknown kind (want context or quota)", nethttp.StatusBadRequest)
 	}
 }
+
+// handleUsageHistogram returns dense, server-binned token sums + per-bin
+// quota peaks for the Satellite's usage view (issue #88). Query params:
+//
+//	bucket        = "hour" | "day" | "month" (required)
+//	since, until  = unix seconds, half-open [since, until) (required)
+//	project_id    = optional filter on turn_usage (quota is account-level
+//	                and ignores it)
+//	tz_offset_min = caller's zone offset in minutes east of UTC, so day
+//	                and month bins start at the caller's local midnight
+//
+// Parameter validation (bucket whitelist, range sanity, bin-count cap)
+// lives in the store's HistogramParams so it is unit-tested once.
+func (s *Server) handleUsageHistogram(w nethttp.ResponseWriter, r *nethttp.Request) {
+	if s.UsageStore == nil {
+		writeJSON(w, map[string]any{"enabled": false})
+		return
+	}
+	q := r.URL.Query()
+	since, errSince := strconv.ParseInt(q.Get("since"), 10, 64)
+	until, errUntil := strconv.ParseInt(q.Get("until"), 10, 64)
+	if errSince != nil || errUntil != nil {
+		nethttp.Error(w, "since and until must be unix seconds", nethttp.StatusBadRequest)
+		return
+	}
+	tzOffsetMin := 0
+	if v := q.Get("tz_offset_min"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			nethttp.Error(w, "tz_offset_min must be an integer", nethttp.StatusBadRequest)
+			return
+		}
+		tzOffsetMin = n
+	}
+	params := usage.HistogramParams{
+		Bucket:      usage.HistogramBucket(q.Get("bucket")),
+		Since:       since,
+		Until:       until,
+		ProjectID:   q.Get("project_id"),
+		TZOffsetMin: tzOffsetMin,
+	}
+	if err := params.Validate(); err != nil {
+		nethttp.Error(w, err.Error(), nethttp.StatusBadRequest)
+		return
+	}
+	bins, err := s.UsageStore.Histogram(params)
+	if err != nil {
+		nethttp.Error(w, "usage histogram failed", nethttp.StatusInternalServerError)
+		return
+	}
+	out := make([]map[string]any, 0, len(bins))
+	for _, b := range bins {
+		m := map[string]any{
+			"t":              b.T,
+			"input":          b.Input,
+			"output":         b.Output,
+			"cache_creation": b.CacheCreation,
+			"cache_read":     b.CacheRead,
+			"total":          b.Total,
+			"turns":          b.Turns,
+		}
+		if b.FiveHourPeak != nil {
+			m["five_hour_peak"] = *b.FiveHourPeak
+		}
+		if b.SevenDayPeak != nil {
+			m["seven_day_peak"] = *b.SevenDayPeak
+		}
+		out = append(out, m)
+	}
+	writeJSON(w, map[string]any{
+		"enabled": true,
+		"bucket":  string(params.Bucket),
+		"since":   params.Since,
+		"until":   params.Until,
+		"bins":    out,
+	})
+}
