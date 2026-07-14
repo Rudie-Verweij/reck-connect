@@ -1,11 +1,10 @@
-import { iconChart, iconLightbulb, iconMoon, iconRail, iconSettings } from "./icons";
+import { iconChart, iconLightbulb, iconMoon, iconRail } from "./icons";
 
 export type Theme = "light" | "dark";
 
 export interface AppBarProps {
   root: HTMLElement;
   onToggleRail: () => void;
-  onOpenSettings: () => void;
   onToggleTheme: () => void;
   onOpenUsage: () => void;
 }
@@ -24,7 +23,6 @@ export class AppBar {
           <button class="icon-btn" id="nav-theme" title="Toggle theme">${iconLightbulb}</button>
           <button class="icon-btn" id="nav-usage" title="View usage">${iconChart}</button>
           <button class="icon-btn" id="nav-rail" title="Toggle projects rail (⌘B · ⇧←/⇧→)">${iconRail}</button>
-          <button class="icon-btn" id="nav-settings" title="Settings">${iconSettings}</button>
         </div>
       </div>
     `;
@@ -32,10 +30,6 @@ export class AppBar {
     this.themeBtn = this.props.root.querySelector("#nav-theme") as HTMLButtonElement;
     this.railBtn.addEventListener("click", () => this.props.onToggleRail());
     this.themeBtn.addEventListener("click", () => this.props.onToggleTheme());
-    (this.props.root.querySelector("#nav-settings") as HTMLButtonElement).addEventListener(
-      "click",
-      () => this.props.onOpenSettings(),
-    );
     (this.props.root.querySelector("#nav-usage") as HTMLButtonElement).addEventListener(
       "click",
       () => this.props.onOpenUsage(),
