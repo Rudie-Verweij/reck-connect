@@ -4935,3 +4935,215 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 }
 /* Surfaces with a header push the stack below it. */
 .file-viewer-root > .pane-controls { top: 46px; right: 16px; }
+
+/* === Usage view (issue #88) ===
+   Overlay modal plotting token burn: orange bars (tokens per bin) with
+   the 5h/7d quota peaks as sage/mustard lines. Same backdrop language
+   as the new-pane dialog; the period label is the hero — Playfair
+   italic, the same voice as the Reck wordmark. */
+
+.usage-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 20, 19, 0.35);
+  z-index: 200;
+  backdrop-filter: blur(3px);
+}
+
+.usage-card {
+  background: var(--app-bg-raised);
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem 1.5rem 1rem;
+  width: min(880px, 92vw);
+  box-shadow: 0 12px 40px rgba(20, 20, 19, 0.25);
+  color: var(--app-text);
+  outline: none;
+  animation: usage-card-in 0.25s var(--ease-smooth);
+}
+
+@keyframes usage-card-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-card { animation: none; }
+}
+
+.usage-head {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.usage-title {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--claude-mid);
+  margin: 0;
+}
+
+.usage-chips {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.usage-chip {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.5px;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--app-text-dim);
+  cursor: pointer;
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth),
+    border-color 0.15s var(--ease-smooth);
+}
+
+.usage-chip:hover {
+  background: var(--app-hover);
+  color: var(--app-text);
+}
+
+.usage-chip.active {
+  background: var(--app-active-bg);
+  border-color: var(--claude-orange);
+  color: var(--claude-orange);
+}
+
+.usage-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+/* The hero: the period being examined, set in the wordmark's voice. */
+.usage-period {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 1.35rem;
+  color: var(--app-text);
+  min-width: 13rem;
+  text-align: center;
+}
+
+.usage-pager,
+.usage-drill-up {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--app-text-dim);
+  cursor: pointer;
+  transition: background 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
+}
+
+.usage-pager:hover:not(:disabled),
+.usage-drill-up:hover:not(:disabled) {
+  background: var(--app-hover);
+  color: var(--claude-orange);
+}
+
+.usage-pager:disabled,
+.usage-drill-up:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.usage-nav-spacer {
+  flex: 1;
+}
+
+.usage-project-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.5px;
+  color: var(--app-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.usage-project {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--app-border);
+  border-radius: var(--radius);
+  background: var(--app-input-bg);
+  color: var(--app-text);
+  max-width: 180px;
+}
+
+.usage-chart-wrap {
+  position: relative;
+  min-height: 320px;
+  transition: opacity 0.15s var(--ease-smooth);
+}
+
+.usage-chart-wrap.loading {
+  opacity: 0.45;
+}
+
+.usage-note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 3rem;
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  color: var(--app-text-dim);
+  pointer-events: none;
+}
+
+.usage-readout {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--app-text-dim);
+  min-height: 1.2em;
+  margin-top: 0.4rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-stats {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--app-text-muted);
+  margin-top: 0.3rem;
+}
+
+/* uPlot chrome, reck-toned. The legend doubles as series toggles. */
+.usage-chart .u-legend {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--app-text-dim);
+}
+
+.usage-chart .u-legend .u-marker {
+  border-radius: 2px;
+}
+
+.usage-chart .u-over {
+  cursor: pointer;
+}

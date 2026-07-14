@@ -34,6 +34,7 @@ import { promptForClaudeLaunchArgs } from "./ui/claude-launch-dialog";
 import { Rail } from "./ui/rail";
 import { effectiveStoplight as filterEffectiveStoplight } from "./ui/effective-stoplight";
 import { AppBar, type Theme } from "./ui/app-bar";
+import { openUsageOverlay } from "./ui/usage-view";
 import { PaneLayout } from "./ui/pane-layout";
 import { installPathLinkProvider } from "./viewer/PathLinkProvider";
 import { installUrlLinkProvider } from "./viewer/UrlLinkProvider";
@@ -578,6 +579,9 @@ export async function boot(splash?: StartupSplashController) {
       );
     },
     onToggleTheme: () => toggleTheme(),
+    // Usage data lives in the primary host's daemon (the station's
+    // SQLite store); the overlay fetches everything it needs itself.
+    onOpenUsage: () => openUsageOverlay({ api: apiForHost(primaryHost) }),
   });
   appBar.setRailExpanded(railMode === "expanded");
   appBar.setTheme(theme);

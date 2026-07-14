@@ -37,6 +37,7 @@
     "markdown-it": "^14.1.1",
     "markdown-it-anchor": "^9.2.0",
     "markdown-it-task-lists": "^2.1.1",
+    "uplot": "^1.6.32",
     "ws": "^8.21.0"
   },
   "devDependencies": {
