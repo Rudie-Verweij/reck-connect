@@ -285,43 +285,6 @@ export function pickSession(
   });
 }
 
-/** Info modal shown when the user clicks "Add Project". Theme-aware. */
-export function showAddProjectInfo(parent: HTMLElement, configHint: string): Promise<void> {
-  return new Promise((resolve) => {
-    const overlay = document.createElement("div");
-    overlay.className = "new-pane-dialog";
-    overlay.innerHTML = `
-      <div class="options" role="dialog" aria-label="Add project" style="max-width:460px;">
-        <div class="dialog-title">Add a project</div>
-        <div class="dialog-body">
-          Projects are defined on the <strong>station</strong> in
-          <code class="inline-code">projects.toml</code>. Add a <code class="inline-code">[[project]]</code> block
-          (id, name, cwd) and restart <code class="inline-code">reck-stationd</code>.
-        </div>
-        <div class="dialog-hint-label">Station config</div>
-        <pre class="code-block">${escapeHtml(configHint)}</pre>
-        <div class="dialog-buttons" style="margin-top:1.25rem;">
-          <button class="primary" data-action="ok">Got it</button>
-        </div>
-      </div>
-    `;
-    parent.appendChild(overlay);
-
-    const close = () => {
-      overlay.remove();
-      window.removeEventListener("keydown", onKey, true);
-      resolve();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); close(); }
-    };
-    window.addEventListener("keydown", onKey, true);
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-    overlay.querySelector("button")?.addEventListener("click", () => close());
-    (overlay.querySelector("button") as HTMLElement)?.focus();
-  });
-}
-
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

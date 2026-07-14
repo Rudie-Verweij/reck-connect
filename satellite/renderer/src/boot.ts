@@ -50,7 +50,6 @@ import {
   askPaneKind,
   confirmDialog,
   pickSession,
-  showAddProjectInfo,
 } from "./ui/new-pane-dialog";
 import { codexUnavailableMessage } from "./ui/codex-availability";
 import { showToast } from "./viewer/Toast";
@@ -571,12 +570,6 @@ export async function boot(splash?: StartupSplashController) {
   const appBar = new AppBar({
     root: navRoot,
     onToggleRail: () => toggleRail(),
-    onOpenSettings: () => {
-      void showAddProjectInfo(
-        document.body,
-        "Edit ~/.config/reck/projects.toml (or the --config path) then restart reck-stationd.",
-      );
-    },
     onToggleTheme: () => toggleTheme(),
   });
   appBar.setRailExpanded(railMode === "expanded");

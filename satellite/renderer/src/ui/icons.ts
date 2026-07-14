@@ -28,10 +28,6 @@ export const iconMic = base(
   `<rect x="6" y="1.5" width="4" height="8" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><line x1="8" y1="12" x2="8" y2="14.5"/><line x1="5.5" y1="14.5" x2="10.5" y2="14.5"/>`,
 );
 
-export const iconSettings = base(
-  `<circle cx="8" cy="8" r="2.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M3.5 12.5l1.4-1.4M11.1 4.9l1.4-1.4"/>`,
-);
-
 export const iconClear = base(
   `<path d="M3 5h10M5 5V3.5a1 1 0 011-1h4a1 1 0 011 1V5M4.5 5l.7 8a1 1 0 001 .9h3.6a1 1 0 001-.9l.7-8"/>`,
 );
