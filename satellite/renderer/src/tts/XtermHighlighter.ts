@@ -1,5 +1,6 @@
 import type { TtsBoundary } from "./TtsEngine";
 import { computeHighlightRect } from "./highlightGeometry";
+import { applyHighlightColors } from "./highlightStyle";
 import { relocateWord, type BufferTextLine } from "./wordLocator";
 
 // XtermHighlighter — paints the TTS reading highlight as a DOM overlay whose
@@ -66,13 +67,6 @@ export interface XtermHighlighterOptions {
 }
 
 const OVERLAY_CLASS = "reck-tts-highlight";
-
-// The overlay sits ON TOP of the text (a DOM layer above the WebGL canvas),
-// so it must be translucent for the word to read through it. A plain alpha
-// composite is mode-safe — it tints rather than washes in both light and
-// dark themes — unlike mix-blend-mode:multiply, which darkens light
-// (dark-mode) text into low contrast. Tunable; verified visually.
-const OVERLAY_OPACITY = "0.5";
 
 export class XtermHighlighter {
   private readonly term: HighlighterTerminal;
@@ -187,7 +181,9 @@ export class XtermHighlighter {
     el.style.top = `${rect.top}px`;
     el.style.width = `${rect.width}px`;
     el.style.height = `${rect.height}px`;
-    el.style.backgroundColor = theme.backgroundColor;
+    // Shared translucent fill + opaque ring so the terminal highlight looks
+    // identical to the markdown / file-viewer surfaces.
+    applyHighlightColors(el, theme.backgroundColor);
     if (theme.foregroundColor) el.style.color = theme.foregroundColor;
     el.style.display = "block";
   }
@@ -221,7 +217,6 @@ export class XtermHighlighter {
     el.style.pointerEvents = "none";
     el.style.zIndex = "5";
     el.style.borderRadius = "2px";
-    el.style.opacity = OVERLAY_OPACITY;
     el.style.display = "none";
     this.overlayParent.appendChild(el);
     this.overlay = el;

@@ -48,9 +48,6 @@ var sessionIDRe = regexp.MustCompile(
 
 func (s *Server) handleTranscript(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := chi.URLParam(r, "id")
-	if s.rejectSupervisorOutOfScope(w, r, id) {
-		return
-	}
 	sessionID := chi.URLParam(r, "session_id")
 	if !sessionIDRe.MatchString(sessionID) {
 		nethttp.Error(w, "session id must be a UUID", nethttp.StatusBadRequest)

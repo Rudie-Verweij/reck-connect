@@ -17,6 +17,7 @@
 import "@xterm/xterm/css/xterm.css";
 import { TerminalPane } from "@client-core/terminal/terminal-pane";
 import { installPathLinkProvider } from "./viewer/PathLinkProvider";
+import { installUrlLinkProvider } from "./viewer/UrlLinkProvider";
 import type { HostRef } from "./host";
 // `loadSettings` reads via the same IPC channels the main renderer uses;
 // the popout's preload exposes the same `reckAPI` surface, so this works
@@ -177,6 +178,13 @@ async function bootPopout(): Promise<void> {
       });
     },
   });
+  // Clickable http/https URLs in the popout terminal too. ⌘-click →
+  // window.open → main's setWindowOpenHandler → shell.openExternal.
+  installUrlLinkProvider(term.getXterm(), {
+    onActivateUrl: (url) => {
+      window.open(url, "_blank", "noopener");
+    },
+  });
 
   // Wire the unified TTS subsystem into the popout. Detached panes share
   // the same controller + control bar + shortcuts as the main window.
@@ -248,6 +256,10 @@ async function bootPopout(): Promise<void> {
           originalText: href,
         });
       },
+      // ⌘+click an http/https URL in the transcript → OS default browser.
+      onExternalActivate: (href) => {
+        window.open(href, "_blank", "noopener");
+      },
     }),
   });
 
@@ -281,11 +293,14 @@ async function bootPopout(): Promise<void> {
     initSearch({
       getActiveSearchSurface: () => {
         // An open History overlay owns ⌘F (#51) — search the whole
-        // transcript rather than the terminal's visible rows.
+        // transcript rather than the terminal's visible rows. The bar
+        // mounts into the popout body's stack (with the history clock +
+        // TTS bar), not a nested one inside the overlay — one stack,
+        // History always at the bottom.
         const overlay = transcripts.get(panePaneId);
         if (overlay) {
           return new MarkdownSearchAdapter({
-            container: ensurePaneControls(overlay.view.root),
+            container: ensurePaneControls(body),
             body: overlay.view.body,
           });
         }

@@ -1,8 +1,7 @@
 // Package httpx holds framework-agnostic HTTP helpers the daemon's
-// handler packages (internal/http, internal/supervisor) share. Keeping
-// this layer separate from internal/http avoids a potential dep cycle
-// — internal/http imports internal/supervisor's types via an interface,
-// so putting the decode helper here lets both sides import it cleanly.
+// handler packages share. Keeping this layer separate from
+// internal/http lets any handler package import the decode helper
+// without risking a dependency cycle.
 package httpx
 
 import (

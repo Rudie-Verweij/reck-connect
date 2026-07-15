@@ -12,6 +12,7 @@ import (
 	nethttp "net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -97,14 +98,65 @@ const statusClientClosedRequest = 499
 // periodically.
 const paneUploadDirPrefix = "reck-pane-"
 
-// allowedUploadMIMEs is the phase-1 image allowlist. Non-image paste
-// content falls through to the xterm default text-paste path in the
-// renderer and never hits this endpoint.
-var allowedUploadMIMEs = map[string]string{
-	"image/png":  ".png",
-	"image/jpeg": ".jpg",
-	"image/webp": ".webp",
-	"image/gif":  ".gif",
+// sniffKind selects how a declared upload MIME is validated against the
+// magic-byte sniff of the actual payload.
+//
+//   - sniffStrict: http.DetectContentType must report *exactly* the
+//     declared MIME. Used for formats the stdlib sniffer recognises by
+//     magic bytes (all images + PDF). Closes the "declare png, ship a
+//     different format" gap so a downstream consumer trusting the
+//     extension can't be format-confused.
+//   - sniffText: the payload must sniff as text/plain. Used for text
+//     formats the stdlib sniffer can't tell apart — CSV, JSON and
+//     Markdown all sniff as text/plain, so equality can't work — while
+//     still rejecting a binary (executable, archive) disguised under a
+//     .txt/.md/.csv/.json declared type, which would sniff as
+//     application/octet-stream.
+type sniffKind int
+
+const (
+	sniffStrict sniffKind = iota
+	sniffText
+)
+
+type uploadType struct {
+	ext  string
+	kind sniffKind
+}
+
+// allowedUploadMIMEs is the upload allowlist. Images + PDF are validated
+// strictly; text-family formats (Scope B drag-drop) are validated against
+// a text sniff. Anything not listed is rejected with 415, and the renderer
+// never sends it (it derives an allowlisted MIME from the file extension).
+var allowedUploadMIMEs = map[string]uploadType{
+	"image/png":        {".png", sniffStrict},
+	"image/jpeg":       {".jpg", sniffStrict},
+	"image/webp":       {".webp", sniffStrict},
+	"image/gif":        {".gif", sniffStrict},
+	"application/pdf":  {".pdf", sniffStrict},
+	"text/plain":       {".txt", sniffText},
+	"text/markdown":    {".md", sniffText},
+	"text/csv":         {".csv", sniffText},
+	"application/json": {".json", sniffText},
+}
+
+// safeUploadExtRe matches a storable file extension: a dot followed by
+// 1–16 lowercase alphanumerics. Rejects empty, multi-dot, separators,
+// spaces, and unicode — anything that could smuggle a path fragment.
+var safeUploadExtRe = regexp.MustCompile(`^\.[a-z0-9]{1,16}$`)
+
+// safeExtFromFilename derives a lowercase dot-extension from the *base*
+// of an untrusted client filename, or "" when there is no extension or it
+// isn't a plain alphanumeric run. Only the extension is ever used — the
+// stored file always gets a server-generated random basename — so this
+// cannot introduce path traversal (e.g. "../../etc/passwd" → base
+// "passwd" → no extension → "").
+func safeExtFromFilename(name string) string {
+	ext := strings.ToLower(filepath.Ext(filepath.Base(name)))
+	if !safeUploadExtRe.MatchString(ext) {
+		return ""
+	}
+	return ext
 }
 
 // paneUploadRegistrations tracks which live panes have already had their
@@ -200,19 +252,8 @@ func generateUploadFilename(ext string) (string, error) {
 //
 // On 200, response body is `{"path": "<abs-path>"}`. The caller types
 // this path into the PTY.
-//
-// Supervisor scope: uploads are rejected for supervisor-authenticated
-// callers — this endpoint is a human-driven paste surface; letting the
-// supervisor write arbitrary bytes to disk would widen its attack
-// surface without a compelling reason. Symmetric with the supervisor
-// carve-outs on /mission-control/chat etc.
 func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) {
 	paneID := chi.URLParam(r, "pane_id")
-	if ActorFromRequest(r) == "supervisor" {
-		slog.Info("upload_rejected", "pane", paneID, "reason", "supervisor")
-		nethttp.Error(w, "forbidden: supervisor cannot upload to panes", nethttp.StatusForbidden)
-		return
-	}
 	pane, ok := s.Manager.PaneByID(paneID)
 	if !ok {
 		slog.Info("upload_rejected", "pane", paneID, "reason", "pane_not_found")
@@ -292,51 +333,69 @@ func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) 
 	// was), distinct from the outer request's multipart Content-Type.
 	// Trim a trailing charset= in case a browser ever tags one on.
 	declaredCT := normalizeContentType(header.Header.Get("Content-Type"))
-	ext, ok := allowedUploadMIMEs[declaredCT]
-	if !ok {
-		slog.Info("upload_rejected",
-			"pane", pane.ID,
-			"reason", "unsupported_mime",
-			"declared", declaredCT,
-		)
-		nethttp.Error(w, "unsupported media type", nethttp.StatusUnsupportedMediaType)
-		return
+	ut, known := allowedUploadMIMEs[declaredCT]
+	var ext string
+	if known {
+		ext = ut.ext
+	} else {
+		// Arbitrary file (drag-drop of a user-allowlisted type). The
+		// renderer gates the extension against the user's allowlist before
+		// uploading; here we store the file by a server-generated random
+		// basename, taking only the *extension* from the untrusted client
+		// filename — never its name or path — so a traversal filename can't
+		// escape the tmpdir. No content sniff: the type was user-approved
+		// and the file is only stored + referenced by path, never executed.
+		ext = safeExtFromFilename(header.Filename)
+		if ext == "" {
+			slog.Info("upload_rejected",
+				"pane", pane.ID,
+				"reason", "unsupported_mime",
+				"declared", declaredCT,
+			)
+			nethttp.Error(w, "unsupported media type", nethttp.StatusUnsupportedMediaType)
+			return
+		}
 	}
 
-	// Magic-byte sniff the first chunk. Defends against a hostile or
-	// buggy client lying about Content-Type to slip a non-image
-	// payload (executable, script, archive) past the declared-MIME
-	// allowlist above. http.DetectContentType is the standard library
-	// sniffer and reports correct MIME for PNG/JPEG/GIF/WebP from the
-	// first 512 bytes — all four image types we allow.
+	// Read the first chunk: needed to replay before the streamed remainder
+	// (all types), and to magic-byte sniff known types below.
 	sniffBuf := make([]byte, sniffLen)
 	nSniff, sniffErr := io.ReadFull(file, sniffBuf)
-	// ErrUnexpectedEOF = short but valid read; EOF = empty file. Both
-	// acceptable — the sniff + subsequent allowlist check will catch
-	// a genuinely malformed payload.
+	// ErrUnexpectedEOF = short but valid read; EOF = empty file. Both fine.
 	if sniffErr != nil && !errors.Is(sniffErr, io.ErrUnexpectedEOF) && !errors.Is(sniffErr, io.EOF) {
 		slog.Info("upload_rejected", "pane", pane.ID, "reason", "sniff_read", "err", sniffErr.Error())
 		nethttp.Error(w, "read failed: "+sniffErr.Error(), nethttp.StatusBadRequest)
 		return
 	}
 	sniffBuf = sniffBuf[:nSniff]
-	detectedCT := normalizeContentType(nethttp.DetectContentType(sniffBuf))
-	// Strict match: detected MIME must equal declared MIME. Relaxing
-	// this to "detected is *in the allowlist*" would let a client
-	// declare image/png, ship JPEG bytes (also allowlisted), and end
-	// up with a `.png` file containing non-PNG bytes — so any
-	// downstream consumer trusting the extension gets format-
-	// confused. Requiring equality closes that gap and matches the
-	// error string's stated intent.
-	if detectedCT != declaredCT {
-		slog.Info("upload_rejected",
-			"pane", pane.ID,
-			"reason", "content_sniff",
-			"declared", declaredCT,
-			"detected", detectedCT,
-		)
-		nethttp.Error(w, "content does not match declared image type", nethttp.StatusUnsupportedMediaType)
-		return
+
+	if known {
+		// Validate the sniff against the declared type's policy (see
+		// sniffKind). sniffStrict requires exact equality — declaring
+		// image/png while shipping other bytes lands a `.png` full of
+		// non-PNG data, format-confusing any downstream consumer that
+		// trusts the extension. sniffText requires the payload to sniff as
+		// text/plain, which rejects a binary disguised under a text
+		// extension while still accepting CSV/JSON/Markdown (all reported
+		// as text/plain by the stdlib sniffer).
+		detectedCT := normalizeContentType(nethttp.DetectContentType(sniffBuf))
+		sniffOK := false
+		switch ut.kind {
+		case sniffStrict:
+			sniffOK = detectedCT == declaredCT
+		case sniffText:
+			sniffOK = detectedCT == "text/plain"
+		}
+		if !sniffOK {
+			slog.Info("upload_rejected",
+				"pane", pane.ID,
+				"reason", "content_sniff",
+				"declared", declaredCT,
+				"detected", detectedCT,
+			)
+			nethttp.Error(w, "content does not match declared type", nethttp.StatusUnsupportedMediaType)
+			return
+		}
 	}
 
 	dir, err := ensurePaneUploadDir(pane)
@@ -466,9 +525,6 @@ func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) 
 //
 // Rejects with:
 //   - 401 — handled by authMiddleware upstream; never reaches here.
-//   - 403 — supervisor-authenticated caller. Mirrors the POST carve-out:
-//     uploads are a human-driven paste surface; the supervisor has no
-//     business enumerating them.
 //   - 404 — pane id doesn't correspond to a live pane.
 //   - 500 — tmpdir read failed for a reason other than "dir doesn't
 //     exist yet" (which collapses to a 200 with an empty list).
@@ -478,11 +534,6 @@ func (s *Server) handlePaneUpload(w nethttp.ResponseWriter, r *nethttp.Request) 
 // `{"uploads": []}`, not a 404 — callers can treat it uniformly.
 func (s *Server) handleListPaneUploads(w nethttp.ResponseWriter, r *nethttp.Request) {
 	paneID := chi.URLParam(r, "pane_id")
-	if ActorFromRequest(r) == "supervisor" {
-		slog.Info("uploads_list_rejected", "pane", paneID, "reason", "supervisor")
-		nethttp.Error(w, "forbidden: supervisor cannot list pane uploads", nethttp.StatusForbidden)
-		return
-	}
 	pane, ok := s.Manager.PaneByID(paneID)
 	if !ok {
 		nethttp.Error(w, "pane not found", nethttp.StatusNotFound)
@@ -591,4 +642,3 @@ func SweepStalePaneUploadDirs(liveIDs map[string]bool) {
 		slog.Info("upload sweep", "removed", removed)
 	}
 }
-

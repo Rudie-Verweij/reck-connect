@@ -14,7 +14,6 @@ func TestPaneBaseEnv_dropsSecrets(t *testing.T) {
 	t.Setenv("DAEMON_TOKEN", "super-secret")
 	t.Setenv("ANTHROPIC_API_KEY", "also-secret")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "nope")
-	t.Setenv("RECK_SUPERVISOR_TOKEN", "nope")
 	t.Setenv("PATH", "/usr/bin:/bin")
 	t.Setenv("HOME", "/tmp/pane-test-home")
 	t.Setenv("LC_TIME", "C")
@@ -35,7 +34,6 @@ func TestPaneBaseEnv_dropsSecrets(t *testing.T) {
 		"DAEMON_TOKEN",
 		"ANTHROPIC_API_KEY",
 		"AWS_SECRET_ACCESS_KEY",
-		"RECK_SUPERVISOR_TOKEN",
 	} {
 		if _, ok := m[k]; ok {
 			t.Errorf("paneBaseEnv leaked forbidden env %q", k)

@@ -191,10 +191,10 @@ func newHookSecret() string {
 
 // envAllowlist is the set of environment variables the daemon will
 // forward into pane child processes. Everything else the daemon inherits
-// — in particular DAEMON_TOKEN, the Mission Control supervisor token,
-// ANTHROPIC_API_KEY, AWS credentials, and anything a launchd plist may
-// have stashed — is dropped at spawn so a pane child (Claude, a shell
-// the user is typing into, or an npm script) cannot read it.
+// — in particular DAEMON_TOKEN, ANTHROPIC_API_KEY, AWS credentials, and
+// anything a launchd plist may have stashed — is dropped at spawn so a
+// pane child (Claude, a shell the user is typing into, or an npm script)
+// cannot read it.
 //
 // Added entries should be values the child *needs* to function:
 //   - PATH, HOME, USER, SHELL, LANG/LC_*, TZ: baseline for any binary
@@ -203,10 +203,10 @@ func newHookSecret() string {
 //   - DISPLAY, SSH_*: only present in interactive-ssh contexts; harmless
 //   - TMPDIR: macOS-specific, required for some Go/rust tooling
 //
-// Anything Reck-specific (RECK_PANE_ID, RECK_PROJECT_ID, RECK_DAEMON_URL,
-// supervisor token env var) is injected by Spawn explicitly — do NOT
-// rely on the daemon's own env to carry them, because a future daemon
-// refactor may set them only on the child via extraEnv.
+// Anything Reck-specific (RECK_PANE_ID, RECK_PROJECT_ID, RECK_DAEMON_URL)
+// is injected by Spawn explicitly — do NOT rely on the daemon's own env
+// to carry them, because a future daemon refactor may set them only on
+// the child via extraEnv.
 var envAllowlist = map[string]bool{
 	"PATH":            true,
 	"HOME":            true,
@@ -281,9 +281,9 @@ func paneBaseEnv() []string {
 // their events back to the right pane when POSTing to the daemon.
 //
 // extraEnv is appended (after the allowlisted base env) to the child's
-// environment. Use this for per-pane values like RECK_DAEMON_URL or the
-// supervisor's own bearer token. The daemon's own environment is NOT
-// inherited wholesale — see paneBaseEnv for the allowlist rationale.
+// environment. Use this for per-pane values like RECK_DAEMON_URL. The
+// daemon's own environment is NOT inherited wholesale — see paneBaseEnv
+// for the allowlist rationale.
 func Spawn(projectID string, kind proto.PaneKind, spawnCmd []string, cwd string, cols, rows int, extraEnv []string) (*Pane, error) {
 	id := newPaneID()
 	hookSecret := newHookSecret()

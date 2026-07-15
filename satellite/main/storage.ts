@@ -47,6 +47,14 @@ export const CONFIG_KEYS = [
   "layouts",
   "layouts_v2",
   "railWidth",
+  // Rail collapse redesign: persisted mode ("expanded"|"mini") plus the
+  // project-switch separator-wiggle tuning. Without these entries the
+  // IPC boundary silently rejects the renderer's get/set (the exact
+  // failure mode reckConnectPrompt hit before it was allowlisted).
+  "railMode",
+  "railWiggleEnabled",
+  "railWigglePixels",
+  "railWiggleLegMs",
   "theme",
   "projectNames",
   "projectOrder",
@@ -59,6 +67,10 @@ export const CONFIG_KEYS = [
   // Text-to-speech preferences: { voice: string|null, rate: number }.
   // Non-secret. Defaults applied at load time so a missing key is fine.
   "tts",
+  // App-wide prompt text auto-appended to every Claude pane. Was written
+  // by the renderer without being allowlisted — the IPC boundary silently
+  // rejected every save (caught by the config-keys sweep test).
+  "reckConnectPrompt",
   // File-viewer / Cmd+click linkifier settings. Without these allowlisted,
   // the IPC boundary silently rejects every config:get/config:set for them.
   // `fileViewerExtraRoots`: user-added folders the viewer may open outside
@@ -69,6 +81,19 @@ export const CONFIG_KEYS = [
   "fileViewerExtraRoots",
   "fileViewerModePerPath",
   "linkifier.extensionlessAllowlist",
+  // Drag-drop into a pane: user-editable allowed file extensions, and the
+  // configurable prompt template inserted (as a bracketed paste) when a
+  // file is dropped into the project root. Without these allowlisted the
+  // IPC boundary silently rejects the renderer's get/set.
+  "dragDrop.allowedExtensions",
+  "dragDrop.promptTemplate",
+  // Voice dictation (issue #67). Non-secret prefs blob:
+  //   { enabled, provider, localModel, hotkeyToggle, hotkeyPushToTalk, autoSubmit }.
+  // The Deepgram API key is held separately under the secret key
+  // "transcription.deepgramKey" so the safeStorage refusal path only
+  // blocks the secret half (same split as settings / station.token).
+  "transcription",
+  "transcription.deepgramKey",
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
@@ -98,6 +123,9 @@ export function isAllowedConfigKey(key: unknown): key is ConfigKey {
 const SECRET_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "daemonToken",
   "station.token",
+  // The user's Deepgram API key — plaintext when decrypted, so it must
+  // encrypt at rest. Stored apart from the "transcription" prefs blob.
+  "transcription.deepgramKey",
 ]);
 
 export function listSecretConfigKeys(): ReadonlySet<string> {

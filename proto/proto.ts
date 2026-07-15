@@ -111,8 +111,6 @@ export interface Project {
    * daemons always emit the field (as `[]` for zero-pane projects).
    */
   pane_ids?: string[];
-  /** True when the project is registered with Mission Control. */
-  docked: boolean;
   /**
    * True when the project is archived (asleep): its panes are killed to free
    * RAM, its saved layout is frozen, and it renders in the rail's Archive
@@ -204,6 +202,25 @@ export interface Pane {
    * panes (they use session_id instead).
    */
   slot_id?: string;
+  /**
+   * Minimal live token/quota glance for a small rail badge (e.g.
+   * "ctx 43% · 5h 61%"). Absent until the pane's Claude statusline has
+   * reported at least once, and always absent for non-Claude panes. The
+   * full history lives in the daemon's usage SQLite store; this is only
+   * the latest value. Additive on the wire — old clients ignore it.
+   */
+  usage?: PaneUsage;
+}
+
+/**
+ * Live usage glance for a pane. context_pct is per-session; the 5h/weekly
+ * quota is account-level (Max only, after the first response) and shared
+ * across panes. All fields optional.
+ */
+export interface PaneUsage {
+  context_pct?: number;
+  five_hour_pct?: number;
+  seven_day_pct?: number;
 }
 
 export interface ProjectDetail {
@@ -394,80 +411,6 @@ export interface PaneUploadsListResponse {
   uploads: PaneUpload[];
 }
 
-// --- Mission Control  ---
-
-export interface DockProjectResponse {
-  docked: boolean;
-}
-
 export interface ArchiveProjectResponse {
   archived: boolean;
 }
-
-export interface MissionControlPane {
-  pane_id: string;
-  kind: PaneKind;
-  agent_state: AgentState;
-  stoplight: Stoplight;
-  session_name?: string;
-}
-
-export interface MissionControlCard {
-  project_id: string;
-  project_name: string;
-  cwd: string;
-  stoplight: Stoplight;
-  pane_count: number;
-  panes: MissionControlPane[];
-}
-
-export interface MissionControlStateResponse {
-  cards: MissionControlCard[];
-  supervisor_online: boolean;
-}
-
-export interface MissionControlChatRequest {
-  message: string;
-}
-
-export interface MissionControlChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  created_at: string;
-}
-
-export interface MissionControlHistoryResponse {
-  messages: MissionControlChatMessage[];
-}
-
-// --- MC WebSocket: Server → Client ---
-
-export interface MCStateMessage {
-  type: "state";
-  state: MissionControlStateResponse;
-}
-
-export interface MCChatDeltaMessage {
-  type: "chat_delta";
-  message_id: string;
-  text: string;
-}
-
-export interface MCChatMessageMessage {
-  type: "chat_message";
-  message: MissionControlChatMessage;
-}
-
-export interface MCToolCallMessage {
-  type: "tool_call";
-  name: string;
-  input: Record<string, unknown>;
-  result?: string;
-}
-
-export type MCServerMessage =
-  | MCStateMessage
-  | MCChatDeltaMessage
-  | MCChatMessageMessage
-  | MCToolCallMessage;

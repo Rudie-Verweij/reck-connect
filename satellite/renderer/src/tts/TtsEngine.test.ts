@@ -4,6 +4,8 @@ import {
   clampRate,
   snapRate,
   sanitizeUtteranceText,
+  segmentText,
+  MAX_UTTERANCE_CHARS,
   DEGENERATE_ZERO_BOUNDARY_THRESHOLD,
   type SpokenChunk,
   type TtsBoundary,
@@ -61,15 +63,16 @@ class StubSynth extends EventTarget {
   resumeCount = 0;
   voices: SpeechSynthesisVoice[] = [];
 
+  // Spec-faithful paused semantics: pause() pauses the GLOBAL queue, and
+  // neither speak() nor cancel() unpauses it — only resume() does. (This
+  // is exactly the trap the paused-queue wedge tests below exercise.)
   speak(u: StubUtterance) {
     this.spoken.push(u);
     this.speaking = true;
-    this.paused = false;
   }
   cancel() {
     this.cancelCount++;
     this.speaking = false;
-    this.paused = false;
   }
   pause() {
     this.pauseCount++;
@@ -266,6 +269,48 @@ describe("TtsEngine.stop / pause / resume", () => {
     expect(engine.isPaused()).toBe(true);
     engine.resume();
     expect(engine.isPaused()).toBe(false);
+  });
+});
+
+describe("TtsEngine paused-queue wedge (pause → cancel → speak)", () => {
+  // pause() pauses the GLOBAL SpeechSynthesis queue and cancel() empties
+  // the queue WITHOUT unpausing it. So pause → stop/re-speak used to leave
+  // the queue paused forever: every later speak() (any surface, any pane)
+  // sat silently queued until app restart, and the heartbeat couldn't
+  // rescue it because a never-started utterance has speaking === false.
+  // The engine must therefore clear the paused state whenever it cancels.
+  let synth: StubSynth;
+  let engine: TtsEngine;
+
+  beforeEach(() => {
+    synth = new StubSynth();
+    engine = makeEngine(synth);
+  });
+
+  afterEach(() => engine.dispose());
+
+  it("stop() while paused clears the global paused state", () => {
+    engine.start(chunkOfWords(["a", "b"]));
+    engine.pause();
+    engine.stop();
+    expect(synth.paused).toBe(false);
+  });
+
+  it("start() while paused un-wedges the queue so the new utterance can play", () => {
+    engine.start(chunkOfWords(["a", "b"]));
+    engine.pause();
+    engine.start(chunkOfWords(["c", "d"]));
+    expect(synth.paused).toBe(false);
+    expect(synth.spoken).toHaveLength(2);
+  });
+
+  it("start() clears a paused queue even with no current utterance (ended while paused)", () => {
+    engine.start(chunkOfWords(["a"]));
+    engine.pause();
+    synth.spoken[0].fireEnd(); // engine drops currentUtt; queue stays paused
+    engine.start(chunkOfWords(["b"]));
+    expect(synth.paused).toBe(false);
+    expect(synth.spoken).toHaveLength(2);
   });
 });
 
@@ -733,5 +778,277 @@ describe("TtsEngine degenerate-boundary guard", () => {
     synth.spoken[1].fireBoundary(0, 7);
     expect(heard).toHaveLength(1);
     expect(heard[0].word).toBe("charlie");
+  });
+});
+
+describe("segmentText", () => {
+  it("returns one segment when text fits", () => {
+    expect(segmentText("hello world", 100)).toEqual([{ start: 0, end: 11 }]);
+  });
+
+  it("returns no segments for empty text", () => {
+    expect(segmentText("", 100)).toEqual([]);
+  });
+
+  it("splits on whitespace so words are never cut, covering the whole string", () => {
+    const text = "aaaa bbbb cccc dddd";
+    const segs = segmentText(text, 10);
+    expect(segs.length).toBeGreaterThan(1);
+    // Contiguous cover of [0, n) — concatenation reconstitutes the text.
+    expect(segs[0].start).toBe(0);
+    expect(segs[segs.length - 1].end).toBe(text.length);
+    for (let i = 1; i < segs.length; i++) {
+      expect(segs[i].start).toBe(segs[i - 1].end);
+    }
+    expect(segs.map((s) => text.slice(s.start, s.end)).join("")).toBe(text);
+    for (const s of segs) expect(s.end - s.start).toBeLessThanOrEqual(10);
+  });
+
+  it("hard-splits a single token longer than the cap", () => {
+    const segs = segmentText("xxxxxxxxxxxx", 5); // 12 x's, no whitespace
+    for (const s of segs) expect(s.end - s.start).toBeLessThanOrEqual(5);
+    expect(segs.map((s) => "xxxxxxxxxxxx".slice(s.start, s.end)).join("")).toBe(
+      "xxxxxxxxxxxx",
+    );
+  });
+
+  it("has a sane production cap", () => {
+    expect(MAX_UTTERANCE_CHARS).toBeGreaterThan(0);
+    expect(MAX_UTTERANCE_CHARS).toBeLessThanOrEqual(32000);
+  });
+});
+
+describe("utterance segmentation (long tool payloads must not wedge)", () => {
+  let synth: StubSynth;
+  beforeEach(() => {
+    synth = new StubSynth();
+  });
+
+  function makeEngineCapped(max: number) {
+    return new TtsEngine({
+      synth: synth as unknown as SpeechSynthesis,
+      UtteranceCtor: StubUtterance as unknown as typeof SpeechSynthesisUtterance,
+      heartbeatIntervalMs: 100,
+      restartDebounceMs: 0,
+      maxUtteranceChars: max,
+    });
+  }
+
+  /** Fire end on the latest utterance until no new segment is chained. */
+  function drain() {
+    let prev = -1;
+    for (let g = 0; g < 200 && synth.spoken.length !== prev; g++) {
+      prev = synth.spoken.length;
+      synth.spoken[synth.spoken.length - 1].fireEnd();
+    }
+  }
+
+  it("speaks a big chunk as several bounded utterances, one at a time", () => {
+    const engine = makeEngineCapped(10);
+    const chunk = chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]); // 19 chars
+    engine.start(chunk);
+    // Only the first segment is queued up front — the rest chain on end.
+    expect(synth.spoken).toHaveLength(1);
+    drain();
+    expect(synth.spoken.length).toBeGreaterThan(1);
+    for (const u of synth.spoken) expect(u.text.length).toBeLessThanOrEqual(10);
+    // The segments reconstitute the original spoken text exactly.
+    expect(synth.spoken.map((u) => u.text).join("")).toBe(chunk.text);
+  });
+
+  it("fires 'end' to listeners only once, after the LAST segment", () => {
+    const engine = makeEngineCapped(10);
+    let ended = 0;
+    engine.on("end", () => ended++);
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]));
+    // Draining every segment fires 'end' exactly once (after the last).
+    drain();
+    expect(ended).toBe(1);
+  });
+
+  it("maps a boundary in a later segment back to the right word (segBase offset)", () => {
+    const engine = makeEngineCapped(10);
+    const heard: TtsBoundary[] = [];
+    engine.on("boundary", (b) => heard.push(b));
+    // "aaaa bbbb cccc dddd" → seg0 "aaaa bbbb ", seg1 "cccc dddd".
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]));
+    expect(synth.spoken).toHaveLength(1);
+    synth.spoken[0].fireEnd(); // advance to seg1 (segBase = 10)
+    expect(synth.spoken).toHaveLength(2);
+    synth.spoken[1].fireBoundary(0, 4); // rel 0 in seg1 → abs 10 → "cccc"
+    expect(heard).toHaveLength(1);
+    expect(heard[0].word).toBe("cccc");
+  });
+
+  it("a short chunk still speaks as exactly one utterance", () => {
+    const engine = makeEngineCapped(MAX_UTTERANCE_CHARS);
+    engine.start(chunkOfWords(["alpha", "bravo"]));
+    expect(synth.spoken).toHaveLength(1);
+    drain();
+    expect(synth.spoken).toHaveLength(1);
+  });
+
+  it("holds the next segment when a pause races a segment end, then speaks it on resume (no wedge)", () => {
+    const engine = makeEngineCapped(10);
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"])); // 2 segments
+    expect(synth.spoken).toHaveLength(1);
+    // User pauses just as segment 0 finishes — pause() lands, then the
+    // browser still delivers the finishing utterance's end.
+    engine.pause();
+    expect(synth.paused).toBe(true);
+    synth.spoken[0].fireEnd();
+    // Segment 1 must NOT be pushed into the paused queue (that wedges forever).
+    expect(synth.spoken).toHaveLength(1);
+    expect(synth.paused).toBe(true);
+    // Resume runs the held segment.
+    engine.resume();
+    expect(synth.paused).toBe(false);
+    expect(synth.spoken).toHaveLength(2);
+    expect(synth.spoken[1].text).toBe("cccc dddd");
+  });
+
+  it("a rate change in the gap between segments restarts from the new segment, not the prior one", () => {
+    const engine = makeEngineCapped(10);
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]));
+    synth.spoken[0].fireEnd(); // advance to seg1; no boundary fired yet
+    expect(synth.spoken).toHaveLength(2);
+    expect(synth.spoken[1].text).toBe("cccc dddd");
+    engine.setRate(2); // during the gap, before seg1's first boundary
+    expect(synth.spoken).toHaveLength(3);
+    expect(synth.spoken[2].text).toBe("cccc dddd"); // NOT the whole chunk
+  });
+
+  it("start() with empty text speaks nothing and still fires end", () => {
+    const engine = makeEngineCapped(MAX_UTTERANCE_CHARS);
+    let ended = 0;
+    engine.on("end", () => ended++);
+    engine.start({ text: "", rangeMap: [] });
+    expect(synth.spoken).toHaveLength(0);
+    expect(ended).toBe(1);
+  });
+
+  it("an error mid-chunk resets state so a late end can't chain a stale segment", () => {
+    const engine = makeEngineCapped(10);
+    engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"]));
+    const errored = synth.spoken[0];
+    errored.fireError("interrupted");
+    // A late end delivered on the errored utterance must not speak segment 1.
+    errored.fireEnd();
+    expect(synth.spoken).toHaveLength(1);
+  });
+});
+
+describe("TtsEngine — reswap (recompute upcoming words on scroll)", () => {
+  let synth: StubSynth;
+
+  beforeEach(() => {
+    synth = new StubSynth();
+  });
+
+  function mk(respliceMode?: "scheduled" | "immediate"): TtsEngine {
+    return new TtsEngine({
+      synth: synth as unknown as SpeechSynthesis,
+      UtteranceCtor: StubUtterance as unknown as typeof SpeechSynthesisUtterance,
+      heartbeatIntervalMs: 100,
+      restartDebounceMs: 0,
+      respliceMode,
+    });
+  }
+
+  it("does NOT cancel/re-speak when the upcoming tail is unchanged (zero-gap)", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    synth.spoken[0].fireBoundary(0, 5); // speaking "alpha"
+    const cancelsBefore = synth.cancelCount;
+    engine.reswap(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    expect(synth.cancelCount).toBe(cancelsBefore);
+    expect(synth.spoken).toHaveLength(1);
+    engine.dispose();
+  });
+
+  it("schedules an append swap: keeps playing, then continues into new content on end", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta"]));
+    synth.spoken[0].fireBoundary(0, 5); // "alpha"
+    engine.reswap(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    // Divergence is a pure append (past the old end) → no immediate cancel.
+    expect(synth.cancelCount).toBe(0);
+    expect(synth.spoken).toHaveLength(1);
+    synth.spoken[0].fireBoundary(6, 4); // "beta" — still before the old end
+    expect(synth.spoken).toHaveLength(1);
+    // Old chunk finishes → the append continues seamlessly into new content.
+    synth.spoken[0].fireEnd();
+    expect(synth.spoken).toHaveLength(2);
+    expect(synth.spoken[1].text).toContain("gamma");
+    engine.dispose();
+  });
+
+  it("schedules a mid-tail swap: swaps only once the cursor reaches the divergence", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    synth.spoken[0].fireBoundary(0, 5); // "alpha"
+    engine.reswap(chunkOfWords(["alpha", "beta", "DELTA", "delta"]));
+    expect(synth.cancelCount).toBe(0); // divergence ("gamma"→"DELTA") is ahead
+    synth.spoken[0].fireBoundary(6, 4); // "beta" — still before divergence
+    expect(synth.cancelCount).toBe(0);
+    synth.spoken[0].fireBoundary(11, 5); // reaches "gamma" (divCharOld) → swap
+    expect(synth.cancelCount).toBe(1);
+    expect(synth.spoken).toHaveLength(2);
+    expect(synth.spoken[1].text).toContain("DELTA");
+    engine.dispose();
+  });
+
+  it("immediate mode swaps right away, resuming at the current word", () => {
+    const engine = mk("immediate");
+    engine.start(chunkOfWords(["alpha", "beta", "gamma"]));
+    synth.spoken[0].fireBoundary(6, 4); // "beta"
+    engine.reswap(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    expect(synth.cancelCount).toBe(1);
+    expect(synth.spoken).toHaveLength(2);
+    // Resumes from the current word onward — never re-speaks past content.
+    expect(synth.spoken[1].text.startsWith("beta")).toBe(true);
+    engine.dispose();
+  });
+
+  it("immediate mode still skips the swap when the tail is unchanged", () => {
+    const engine = mk("immediate");
+    engine.start(chunkOfWords(["alpha", "beta", "gamma"]));
+    synth.spoken[0].fireBoundary(0, 5);
+    engine.reswap(chunkOfWords(["alpha", "beta", "gamma"]));
+    expect(synth.cancelCount).toBe(0);
+    expect(synth.spoken).toHaveLength(1);
+    engine.dispose();
+  });
+
+  it("is a no-op when nothing is playing", () => {
+    const engine = mk();
+    engine.reswap(chunkOfWords(["a", "b"]));
+    expect(synth.cancelCount).toBe(0);
+    expect(synth.spoken).toHaveLength(0);
+    engine.dispose();
+  });
+
+  it("is a no-op while paused, and drops any pending swap", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
+    synth.spoken[0].fireBoundary(0, 5);
+    engine.pause();
+    engine.reswap(chunkOfWords(["alpha", "beta", "DELTA", "delta"]));
+    expect(synth.cancelCount).toBe(0);
+    expect(synth.spoken).toHaveLength(1);
+    engine.dispose();
+  });
+
+  it("getPlaybackAnchor reports the current word in chunk coordinates", () => {
+    const engine = mk();
+    engine.start(chunkOfWords(["alpha", "beta"]));
+    synth.spoken[0].fireBoundary(6, 4); // "beta" at charIndex 6, line 1
+    expect(engine.getPlaybackAnchor()).toEqual({
+      charIndex: 6,
+      word: "beta",
+      line: 1,
+      col: 0,
+    });
+    engine.dispose();
   });
 });

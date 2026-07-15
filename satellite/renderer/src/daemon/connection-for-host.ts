@@ -9,8 +9,8 @@
 // Phase 4 is plumbing only — only the station connection is wired
 // to the renderer's UI today (status bar + project refresh). The
 // local connection polls in the background but its callbacks largely
-// no-op until Phase 9 wires the local-side project push and Phase 11
-// extends the status bar / Mission Control to surface both. The
+// no-op until Phase 9 wires the local-side project push and a later
+// phase extends the status bar to surface both. The
 // scaffolding is here so those phases plug in without another
 // rewrite.
 //
@@ -61,9 +61,8 @@ export interface ConnectionsForHostOptions {
    * Called whenever a host's connection state changes. The registry
    * fans out every state transition for every host; Phase 4's boot
    * callback filters to the primary host (single-display status bar),
-   * Phase 11 (Mission Control aggregation) will broaden it to surface
-   * both. Keep the registry contract uniform so future surfaces don't
-   * need a second rewrite.
+   * a later phase may broaden it to surface both. Keep the registry
+   * contract uniform so future surfaces don't need a second rewrite.
    */
   onConnectionInfo: (host: HostRef, info: ConnectionInfo) => void;
 }
@@ -168,9 +167,8 @@ export function connectionForHost(host: HostRef): DaemonConnection {
  * Hosts the user has enabled in settings, in stable order: station
  * first if enabled, then local if enabled. Mirrors the api registry's
  * "what hosts can I talk to" question. Used by the boot wiring to
- * iterate `connectionForHost(h).start()` and by future surfaces (e.g.
- * Phase 11 Mission Control aggregation) that need to know which hosts
- * the user has turned on.
+ * iterate `connectionForHost(h).start()` and by future surfaces that
+ * need to know which hosts the user has turned on.
  *
  * Returns `[]` only when neither host is enabled, which is the
  * fresh-install / mode-chooser path — boot returns early before

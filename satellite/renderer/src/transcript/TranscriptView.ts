@@ -400,11 +400,14 @@ export function createTranscriptView(opts: TranscriptViewOptions): TranscriptVie
     setStatus,
     setMatches: (fractions) => scrollbar.setMatches(fractions),
     getSpeakSurface(): SpeakSurfaceAdapter {
-      // The control bar mounts into the overlay's shared top-right stack
-      // (alongside the search bar); `body` is the scrollable markdown root —
-      // the (container, body) split the file viewer speaks with.
+      // The control bar mounts into the PANE wrapper's top-right stack —
+      // the same one holding the history clock — so search/TTS/History
+      // stay one stack (History at the bottom via CSS order) in History
+      // mode, and the TtsController reuses the same bar it shows over the
+      // live terminal. `body` is the scrollable markdown root — the
+      // (container, body) split the file viewer speaks with.
       if (!speakSurface) {
-        speakSurface = new MarkdownSurfaceAdapter({ container: ensurePaneControls(root), body });
+        speakSurface = new MarkdownSurfaceAdapter({ container: ensurePaneControls(opts.host), body });
       }
       return speakSurface;
     },

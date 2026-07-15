@@ -31,6 +31,10 @@ export interface OverlayScrollbarOptions {
   hideDelayMs?: number;
   /** Minimum thumb size as a percentage of the track. Default 8. */
   minThumbPct?: number;
+  /** Accumulated wheel delta (px) required to emit one PgUp/PgDn in a
+   *  mouse-tracking TUI pane. Higher → fewer page jumps per swipe (slower
+   *  scroll). Default DEFAULT_PAGE_STEP_PX. */
+  pageStepPx?: number;
 }
 
 export interface OverlayScrollbar {
@@ -48,9 +52,12 @@ const DEFAULT_HIDE_DELAY_MS = 1400;
 const DEFAULT_MIN_THUMB_PCT = 8;
 
 // Wheel → PgUp/PgDn stepping for a mouse-tracking TUI pane. A TUI only scrolls
-// by whole pages (PgUp/PgDn), so we accumulate normalized wheel delta and emit
-// one page key per ~notch — a trackpad swipe pages a few times, not dozens.
-const PAGE_STEP_PX = 100;
+// by whole pages (PgUp/PgDn — Claude Code 2.1.150+ ignores line-scroll), so we
+// accumulate normalized wheel delta and emit one page key per this many px of
+// wheel travel. Higher = fewer page jumps per swipe (a page is a lot of lines,
+// so pacing it out is the only sensitivity lever available in this mode).
+// Overridable via OverlayScrollbarOptions.pageStepPx.
+const DEFAULT_PAGE_STEP_PX = 220;
 const WHEEL_LINE_PX = 16; // deltaMode 1 (lines) → px
 const WHEEL_PAGE_PX = 800; // deltaMode 2 (pages) → px
 
@@ -59,6 +66,7 @@ export function createOverlayScrollbar(
 ): OverlayScrollbar {
   const hideDelayMs = opts.hideDelayMs ?? DEFAULT_HIDE_DELAY_MS;
   const minThumbPct = opts.minThumbPct ?? DEFAULT_MIN_THUMB_PCT;
+  const pageStepPx = opts.pageStepPx ?? DEFAULT_PAGE_STEP_PX;
 
   const track = document.createElement("div");
   track.className = "reck-scrollbar";
@@ -155,9 +163,9 @@ export function createOverlayScrollbar(
       if (dy === 0) return; // horizontal / empty — leave it alone
       wheelAcc += dy;
       const dir = wheelAcc < 0 ? -1 : 1;
-      while (Math.abs(wheelAcc) >= PAGE_STEP_PX) {
+      while (Math.abs(wheelAcc) >= pageStepPx) {
         opts.surface.pageScroll?.(dir);
-        wheelAcc -= dir * PAGE_STEP_PX;
+        wheelAcc -= dir * pageStepPx;
       }
       e.preventDefault();
       e.stopImmediatePropagation();

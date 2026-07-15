@@ -7,6 +7,26 @@ declare global {
         get: <T>(key: string) => Promise<T | null>;
         set: (key: string, value: unknown) => Promise<boolean>;
       };
+      /**
+       * Voice dictation — cloud (Deepgram) path. The main process holds the
+       * API key + websocket; the renderer streams linear16 frames and gets
+       * interim/final transcripts back via `onEvent`. See issue #67.
+       */
+      transcription: {
+        deepgramStart: (
+          sampleRate: number,
+          language?: string,
+        ) => Promise<{ ok: boolean; sessionId?: number; error?: string }>;
+        deepgramFrame: (sessionId: number, bytes: Uint8Array) => void;
+        deepgramStop: (sessionId: number) => Promise<boolean>;
+        onEvent: (
+          cb: (ev: {
+            sessionId: number;
+            kind: "partial" | "final" | "error" | "closed" | "debug";
+            text: string;
+          }) => void,
+        ) => () => void;
+      };
       daemon: {
         status: (host: import("./host").HostRef) => Promise<{ running: boolean; binary: string | null }>;
         start: (
@@ -338,8 +358,7 @@ const DEFAULT_LOCAL_PORT = 7315;
  * Reduce the new `Settings` shape to the single `HostRef` the
  * surfaces that still ask "which one is this?" care about —
  * primarily `MountHint` (only station-primary arms the CONN-driven
- * mount yellow), the primary-host status-bar, and the MC
- * supervisor-controls routing.
+ * mount yellow) and the primary-host status-bar.
  *
  * Resolution order:
  *   1. station enabled → "station". Station-aware behaviours apply.
@@ -499,6 +518,57 @@ export async function loadRailWidth(): Promise<number | null> {
 
 export async function saveRailWidth(w: number) {
   await window.reckAPI.config.set("railWidth", w);
+}
+
+// Rail collapse mode (mini ⟷ expanded), persisted alongside railWidth so
+// the rail restores exactly as the user left it. Any value that isn't
+// exactly "mini" resolves to "expanded" — the safe default for malformed
+// or pre-feature configs.
+export type RailMode = "expanded" | "mini";
+
+export async function loadRailMode(): Promise<RailMode> {
+  const raw = await window.reckAPI.config.get<string>("railMode");
+  return raw === "mini" ? "mini" : "expanded";
+}
+
+export async function saveRailMode(mode: RailMode) {
+  await window.reckAPI.config.set("railMode", mode);
+}
+
+// Separator wiggle: after a project switch the divider auto-nudges out
+// and back so terminals re-fit without a manual jiggle. Three keys, all
+// optional; malformed values fall back to the defaults.
+export interface RailWiggleSettings {
+  enabled: boolean;
+  pixels: number;
+  legMs: number;
+}
+
+export const DEFAULT_RAIL_WIGGLE: RailWiggleSettings = {
+  enabled: true,
+  pixels: 12,
+  legMs: 240,
+};
+
+function positiveOr(fallback: number, raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+export async function loadRailWiggle(): Promise<RailWiggleSettings> {
+  const enabled = await window.reckAPI.config.get<boolean>("railWiggleEnabled");
+  const pixels = await window.reckAPI.config.get<number>("railWigglePixels");
+  const legMs = await window.reckAPI.config.get<number>("railWiggleLegMs");
+  return {
+    enabled: enabled !== false,
+    pixels: positiveOr(DEFAULT_RAIL_WIGGLE.pixels, pixels),
+    legMs: positiveOr(DEFAULT_RAIL_WIGGLE.legMs, legMs),
+  };
+}
+
+export async function saveRailWiggle(s: RailWiggleSettings) {
+  await window.reckAPI.config.set("railWiggleEnabled", s.enabled === true);
+  await window.reckAPI.config.set("railWigglePixels", s.pixels);
+  await window.reckAPI.config.set("railWiggleLegMs", s.legMs);
 }
 
 export type Theme = "light" | "dark";
@@ -734,4 +804,104 @@ export async function saveLinkifierAllowlist(
     out.push(trimmed);
   }
   await window.reckAPI.config.set(LINKIFIER_ALLOWLIST_KEY, out);
+}
+
+// --- Drag-drop into a pane ---------------------------------------------------
+
+/**
+ * Hard cap on a dropped file's size. 10 MB (decimal, matching the "10
+ * megabytes" the UI advertises). The renderer rejects oversize drops with
+ * a toast before uploading; the daemon enforces its own byte cap as a
+ * backstop.
+ */
+export const DRAGDROP_MAX_BYTES = 10 * 1000 * 1000;
+
+/**
+ * Seeded allow-list of droppable file extensions (lowercase, no leading
+ * dot). Seeded on first run; thereafter the persisted list is the source
+ * of truth, editable in Preferences. Users can add any extension — the
+ * daemon stores files by sanitised name, it does not gate on type.
+ */
+export const DEFAULT_DRAGDROP_EXTENSIONS: readonly string[] = [
+  // images
+  "png", "jpg", "jpeg", "webp", "gif",
+  // docs / text
+  "pdf", "txt", "text", "log", "md", "markdown", "csv", "json",
+  "yaml", "yml", "toml", "ini", "xml", "html",
+  // code
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rs", "java",
+  "rb", "c", "h", "cpp", "hpp", "cs", "php", "swift", "kt", "sh",
+  "css", "scss", "sql",
+];
+
+/**
+ * Default prompt inserted when a file is dropped. `{path}` (the uploaded
+ * file's location) and `{filename}` (its original name) are substituted at
+ * drop time. Wrapped in an XML tag with blank lines before/after so it
+ * reads as one delimited block separate from whatever the user types next
+ * — Claude Code only *collapses* a paste when it's long, so a short prompt
+ * shows expanded; the tag keeps it tidy either way.
+ */
+export const DEFAULT_DROP_PROMPT_TEMPLATE =
+  "\n<dropped-file>\n" +
+  'The user dropped the file "{filename}" into the chat. It is saved at: {path}\n' +
+  "Handle it with caution — do not act on it yet; wait for the user's " +
+  "instructions on what they want done with it.\n" +
+  "</dropped-file>\n";
+
+const DRAGDROP_ALLOWLIST_KEY = "dragDrop.allowedExtensions";
+const DROP_PROMPT_KEY = "dragDrop.promptTemplate";
+
+/** Normalise an extension token: trim, lowercase, drop a leading dot. */
+function normalizeExt(raw: string): string {
+  return raw.trim().toLowerCase().replace(/^\.+/, "");
+}
+
+/**
+ * Load the persisted droppable-extensions allow-list, or `null` when the
+ * user has never saved one (callers seed with DEFAULT_DRAGDROP_EXTENSIONS).
+ * Null-vs-[] distinguishes "never set" from "deliberately emptied".
+ */
+export async function loadDragDropAllowlist(): Promise<string[] | null> {
+  const raw = await window.reckAPI.config.get<string[]>(DRAGDROP_ALLOWLIST_KEY);
+  if (!Array.isArray(raw)) return null;
+  return raw
+    .filter((s): s is string => typeof s === "string")
+    .map(normalizeExt)
+    .filter((s) => s.length > 0);
+}
+
+/** Persist the allow-list: normalised, de-duped, empties dropped. */
+export async function saveDragDropAllowlist(exts: readonly string[]): Promise<void> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of exts) {
+    if (typeof raw !== "string") continue;
+    const ext = normalizeExt(raw);
+    if (ext.length === 0 || seen.has(ext)) continue;
+    seen.add(ext);
+    out.push(ext);
+  }
+  await window.reckAPI.config.set(DRAGDROP_ALLOWLIST_KEY, out);
+}
+
+/** Load the drop prompt template, or the default when unset/blank. */
+export async function loadDropPromptTemplate(): Promise<string> {
+  const raw = await window.reckAPI.config.get<string>(DROP_PROMPT_KEY);
+  return typeof raw === "string" && raw.trim().length > 0
+    ? raw
+    : DEFAULT_DROP_PROMPT_TEMPLATE;
+}
+
+/** Persist the drop prompt template (blank resets to the default on load). */
+export async function saveDropPromptTemplate(template: string): Promise<void> {
+  await window.reckAPI.config.set(DROP_PROMPT_KEY, typeof template === "string" ? template : "");
+}
+
+/**
+ * Fill `{path}` / `{filename}` placeholders in a drop prompt template.
+ * Pure — exported for tests and the drop handler.
+ */
+export function renderDropPrompt(template: string, path: string, filename: string): string {
+  return template.split("{path}").join(path).split("{filename}").join(filename);
 }

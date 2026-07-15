@@ -14,8 +14,8 @@
 //   - shell  — spawns the project's configured shell.
 //   - codex  — stub that spawns `codex` from $PATH. Session persistence
 //     and state-hook wiring are future work (codex ≠ claude-code); the
-//     adapter is in place so the UI (pane kind picker, Mission Control
-//     cards) has something to reference.
+//     adapter is in place so the UI (pane kind picker) has something to
+//     reference.
 package agent
 
 import (

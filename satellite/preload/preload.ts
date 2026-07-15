@@ -42,6 +42,22 @@ contextBridge.exposeInMainWorld("reckAPI", {
     get: (key: string) => ipcRenderer.invoke("config:get", key),
     set: (key: string, value: unknown) => ipcRenderer.invoke("config:set", key, value),
   },
+  // Voice dictation — cloud (Deepgram) path. The main process holds the API
+  // key and the websocket; the renderer streams linear16 frames and receives
+  // interim/final transcripts back over the event channel (issue #67).
+  transcription: {
+    deepgramStart: (sampleRate: number, language?: string) =>
+      ipcRenderer.invoke("transcription:deepgram:start", sampleRate, language),
+    deepgramFrame: (sessionId: number, bytes: Uint8Array) =>
+      ipcRenderer.send("transcription:deepgram:frame", sessionId, bytes),
+    deepgramStop: (sessionId: number) =>
+      ipcRenderer.invoke("transcription:deepgram:stop", sessionId),
+    onEvent: (cb: (ev: unknown) => void) => {
+      const listener = (_e: unknown, ev: unknown) => cb(ev);
+      ipcRenderer.on("transcription:event", listener);
+      return () => ipcRenderer.removeListener("transcription:event", listener);
+    },
+  },
   clipboard: {
     // OSC 52 copy-on-select writes here so the clipboard write goes through
     // Electron's main-process clipboard (always permitted) instead of the

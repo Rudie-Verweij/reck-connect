@@ -17,8 +17,6 @@ Base URL: `http://<station-host>:7315`
 | POST | `/projects` | Register a new project | Required |
 | DELETE | `/projects/:id` | Unregister a project | Required |
 | GET | `/projects/:id` | Project detail + panes (auto-spawns default pane if empty — see [behaviors](./behaviors.md)) | Optional |
-| POST | `/projects/:id/dock` | Opt project into Mission Control | Required |
-| POST | `/projects/:id/undock` | Remove project from Mission Control | Required |
 | POST | `/projects/:id/rename` | Set project display name | Required |
 | POST | `/projects/:id/panes` | Create a new pane | Optional |
 | DELETE | `/projects/:id/panes/:pane_id` | Kill and remove a pane | Optional |
@@ -30,12 +28,7 @@ Base URL: `http://<station-host>:7315`
 | GET | `/panes/:pane_id/events` | Debug event log for a pane (not in proto.md — see below) | Optional |
 | POST | `/panes/:pane_id/input` | Inject text into pane stdin | Optional |
 | GET | `/panes/:pane_id/output` | Tail of replay buffer (`?bytes=N`, default 8192) | Optional |
-| GET | `/mission-control/state` | Aggregated MC state across docked projects | Optional |
-| GET | `/mission-control/history` | Persisted MC conversation (always empty — see [behaviors](./behaviors.md)) | Optional |
-| POST | `/mission-control/chat` | Send message to supervisor pane | Required |
-| POST | `/mission-control/reset` | Kill supervisor pane | Required |
 | WS | `/ws/:project_id/:pane_id` | Per-pane PTY stream | Required |
-| WS | `/ws/mission-control` | MC state change stream | Required |
 
 "Auth required" rows require `Authorization: Bearer <DAEMON_TOKEN>` when the daemon is running with a token. See [auth](./auth.md) for the full model.
 
@@ -116,15 +109,3 @@ Response shape:
 ```
 
 Source: `daemon/internal/http/router.go:handlePaneEvents`
-
-## Known drift: `?bytes=` vs `?lines=`
-
-`GET /panes/:pane_id/output` accepts a `?bytes=N` query parameter (default 8192, max 131072). The supervisor's system prompt template in `daemon/internal/supervisor/prompt.go` still documents the endpoint as:
-
-```
-/panes/<pane_id>/output?lines=200
-```
-
-The `?lines=` parameter does not exist in the handler; only `?bytes=` is parsed. The system prompt is incorrect. This means the supervisor agent, when following the documented curl example verbatim, silently falls back to the 8192-byte default. Recommend opening an issue to update the system prompt template.
-
-Source: `daemon/internal/http/router.go:handlePaneOutput` (implements `?bytes=`), `daemon/internal/supervisor/prompt.go` (documents `?lines=`).

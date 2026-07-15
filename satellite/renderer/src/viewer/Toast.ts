@@ -46,6 +46,13 @@ export function showToast(
     typeof optsOrDuration === "number"
       ? { durationMs: optsOrDuration }
       : optsOrDuration;
+
+  // Mirror every error toast to the console so it's inspectable (with any
+  // stack the caller logged alongside) in DevTools, not just as a fleeting
+  // toast. Info toasts stay quiet.
+  if (opts.kind === "error") {
+    console.error("[toast]", message);
+  }
   const duration = opts.durationMs ?? DEFAULT_DURATION_MS;
   const fade = opts.fadeMs ?? DEFAULT_FADE_MS;
 

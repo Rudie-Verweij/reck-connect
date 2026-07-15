@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/rudie-verweij/reck-connect/daemon/internal/agent"
-	"github.com/rudie-verweij/reck-connect/proto"
 )
 
 // newReplaceProjectsManager builds a Manager wired for hybrid-mode local
@@ -336,33 +335,5 @@ func TestReplaceProjects_seedsDefaultShell(t *testing.T) {
 	}
 	if p.Shell[0] != "/bin/sh" {
 		t.Errorf("Shell[0] = %q, want /bin/sh (the test manager's DefaultShell)", p.Shell[0])
-	}
-}
-
-func TestReplaceProjects_preservesHiddenMetaProjects(t *testing.T) {
-	// The Mission Control supervisor's __mc-* meta-projects must survive
-	// a wholesale push from a Satellite that doesn't know about them.
-	mgr, prefix := newReplaceProjectsManager(t)
-	hiddenCwd := filepath.Join(prefix, "_hidden_meta") // doesn't need to be under prefix; AddMetaProject just stats it
-	if err := os.MkdirAll(hiddenCwd, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Hidden ids must start with "__".
-	if err := mgr.AddMetaProject(proto.AddProjectRequest{ID: "__mc-test", Name: "__mc-test", Cwd: hiddenCwd}); err != nil {
-		t.Fatalf("AddMetaProject: %v", err)
-	}
-	visible := mkPermittedDir(t, prefix, "visible")
-	if err := mgr.ReplaceProjects([]ReplaceProjectsInput{{ID: "visible", Cwd: visible}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := len(mgr.Projects()); got != 1 {
-		t.Fatalf("public projects: want 1, got %d", got)
-	}
-	// The meta project lives in m.projects but Projects() filters it.
-	mgr.mu.RLock()
-	_, ok := mgr.projects["__mc-test"]
-	mgr.mu.RUnlock()
-	if !ok {
-		t.Fatal("ReplaceProjects must not delete hidden meta-projects")
 	}
 }

@@ -109,9 +109,6 @@ type Manager struct {
 	// than audit-ing every caller site. Reads ~/.claude/projects/ by
 	// default; tests may override the root via ManagerConfig.ClaudeProjectsDir.
 	autoNames *agent.AutoNameCache
-	// Listeners fired on dock/undock + pane state changes. Set by the
-	// supervisor package so the MC surface can broadcast updates.
-	onStateChange func()
 
 	// removeProjectPersist writes the registry removal to disk. Test-
 	// injectable so ordering can be asserted against the pane-kill
@@ -395,26 +392,6 @@ func (m *Manager) buildPreambleCtx(p config.Project) agent.PreambleCtx {
 	return ctx
 }
 
-// OnStateChange registers a listener for dock/undock + pane state events.
-// Only one listener is supported; the most recent call wins. Pass nil to
-// clear. Safe to call before or after NewManager.
-func (m *Manager) OnStateChange(fn func()) {
-	m.mu.Lock()
-	m.onStateChange = fn
-	m.mu.Unlock()
-}
-
-// notifyStateChange fires the state-change listener, if any. Called
-// without m.mu held; the listener runs on the caller's goroutine.
-func (m *Manager) notifyStateChange() {
-	m.mu.RLock()
-	fn := m.onStateChange
-	m.mu.RUnlock()
-	if fn != nil {
-		fn()
-	}
-}
-
 // Adapters returns the agent adapter registry. Used by HTTP handlers
 // that need to expose the supported kinds list.
 func (m *Manager) Adapters() *agent.Registry { return m.adapters }
@@ -642,10 +619,9 @@ func (m *Manager) RemoveProject(id string) error {
 }
 
 // IsHiddenProjectID reports whether a project ID is reserved for internal
-// use (e.g. the Mission Control supervisor). Hidden projects exist in the
-// Manager but are excluded from Projects() / DockedProjects() so they
-// never appear in normal listings or on the rail. Convention: any ID
-// prefixed with `__`.
+// use. Hidden projects exist in the Manager but are excluded from
+// Projects() so they never appear in normal listings or on the rail.
+// Convention: any ID prefixed with `__`.
 func IsHiddenProjectID(id string) bool {
 	return strings.HasPrefix(id, "__")
 }
@@ -873,9 +849,9 @@ func (m *Manager) replaceProjectsLocked(inputs []ReplaceProjectsInput, prefix st
 		preExisting[id] = struct{}{}
 	}
 
-	// Wholesale replace. We preserve hidden (meta) projects so the
-	// Mission Control supervisor's __mc-* entry survives a push from a
-	// Satellite that doesn't know about it. (Lock acquired above.)
+	// Wholesale replace. Hidden (meta) projects are preserved so
+	// internal `__`-prefixed entries survive a push from a Satellite
+	// that doesn't know about them. (Lock acquired above.)
 	for id := range m.projects {
 		if IsHiddenProjectID(id) {
 			continue
@@ -986,73 +962,12 @@ func (m *Manager) Projects() []proto.Project {
 			PaneCount:      len(m.byProj[id]),
 			PaneStoplights: m.paneStoplightsLocked(id),
 			PaneIDs:        m.paneIDsLocked(id),
-			Docked:         p.Docked,
 			Archived:       p.Archived,
 			DisplayName:    p.DisplayName,
 			Available:      p.Available,
 		})
 	}
 	return out
-}
-
-// DockedProjects returns only user-visible projects that have opted into
-// Mission Control. Hidden projects are excluded.
-func (m *Manager) DockedProjects() []proto.Project {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]proto.Project, 0)
-	for id, p := range m.projects {
-		if IsHiddenProjectID(id) {
-			continue
-		}
-		if !p.Docked {
-			continue
-		}
-		out = append(out, proto.Project{
-			ID:             id,
-			Name:           p.Name,
-			Cwd:            p.Cwd,
-			Stoplight:      m.projStoplight[id],
-			PaneCount:      len(m.byProj[id]),
-			PaneStoplights: m.paneStoplightsLocked(id),
-			PaneIDs:        m.paneIDsLocked(id),
-			Docked:         true,
-			Archived:       p.Archived,
-			DisplayName:    p.DisplayName,
-			Available:      p.Available,
-		})
-	}
-	return out
-}
-
-// SetDocked updates a project's Mission Control dock state and persists it.
-// Idempotent — returns nil when the project is already in the requested state.
-// Returns an error if the project doesn't exist.
-func (m *Manager) SetDocked(id string, docked bool) error {
-	m.mu.Lock()
-	p, ok := m.projects[id]
-	if !ok {
-		m.mu.Unlock()
-		return errors.New("project not found")
-	}
-	if p.Docked == docked {
-		m.mu.Unlock()
-		return nil
-	}
-	p.Docked = docked
-	m.projects[id] = p
-	m.mu.Unlock()
-	if err := config.SetProjectDocked(m.configPath, id, docked); err != nil {
-		// Roll back in-memory state on persistence failure so callers
-		// see a consistent view.
-		m.mu.Lock()
-		p.Docked = !docked
-		m.projects[id] = p
-		m.mu.Unlock()
-		return fmt.Errorf("persist dock state: %w", err)
-	}
-	m.notifyStateChange()
-	return nil
 }
 
 // ArchiveProject puts a project to sleep. It kills every pane the project
@@ -1123,7 +1038,6 @@ func (m *Manager) ArchiveProject(id string) error {
 	}
 
 	m.recomputeAggregate(id)
-	m.notifyStateChange()
 	return nil
 }
 
@@ -1156,7 +1070,6 @@ func (m *Manager) UnarchiveProject(id string, cols, rows int) error {
 	res := m.RestoreProjectOrphans(id, p.Cwd, cols, rows)
 	slog.Info("unarchive project restore", "id", id,
 		"restored", res.Restored, "skipped", res.Skipped, "failed", res.Failed, "read_only", res.ReadOnly)
-	m.notifyStateChange()
 	return nil
 }
 
@@ -1186,7 +1099,6 @@ func (m *Manager) SetProjectDisplayName(id string, displayName string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("persist display_name: %w", err)
 	}
-	m.notifyStateChange()
 	return nil
 }
 
@@ -1226,7 +1138,6 @@ func (m *Manager) SetPaneDisplayName(projectID string, paneID string, displayNam
 	if err := store.SetDisplayName(projectID, identity, displayName); err != nil {
 		return fmt.Errorf("persist pane display_name: %w", err)
 	}
-	m.notifyStateChange()
 	return nil
 }
 
@@ -1310,11 +1221,9 @@ type CreatePaneOptions struct {
 	ExtraArgs []string
 
 	// ExtraEnv are additional "KEY=VALUE" strings appended to the
-	// child's environment on top of the daemon's env allowlist. Used
-	// exclusively by the Mission Control supervisor to inject its own
-	// (scoped) bearer token without widening the global allowlist —
-	// regular pane creates should leave this nil so pane children
-	// never see daemon-level secrets.
+	// child's environment on top of the daemon's env allowlist. Regular
+	// pane creates should leave this nil so pane children never see
+	// daemon-level secrets.
 	ExtraEnv []string
 	// GlobalPreamble is the satellite-stored "Reck Connect prompt" —
 	// app-wide text the user configures in Satellite Settings that the
@@ -1583,7 +1492,6 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 
 	pane.OnStoplightChange(func(s proto.Stoplight) {
 		m.recomputeAggregate(projectID)
-		m.notifyStateChange()
 	})
 	pane.OnExit(func(paneID string) {
 		// Drop the pane's AutoName cache row so the cache doesn't grow
@@ -1592,14 +1500,12 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 		if m.autoNames != nil {
 			m.autoNames.Forget(paneID)
 		}
-		m.notifyStateChange()
 	})
 	m.mu.Lock()
 	m.byProj[projectID] = append(m.byProj[projectID], pane)
 	m.byID[pane.ID] = pane
 	m.mu.Unlock()
 	m.recomputeAggregate(projectID)
-	m.notifyStateChange()
 	return pane, nil
 }
 
@@ -2127,70 +2033,6 @@ func (m *Manager) EnsureDefaultPane(projectID string, cols, rows int) (*Pane, bo
 		return nil, false, err
 	}
 	return pane, true, nil
-}
-
-// AddMetaProject registers a hidden project (ID must start with "__") in
-// the Manager without persisting to projects.toml. Used by the Mission
-// Control supervisor to host its internal pane. Safe to call repeatedly —
-// returns nil when the meta-project is already registered.
-func (m *Manager) AddMetaProject(req proto.AddProjectRequest) error {
-	if !IsHiddenProjectID(req.ID) {
-		return errors.New("meta-project ID must start with __")
-	}
-	if req.Cwd == "" {
-		return errors.New("meta-project cwd required")
-	}
-	st, err := os.Stat(req.Cwd)
-	if err != nil || !st.IsDir() {
-		return errors.New("meta-project cwd must be an existing directory")
-	}
-	m.mu.Lock()
-	if _, ok := m.projects[req.ID]; ok {
-		m.mu.Unlock()
-		return nil
-	}
-	p := config.Project{
-		ID:          req.ID,
-		Name:        req.Name,
-		Cwd:         req.Cwd,
-		DefaultPane: string(req.DefaultPane),
-		Shell:       req.Shell,
-		Preamble:    req.Preamble,
-		// Meta-projects only register after the cwd check at the top of
-		// AddMetaProject; they're always available for as long as they're
-		// registered. (Hidden anyway — Projects() filters them out.)
-		Available: true,
-	}
-	if p.DefaultPane == "" {
-		p.DefaultPane = "claude"
-	}
-	if len(p.Shell) == 0 {
-		// Meta-projects (the MC supervisor) don't ship their own shell;
-		// fall through to the daemon-resolved default, which is already
-		// absolute (see NewManagerFromConfig doc comment).
-		p.Shell = append([]string(nil), m.defaultShell...)
-	}
-	m.projects[req.ID] = p
-	m.projStoplight[req.ID] = proto.StoplightGray
-	m.mu.Unlock()
-	return nil
-}
-
-// SetProjectPreamble updates a project's runtime preamble. Used by the
-// Mission Control supervisor to refresh the supervisor pane's system
-// prompt between spawns. The change is NOT persisted to projects.toml —
-// preamble lives in memory for the current daemon process only.
-// Returns error when the project is unknown.
-func (m *Manager) SetProjectPreamble(id, preamble string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	p, ok := m.projects[id]
-	if !ok {
-		return errors.New("project not found")
-	}
-	p.Preamble = preamble
-	m.projects[id] = p
-	return nil
 }
 
 // RunLivenessTicker periodically refreshes last_active_at for every

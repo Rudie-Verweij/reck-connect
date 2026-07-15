@@ -31,7 +31,7 @@ import {
   ViewUpdate,
   type DecorationSet,
 } from "@codemirror/view";
-import { detectPathsInLine } from "./LinkDetector";
+import { detectPathsInLine, detectUrlsInLine } from "./LinkDetector";
 
 export interface CodeMirrorPathLinkifierDeps {
   /**
@@ -39,6 +39,12 @@ export interface CodeMirrorPathLinkifierDeps {
    * routes through `reckAPI.files.openInViewer(path)` here.
    */
   onActivate(path: string, event: MouseEvent): void;
+  /**
+   * Fires when the user Cmd-clicks an underlined http/https URL. The host
+   * typically calls `window.open(url)`. When omitted, URLs are still
+   * underlined but Cmd-click is a no-op.
+   */
+  onActivateUrl?(url: string, event: MouseEvent): void;
 }
 
 export interface CodeMirrorPathLinkifierHandle {
@@ -59,33 +65,39 @@ const rescanLinksEffect = StateEffect.define<DecorationSet>();
 // (PATH_LINK_TOOLTIP in MarkdownRenderer.ts) so the contract is uniform.
 const linkDecoration = Decoration.mark({
   class: "reck-path-link",
-  attributes: { title: "⌘+click to open" },
+  attributes: { title: "⌘+click to view file" },
+});
+
+// URL sibling of linkDecoration. Solid underline (via .reck-url-link)
+// distinguishes a web URL from the dashed path style.
+const urlDecoration = Decoration.mark({
+  class: "reck-url-link",
+  attributes: { title: "⌘+click to open in browser" },
 });
 
 function computeDecorations(view: EditorView): DecorationSet {
-  const decos: Array<{ from: number; to: number }> = [];
+  const decos: Array<{ from: number; to: number; deco: Decoration }> = [];
   const doc = view.state.doc;
   for (const { from, to } of view.visibleRanges) {
-    // Iterate visible lines so detectPathsInLine sees one line at a time
-    // (it expects no embedded newlines — its regex anchors are
-    // line-internal).
+    // Iterate visible lines so the detectors see one line at a time
+    // (their regex anchors are line-internal — no embedded newlines).
     const fromLineNo = doc.lineAt(from).number;
     const toLineNo = doc.lineAt(to).number;
     for (let i = fromLineNo; i <= toLineNo; i++) {
       const line = doc.line(i);
       const text = line.text;
       if (text.length === 0) continue;
-      const matches = detectPathsInLine(text);
-      for (const m of matches) {
-        decos.push({ from: line.from + m.start, to: line.from + m.end });
+      for (const m of detectPathsInLine(text)) {
+        decos.push({ from: line.from + m.start, to: line.from + m.end, deco: linkDecoration });
+      }
+      for (const m of detectUrlsInLine(text)) {
+        decos.push({ from: line.from + m.start, to: line.from + m.end, deco: urlDecoration });
       }
     }
   }
   if (decos.length === 0) return Decoration.none;
   decos.sort((a, b) => a.from - b.from || a.to - b.to);
-  return Decoration.set(
-    decos.map(({ from, to }) => linkDecoration.range(from, to)),
-  );
+  return Decoration.set(decos.map(({ from, to, deco }) => deco.range(from, to)));
 }
 
 // Per-view StateField holding the current DecorationSet. Recomputed
@@ -161,6 +173,19 @@ export function installCodeMirrorPathLinkifier(
           if (!ev.metaKey) return false;
           const target = ev.target;
           if (!(target instanceof Element)) return false;
+          // URL first: a token is either a path or a URL, never both, but
+          // check the URL class explicitly so its handler wins.
+          const urlSpan = target.closest(".reck-url-link");
+          if (urlSpan) {
+            const url = urlSpan.textContent ?? "";
+            if (depsRef.deps.onActivateUrl && url) {
+              ev.preventDefault();
+              console.log("[click:source] activate url", { url, metaKey: ev.metaKey });
+              depsRef.deps.onActivateUrl(url, ev);
+              return true;
+            }
+            return false;
+          }
           const span = target.closest(".reck-path-link");
           if (!span) return false;
           ev.preventDefault();

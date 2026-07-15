@@ -104,7 +104,7 @@
     <rect x="806" y="332" width="508" height="86" rx="8" fill="#1c1b19" stroke="#3a3937"/>
     <text x="820" y="358" class="mono" font-size="11" letter-spacing="2" fill="#8a877d">INTERNAL</text>
     <text x="820" y="382" class="mono" font-size="12" fill="#f5f2ea">pty.Manager · sessions.Store · stoplight.Runner</text>
-    <text x="820" y="402" class="mono" font-size="12" fill="#f5f2ea">hooks · supervisor · agent (claude/codex/shell)</text>
+    <text x="820" y="402" class="mono" font-size="12" fill="#f5f2ea">hooks · agent (claude/codex/shell)</text>
 
     <text x="806" y="446" class="mono" font-size="11" letter-spacing="2" fill="#8a877d">PROJECTS &amp; PANES</text>
 

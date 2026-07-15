@@ -25,6 +25,9 @@ const MarkerV1 = "reck-hook-v1"
 //go:embed reck-claude-hook.sh
 var hookShimContent []byte
 
+//go:embed reck-statusline.sh
+var statusLineShimContent []byte
+
 // eventBinding pairs a Claude Code hook name with its canonical Reck
 // event kind (the `kind=` query param the shim POSTs to the daemon).
 type eventBinding struct {
@@ -53,6 +56,14 @@ type Paths struct {
 	HooksDir     string
 	ShimPath     string
 	SettingsPath string
+	// StatusLineShimPath is the reck-statusline.sh forwarder installed as
+	// the Claude Code statusLine command.
+	StatusLineShimPath string
+	// StatusLinePriorPath records the user's original statusLine value (if
+	// any) so it can be chained to at render time and restored on
+	// Uninstall. Separate from OwnershipPath so the existing hook-ownership
+	// sidecar format and its tests are untouched.
+	StatusLinePriorPath string
 	// LockPath is the sentinel file used to serialise concurrent daemon
 	// installers. Two daemons starting at once (or Ensure+Uninstall races
 	// from a developer restart) would otherwise race on temp-file rename
@@ -71,12 +82,14 @@ func PathsFor(home string) Paths {
 	claudeDir := filepath.Join(home, ".claude")
 	hooksDir := filepath.Join(claudeDir, "hooks")
 	return Paths{
-		ClaudeDir:     claudeDir,
-		HooksDir:      hooksDir,
-		ShimPath:      filepath.Join(hooksDir, "reck-claude-hook.sh"),
-		SettingsPath:  filepath.Join(claudeDir, "settings.json"),
-		LockPath:      filepath.Join(claudeDir, ".reck-hook.lock"),
-		OwnershipPath: filepath.Join(claudeDir, ".reck-hooks.json"),
+		ClaudeDir:           claudeDir,
+		HooksDir:            hooksDir,
+		ShimPath:            filepath.Join(hooksDir, "reck-claude-hook.sh"),
+		SettingsPath:        filepath.Join(claudeDir, "settings.json"),
+		LockPath:            filepath.Join(claudeDir, ".reck-hook.lock"),
+		OwnershipPath:       filepath.Join(claudeDir, ".reck-hooks.json"),
+		StatusLineShimPath:  filepath.Join(hooksDir, "reck-statusline.sh"),
+		StatusLinePriorPath: filepath.Join(claudeDir, ".reck-statusline.json"),
 	}
 }
 
@@ -194,6 +207,9 @@ func EnsureInstalled(home string) error {
 		if err := writeShimIfChanged(p.ShimPath, hookShimContent); err != nil {
 			return fmt.Errorf("write shim: %w", err)
 		}
+		if err := writeShimIfChanged(p.StatusLineShimPath, statusLineShimContent); err != nil {
+			return fmt.Errorf("write statusline shim: %w", err)
+		}
 		// Load the prior ownership sidecar so we can strip older Reck
 		// entries (e.g. from a shim path that moved) without relying on
 		// MarkerV1 substring matching. Missing file ⇒ fresh install;
@@ -208,6 +224,9 @@ func EnsureInstalled(home string) error {
 			return err
 		}
 		updated := applyHooks(settings, p.ShimPath, owned)
+		if err := applyStatusLine(updated, p.StatusLineShimPath, p.StatusLinePriorPath); err != nil {
+			return err
+		}
 		if err := writeSettings(p.SettingsPath, updated); err != nil {
 			return err
 		}
@@ -237,11 +256,17 @@ func Uninstall(home string) error {
 			return err
 		}
 		stripped := stripReckHooks(settings, p.ShimPath, owned)
+		if err := stripStatusLine(stripped, p.StatusLineShimPath, p.StatusLinePriorPath); err != nil {
+			return err
+		}
 		if err := writeSettings(p.SettingsPath, stripped); err != nil {
 			return err
 		}
 		if err := os.Remove(p.ShimPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove shim %s: %w", p.ShimPath, err)
+		}
+		if err := os.Remove(p.StatusLineShimPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove statusline shim %s: %w", p.StatusLineShimPath, err)
 		}
 		// Clear the sidecar — we no longer own anything.
 		return writeOwnership(p.OwnershipPath, nil)
@@ -339,7 +364,7 @@ func bytesEqual(a, b []byte) bool {
 // hookCommandFor returns the canonical, shell-safe command string for
 // one Reck-owned hook binding. The shim path is single-quoted so a
 // $HOME containing spaces (e.g. "/Users/John Doe") still parses as one
-// token at the shell. Any literal `'` in the path is escaped as `'\''`
+// token at the shell. Any literal `'` in the path is escaped as `'\”`
 // — harmless on sane filesystems but correct in the edge case.
 //
 // We emit the absolute `/bin/bash` rather than relying on PATH lookup:
@@ -351,7 +376,7 @@ func bytesEqual(a, b []byte) bool {
 //
 // Return-value format (stable, checked by ownership recognition):
 //
-//     /bin/bash '<shim>' <kind> # reck-hook-v1
+//	/bin/bash '<shim>' <kind> # reck-hook-v1
 //
 // This exact string is stored in the sidecar file so subsequent
 // installs can distinguish Reck-owned hooks from user hooks that

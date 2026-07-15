@@ -15,6 +15,18 @@ import type { Stoplight } from "@proto/proto";
 export type PaneTheme = "light" | "dark";
 
 /**
+ * Mouse-wheel scroll sensitivity for the NORMAL buffer (scrollback).
+ * xterm multiplies the wheel's line-delta by this factor; its default of
+ * 1 scrolls too many lines per notch on high-resolution trackpads/mice, so
+ * we damp it. Only governs xterm's own scrollback scroll — alt-screen TUIs
+ * forward the wheel elsewhere (see OverlayScrollbar's pageStepPx). A
+ * device-agnostic value; a future user setting can override it.
+ */
+const SCROLL_SENSITIVITY = 0.5;
+/** Wheel sensitivity while the fast-scroll modifier (Alt) is held. */
+const FAST_SCROLL_SENSITIVITY = 3;
+
+/**
  * MIME types the station accepts as image-paste uploads
  * (phase 1 — must match `allowedUploadMIMEs` in
  * `daemon/internal/http/uploads.go`). Kept as a Set for O(1)
@@ -27,6 +39,28 @@ const IMAGE_PASTE_MIMES: ReadonlySet<string> = new Set([
   "image/webp",
   "image/gif",
 ]);
+
+/**
+ * True when a drag/drop event carries OS files (as opposed to a
+ * tab-reorder drag, which carries `text/plain` payloads — see the
+ * pane/rail drag handlers). We gate the file-drop handler on this so it
+ * never interferes with those in-app drags. `dataTransfer.types` is a
+ * `DOMStringList` in browsers and a plain array in tests; `Array.from`
+ * normalises both.
+ */
+function dragCarriesFiles(ev: DragEvent): boolean {
+  const types = ev.dataTransfer?.types;
+  return !!types && Array.from(types as ArrayLike<string>).includes("Files");
+}
+
+/**
+ * Lowercase filename extension without the leading dot, or "" when the
+ * name has none. `report.PDF` → `pdf`, `Makefile` → ``.
+ */
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+}
 
 /**
  * Callback shape for uploading a pasted image to the daemon.
@@ -57,7 +91,11 @@ export type PasteFallbackReason = "no-capability" | "daemon-error" | "upload-onl
 export type PasteUploadResult =
   | { kind: "path"; path: string; fallbackReason?: PasteFallbackReason; fallbackDetail?: string }
   | { kind: "chip" };
-export type PasteUploadFn = (blob: Blob, mime: string) => Promise<PasteUploadResult>;
+export type PasteUploadFn = (
+  blob: Blob,
+  mime: string,
+  filename?: string,
+) => Promise<PasteUploadResult>;
 
 function isIOS(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -126,6 +164,45 @@ export interface TerminalPaneProps {
    * surface a toast / log entry. Called once per failed blob.
    */
   onPasteUploadError?: (err: unknown, mime: string) => void;
+  /**
+   * Optional observer of the decoded PTY output stream. Fired with the
+   * raw bytes of every `output` frame, right before they're written to
+   * xterm. Lets a host watch the stream for a trigger phrase (e.g. the
+   * satellite's voice-dictation hint) without re-plumbing the WS. Left
+   * unset by default → zero overhead; the pane still writes normally.
+   */
+  onDecodedOutput?: (bytes: Uint8Array) => void;
+  /**
+   * Prompt template inserted (as a bracketed paste, so Claude Code
+   * collapses it into a paste chip that expands on Enter) when a file is
+   * dropped, instead of typing the raw upload path. `{path}` is replaced
+   * with the returned station-side path and `{filename}` with the dropped
+   * file's original name. When unset, a drop types the raw path (the
+   * paste behaviour). Image PASTE always types the path regardless.
+   */
+  dropPromptTemplate?: string;
+  /**
+   * Gate a dropped file before upload. Returns `{ ok: true }` to accept
+   * or `{ ok: false, reason }` to reject (the host typically shows a
+   * toast via `onDropRejected`). When unset, all dropped files are
+   * accepted (client-core default; the Satellite injects the user's
+   * allow-list + size cap).
+   */
+  validateDroppedFile?: (file: {
+    name: string;
+    size: number;
+    type: string;
+  }) => { ok: true } | { ok: false; reason: "type" | "size" };
+  /**
+   * Called once per rejected drop so the host can surface a toast. `ext`
+   * is the lowercase extension (no dot) or "" when the file has none.
+   */
+  onDropRejected?: (info: {
+    name: string;
+    reason: "type" | "size";
+    ext: string;
+    sizeBytes: number;
+  }) => void;
 }
 
 function themeFor(t: PaneTheme): ITheme {
@@ -343,6 +420,8 @@ export class TerminalPane {
       cursorBlink: false,
       convertEol: false,
       scrollback: 5000,
+      scrollSensitivity: SCROLL_SENSITIVITY,
+      fastScrollSensitivity: FAST_SCROLL_SENSITIVITY,
       allowProposedApi: true,
     });
     this.fit = new FitAddon();
@@ -523,7 +602,11 @@ export class TerminalPane {
           nudgedRedraw: !!(m.replay && !widthsMatch),
         });
       },
-      onOutput: (m) => this.term.write(decodeBytes(m.data)),
+      onOutput: (m) => {
+        const bytes = decodeBytes(m.data);
+        this.term.write(bytes);
+        this.props.onDecodedOutput?.(bytes);
+      },
       onStatus: (m) => this.props.onStoplight?.(m.stoplight),
       onExit: (m) => {
         this.term.write(`\r\n\x1b[90m[process exited: ${m.code}]\x1b[0m\r\n`);
@@ -551,6 +634,7 @@ export class TerminalPane {
     }
     if (isIOS()) this.installIOSInputFix();
     this.installPasteImageHandler();
+    this.installFileDropHandler();
     // Register on the global debug registry so devtools can reach the
     // pane without spelunking the DOM. See attachDebugHooks() for the
     // accessor contract. Called after `term.open` so the xterm
@@ -584,8 +668,15 @@ export class TerminalPane {
     markActiveDebugPane(this);
   }
 
-  refit() {
-    if (this.disposed) return;
+  /**
+   * Returns false when the fit was skipped because the container isn't
+   * laid out yet (or the fit threw) — the skip does NOT re-arm itself,
+   * so callers that just remounted the pane (e.g. a project switch)
+   * should retry shortly after. Returns true when geometry was
+   * reasserted (or there was nothing to do: disposed pane).
+   */
+  refit(): boolean {
+    if (this.disposed) return true;
     this.scrollDebug("refit:enter", {
       laidOut: this.isLaidOut(),
       containerW: this.container.clientWidth,
@@ -598,7 +689,7 @@ export class TerminalPane {
         this.fit.fit();
       } else {
         this.scrollDebug("refit:skip(not-laid-out)");
-        return;
+        return false;
       }
       // refit() is the explicit "reassert geometry" hook — it runs on
       // window focus, visibility restore, and tab re-show, where another
@@ -610,8 +701,10 @@ export class TerminalPane {
       this.sendResizeIfChanged();
       this.forceRepaint();
       this.scrollDebug("refit:exit");
+      return true;
     } catch (err) {
       this.scrollDebug("refit:error", { err: String(err) });
+      return false;
     }
   }
 
@@ -643,6 +736,20 @@ export class TerminalPane {
    */
   public scrollToBottom(): void {
     if (this.disposed) return;
+    this.term.scrollToBottom();
+  }
+
+  /**
+   * A real scroll gesture that lands at the bottom: one line up, then
+   * to the tail. A freshly remounted pane can present an empty viewport
+   * until something scrolls it (the manual fix users reach for after a
+   * project switch); two genuine scroll ops force xterm to repaint the
+   * viewport rows, where a no-op scrollToBottom (already at tail) would
+   * not.
+   */
+  public nudgeScrollToBottom(): void {
+    if (this.disposed) return;
+    if (this.term.buffer.active.baseY > 0) this.term.scrollLines(-1);
     this.term.scrollToBottom();
   }
 
@@ -856,38 +963,161 @@ export class TerminalPane {
     // text-flavoured fallback (often a file URL or empty string) on
     // top of our path, which the user definitely doesn't want.
     ev.preventDefault();
-    // Serial uploads so the paths arrive in clipboard order. Parallel
-    // would be faster but the ordering matters: when the user pastes
-    // two screenshots back-to-back they expect the first one to
-    // reference the first image.
-    for (const { blob, mime } of images) {
+    // Image paste: type the returned path (unchanged behaviour).
+    await this.uploadBlobs(images, (path) => this.typePathIntoPty(path));
+  }
+
+  /**
+   * Upload each blob serially and hand the returned station-side path to
+   * `onPath` for delivery into the PTY. Shared by the image-paste handler
+   * (types the path) and the file-drop handler (pastes a prompt).
+   *
+   * Serial so deliveries arrive in source order (clipboard order for
+   * paste, drop order for drag-drop); parallel would be faster but would
+   * scramble the sequence when several blobs arrive at once. A failed
+   * upload fires `onPasteUploadError` and is otherwise swallowed so one
+   * bad blob doesn't abort the rest.
+   */
+  private async uploadBlobs(
+    items: { blob: Blob; mime: string; filename?: string }[],
+    onPath: (path: string, filename: string | undefined) => void,
+  ): Promise<void> {
+    const upload = this.props.onPasteUpload;
+    if (!upload) return;
+    for (const { blob, mime, filename } of items) {
       try {
-        const result = await upload(blob, mime);
+        const result = await upload(blob, mime, filename);
         if (result.kind === "path") {
-          // Phase 1 path: type the absolute path into the PTY exactly
-          // like the user typing it. Trailing space so a follow-up
-          // keystroke doesn't merge with the path.
-          //
-          // Before typing, emit a yellow inline breadcrumb when the
-          // host classified *why* we fell off the chip path. Otherwise
-          // the user just sees a path appear in the prompt with no
-          // explanation, which looks identical to a bug. Same shape
-          // as the existing `[process exited]` / `[error]` lines.
+          // Emit a yellow inline breadcrumb when the host classified
+          // *why* we fell off the chip path — otherwise a path/prompt
+          // appears with no explanation, indistinguishable from a bug.
+          // Same shape as the existing `[process exited]` / `[error]`.
           if (result.fallbackReason) {
             const detail = result.fallbackDetail ? ` (${result.fallbackDetail})` : "";
             this.term.write(
               `\r\n\x1b[33m[paste fell back to /uploads — reason: ${result.fallbackReason}${detail}]\x1b[0m\r\n`,
             );
           }
-          const payload = new TextEncoder().encode(result.path + " ");
-          this.ws.send({ type: "input", data: encodeBytes(payload) });
+          onPath(result.path, filename);
         }
         // Phase 2 chip path: daemon already wrote 0x16 into the PTY
-        // after the sidecar ACK; nothing for the renderer to type.
+        // after the sidecar ACK; nothing for the renderer to deliver.
       } catch (err) {
         this.props.onPasteUploadError?.(err, mime);
       }
     }
+  }
+
+  /**
+   * Type an upload path into the PTY exactly like the user typing it.
+   * Trailing space so a follow-up keystroke doesn't merge with the path;
+   * no newline — the user decides when to submit.
+   */
+  private typePathIntoPty(path: string): void {
+    const payload = new TextEncoder().encode(path + " ");
+    this.ws.send({ type: "input", data: encodeBytes(payload) });
+  }
+
+  /**
+   * Deliver a dropped file to the PTY as a configurable prompt referencing
+   * the upload path, sent inside bracketed-paste markers
+   * (`ESC[200~ … ESC[201~`). Claude Code treats that exactly like a user
+   * paste and collapses a large-enough one into a chip that expands on
+   * Enter — so the prompt stays compact until submitted. Falls back to
+   * typing the raw path when no template is configured.
+   */
+  private sendDropPrompt(path: string, filename: string | undefined): void {
+    const template = this.props.dropPromptTemplate;
+    if (!template) {
+      this.typePathIntoPty(path);
+      return;
+    }
+    const text = template
+      .split("{path}")
+      .join(path)
+      .split("{filename}")
+      .join(filename ?? path);
+    // No trailing newline — the user submits. The bracketed-paste wrapper
+    // is what makes Claude Code render it collapsed.
+    const payload = new TextEncoder().encode(`\x1b[200~${text}\x1b[201~`);
+    this.ws.send({ type: "input", data: encodeBytes(payload) });
+  }
+
+  /**
+   * File drag-and-drop → upload → type-path-into-PTY flow (Scope A).
+   *
+   * Reuses the same `onPasteUpload` pipeline as image paste: a file
+   * dragged from the OS onto the pane is uploaded to the daemon and its
+   * station-side absolute path is typed into the PTY. A dropped file's
+   * *local* path is meaningless here — the pane's PTY may run on a remote
+   * station — so we always upload the bytes rather than trusting
+   * `File.path`.
+   *
+   * `dragover` must preventDefault (only then does the browser fire a
+   * `drop`), which also claims the drop from Electron's default handler
+   * (which would otherwise navigate the window to the dropped `file://`).
+   * We gate on `dragCarriesFiles` so in-app tab-reorder drags pass
+   * through untouched.
+   *
+   * Not installed when `onPasteUpload` is undefined — same guard as the
+   * paste handler, so non-Satellite client-core consumers are unaffected.
+   */
+  private installFileDropHandler() {
+    if (!this.props.onPasteUpload) return;
+    const root = this.container;
+    root.addEventListener("dragover", (ev: DragEvent) => {
+      if (!dragCarriesFiles(ev)) return;
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+    });
+    root.addEventListener("drop", (ev: DragEvent) => {
+      if (!dragCarriesFiles(ev)) return;
+      // Block the browser/Electron default (navigate to the dropped file)
+      // for any file drop, even one we can't ultimately upload.
+      ev.preventDefault();
+      this.handleFileDrop(ev).catch(() => {
+        // Per-file errors are reported via onPasteUploadError inside
+        // handleFileDrop; a stray synchronous throw here must not brick
+        // the pane.
+      });
+    });
+  }
+
+  private async handleFileDrop(ev: DragEvent): Promise<void> {
+    if (!this.props.onPasteUpload) return;
+    const files = ev.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    // Accept images + the Scope B document/text allowlist (see
+    // resolveDropMime). Files whose type isn't uploadable are surfaced
+    // via a breadcrumb rather than silently dropped.
+    const uploads: { blob: Blob; mime: string; filename: string }[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const verdict = this.props.validateDroppedFile?.({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      }) ?? { ok: true };
+      if (!verdict.ok) {
+        this.props.onDropRejected?.({
+          name: file.name,
+          reason: verdict.reason,
+          ext: extensionOf(file.name),
+          sizeBytes: file.size,
+        });
+        continue;
+      }
+      // The daemon stores non-image drops by their filename extension, so
+      // send a generic type to route them off the image sniff path;
+      // images keep their real MIME so they're validated as images.
+      const mime = file.type.toLowerCase().startsWith("image/")
+        ? file.type.toLowerCase()
+        : "application/octet-stream";
+      uploads.push({ blob: file, mime, filename: file.name });
+    }
+    // Drop delivery: a configurable prompt (bracketed paste) referencing
+    // the upload, not the raw path.
+    await this.uploadBlobs(uploads, (path, filename) => this.sendDropPrompt(path, filename));
   }
 }
 

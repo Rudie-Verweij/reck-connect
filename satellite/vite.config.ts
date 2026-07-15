@@ -28,6 +28,7 @@ export default defineConfig({
         index: path.resolve(__dirname, "renderer/index.html"),
         popout: path.resolve(__dirname, "renderer/popout.html"),
         fileViewer: path.resolve(__dirname, "renderer/file-viewer.html"),
+        dictationLab: path.resolve(__dirname, "renderer/dictation-lab.html"),
       },
     },
   },

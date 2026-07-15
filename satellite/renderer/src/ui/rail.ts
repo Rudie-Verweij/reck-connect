@@ -1,6 +1,7 @@
 import type { Project, Stoplight } from "@proto/proto";
 import { stoplightSeverity } from "@proto/proto";
 import { iconPlus } from "./icons";
+import { projectInitials, type RailMode } from "./rail-collapse";
 import { computeReorder } from "./reorder";
 import { createOverlayScrollbar, type OverlayScrollbar } from "../search/OverlayScrollbar";
 import { domScrollSurface } from "../search/scrollSurfaces";
@@ -9,20 +10,24 @@ export interface RailProps {
   root: HTMLElement;
   onSelect: (projectId: string) => void;
   onAddProject: () => void;
-  onSelectMissionControl?: () => void;
   onRename?: (projectId: string, newName: string) => void;
   onReorder?: (newIds: string[]) => void;
   onRequestDelete?: (projectId: string, projectName: string) => void;
   onOpenInFinder?: (projectId: string) => void;
-  onToggleDock?: (projectId: string, docked: boolean) => void;
   /**
-   * Toggle a project's archived state. `archived` is the DESIRED new state
-   * (mirrors onToggleDock): true to archive, false to unarchive. Invoked
+   * Toggle a project's archived state. `archived` is the DESIRED new state:
+   * true to archive, false to unarchive. Invoked
    * from the context menu and from drag-into / drag-out-of the Archive
    * section. The confirm-before-restore prompt lives in the handler, not
    * here — the rail only reports intent.
    */
   onToggleArchive?: (projectId: string, archived: boolean) => void;
+  /**
+   * Expand the rail from mini. Fired by the footer's "»" chevron, which
+   * only renders in mini mode (expanded mode has no collapse arrow —
+   * collapse is the nav toggle / ⇧← / divider drag).
+   */
+  onExpand?: () => void;
   /**
    * an earlier release — return paneIds in the project's saved layout order
    * (left-to-right, top-to-bottom for stacked splits, same flatten as
@@ -42,13 +47,17 @@ interface RailRow {
   el: HTMLElement;
   nameEl: HTMLElement;
   indicatorEl: HTMLElement;
+  // Mini-rail avatar: initials label + aggregate stoplight badge. Both
+  // exist in every row; CSS shows them only in .rail-mini.
+  avatarEl: HTMLElement;
+  avatarLabelEl: HTMLElement;
+  avatarBadgeEl: HTMLElement;
   // Cached serialisation of the last rendered per-pane stoplight list.
   // Join-comparable so setProjects can skip DOM churn when the list is
   // unchanged. an earlier release: replaces the old `lastStoplight` / `lastPaneCount`
   // pair — per-pane color makes a single aggregate insufficient.
   lastStoplightsKey: string;
   lastName: string;
-  lastDocked: boolean;
   lastArchived: boolean;
 }
 
@@ -169,6 +178,22 @@ function syncIndicatorDots(
   }
 }
 
+// Mirror the indicator's aggregate stoplight (written by syncIndicatorDots
+// via aggregateStoplight into dataset.stoplight) onto the mini avatar's
+// badge. Deliberately NOT .pane-indicator-dot — several dot-count code
+// paths (and tests) select on that class and must not count the badge.
+function syncAvatarBadge(row: RailRow) {
+  const agg = row.indicatorEl.dataset.stoplight ?? "gray";
+  row.avatarBadgeEl.className = `rail-avatar-badge ${agg}`;
+}
+
+function setAvatarName(row: RailRow, name: string) {
+  row.avatarLabelEl.textContent = projectInitials(name);
+  // In mini mode the avatar is the whole row; the tooltip carries the
+  // full project name the initials abbreviate.
+  row.avatarEl.title = name;
+}
+
 export class Rail {
   private listEl: HTMLElement;
   private archiveSectionEl: HTMLElement;
@@ -195,11 +220,10 @@ export class Rail {
   constructor(private props: RailProps) {
     this.props.root.classList.add("rail");
     this.props.root.innerHTML = `
-      <div class="rail-mission-control" id="rail-mc" title="Mission Control — dashboard + supervisor across docked projects">
-        <span class="name">Mission Control</span>
-        <span class="dot gray" id="rail-mc-dot" aria-label="Docked-project health"></span>
+      <div class="rail-header">
+        <span class="rail-header-text">Projects</span>
+        <span class="rail-header-mark" aria-hidden="true"></span>
       </div>
-      <div class="rail-header">Projects</div>
       <div class="rail-divider"></div>
       <div class="rail-list-scroll">
         <div class="rail-list"></div>
@@ -217,6 +241,7 @@ export class Rail {
       <div class="rail-footer">
         <span id="rail-count">0 projects</span>
         <button class="rail-add" id="rail-add" title="Add project">${iconPlus}<span>Add</span></button>
+        <button class="rail-collapse-chip" id="rail-collapse-chip" type="button" title="Expand rail (⇧→)" aria-label="Expand rail">»</button>
       </div>
     `;
     this.listEl = this.props.root.querySelector(".rail-list") as HTMLElement;
@@ -227,8 +252,18 @@ export class Rail {
     (this.props.root.querySelector("#rail-add") as HTMLElement).addEventListener("click", () =>
       this.props.onAddProject(),
     );
-    const mcEl = this.props.root.querySelector("#rail-mc") as HTMLElement;
-    mcEl.addEventListener("click", () => this.props.onSelectMissionControl?.());
+    (this.props.root.querySelector("#rail-collapse-chip") as HTMLElement).addEventListener(
+      "click",
+      () => this.props.onExpand?.(),
+    );
+    // In mini mode the whole rail is a big expand target: clicking any
+    // empty (non-row, non-button) area springs it open. Rows and buttons
+    // keep their own handlers.
+    this.props.root.addEventListener("click", (e) => {
+      if (!this.props.root.classList.contains("rail-mini")) return;
+      if ((e.target as HTMLElement).closest(".rail-item, button")) return;
+      this.props.onExpand?.();
+    });
     (this.props.root.querySelector("#rail-archive-header") as HTMLElement).addEventListener(
       "click",
       () => this.toggleArchiveCollapsed(),
@@ -247,17 +282,6 @@ export class Rail {
     });
     this.wireArchiveDropZone();
     this.wireActiveDropZone();
-  }
-
-  setMissionControlSelected(selected: boolean) {
-    const mcEl = this.props.root.querySelector("#rail-mc") as HTMLElement | null;
-    if (mcEl) mcEl.classList.toggle("selected", selected);
-  }
-
-  setMissionControlLight(stoplight: Stoplight) {
-    const dot = this.props.root.querySelector("#rail-mc-dot") as HTMLElement | null;
-    if (!dot) return;
-    dot.className = `dot ${stoplight}`;
   }
 
   setProjects(projects: Project[]) {
@@ -312,6 +336,17 @@ export class Rail {
     }
   }
 
+  /**
+   * Flip the rail between expanded rows and the 48px mini rail. Purely a
+   * class toggle — the boot layer owns the width animation and drives
+   * this alongside it. Per-element CSS transitions keyed off .rail-mini
+   * crossfade names/indicators with the initials avatars, the "Projects"
+   * text with the brand mark, and reveal the footer chevron.
+   */
+  setMode(mode: RailMode) {
+    this.props.root.classList.toggle("rail-mini", mode === "mini");
+  }
+
   private renderZone(projects: Project[], container: HTMLElement) {
     for (let i = 0; i < projects.length; i++) {
       const p = projects[i];
@@ -339,24 +374,20 @@ export class Rail {
     const key = stoplights.join(",");
     if (row.lastStoplightsKey !== key) {
       syncIndicatorDots(row.indicatorEl, stoplights);
+      syncAvatarBadge(row);
       row.lastStoplightsKey = key;
     }
     if (row.lastName !== p.name) {
       row.nameEl.textContent = p.name;
+      setAvatarName(row, p.name);
       row.lastName = p.name;
-    }
-    if (row.lastDocked !== p.docked) {
-      row.el.classList.toggle("docked", p.docked);
-      row.lastDocked = p.docked;
     }
     const archived = p.archived ?? false;
     if (row.lastArchived !== archived) {
       row.el.classList.toggle("archived", archived);
       row.lastArchived = archived;
     }
-    // Title reflects the current state (archived wins over docked).
     if (archived) row.el.title = "Archived — click to restore";
-    else if (p.docked) row.el.title = "Docked in Mission Control";
     else row.el.removeAttribute("title");
     row.el.classList.toggle("selected", p.id === this.currentSelected);
   }
@@ -420,11 +451,9 @@ export class Rail {
   private createRow(p: Project): RailRow {
     const archived = p.archived ?? false;
     const el = document.createElement("div");
-    el.className =
-      "rail-item" + (p.docked ? " docked" : "") + (archived ? " archived" : "");
+    el.className = "rail-item" + (archived ? " archived" : "");
     el.setAttribute("data-project-id", p.id);
     if (archived) el.title = "Archived — click to restore";
-    else if (p.docked) el.title = "Docked in Mission Control";
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = p.name;
@@ -433,6 +462,14 @@ export class Rail {
     const initialLayoutOrder = this.props.getLayoutPaneOrder?.(p.id) ?? null;
     const initialStoplights = resolvePaneStoplights(p, initialLayoutOrder);
     syncIndicatorDots(indicator, initialStoplights, { skipAnimation: true });
+    const avatar = document.createElement("span");
+    avatar.className = "rail-avatar";
+    const avatarLabel = document.createElement("span");
+    avatarLabel.className = "rail-avatar-label";
+    const avatarBadge = document.createElement("span");
+    avatar.appendChild(avatarLabel);
+    avatar.appendChild(avatarBadge);
+    el.appendChild(avatar);
     el.appendChild(name);
     el.appendChild(indicator);
     el.addEventListener("click", (e) => {
@@ -442,15 +479,12 @@ export class Rail {
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       const row = this.rows.get(p.id);
-      const docked = row?.lastDocked ?? p.docked;
       const isArchived = row?.lastArchived ?? archived;
       const rowName = row?.lastName ?? p.name;
       showRailContextMenu(e.clientX, e.clientY, {
-        docked,
         archived: isArchived,
         onOpen: () => this.props.onOpenInFinder?.(p.id),
         onDelete: () => this.props.onRequestDelete?.(p.id, rowName),
-        onToggleDock: () => this.props.onToggleDock?.(p.id, !docked),
         onToggleArchive: () => this.props.onToggleArchive?.(p.id, !isArchived),
       });
     });
@@ -509,15 +543,20 @@ export class Rail {
       this.startRename(p.id, name);
     });
     // NOTE: placement into the active/archive zone is done by renderZone.
-    return {
+    const row: RailRow = {
       el,
       nameEl: name,
       indicatorEl: indicator,
+      avatarEl: avatar,
+      avatarLabelEl: avatarLabel,
+      avatarBadgeEl: avatarBadge,
       lastStoplightsKey: initialStoplights.join(","),
       lastName: p.name,
-      lastDocked: p.docked,
       lastArchived: archived,
     };
+    setAvatarName(row, p.name);
+    syncAvatarBadge(row);
+    return row;
   }
 
   private startRename(projectId: string, nameEl: HTMLElement) {
@@ -552,6 +591,7 @@ export class Rail {
       input.replaceWith(newName);
       row.nameEl = newName;
       row.lastName = commitName;
+      setAvatarName(row, commitName);
       if (commit && next && next !== original) {
         this.props.onRename?.(projectId, next);
       }
@@ -571,11 +611,9 @@ function showRailContextMenu(
   x: number,
   y: number,
   handlers: {
-    docked: boolean;
     archived: boolean;
     onOpen: () => void;
     onDelete: () => void;
-    onToggleDock: () => void;
     onToggleArchive: () => void;
   },
 ) {
@@ -586,13 +624,9 @@ function showRailContextMenu(
   menu.className = "rail-context-menu";
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
-  const dockLabel = handlers.docked
-    ? "Undock from Mission Control"
-    : "Dock in Mission Control";
   const archiveLabel = handlers.archived ? "Unarchive" : "Archive";
   menu.innerHTML = `
     <button type="button" data-action="open">Open in Finder</button>
-    <button type="button" data-action="dock">${dockLabel}</button>
     <button type="button" data-action="archive">${archiveLabel}</button>
     <button type="button" data-action="delete" class="danger">Delete Project…</button>
   `;
@@ -610,7 +644,6 @@ function showRailContextMenu(
   menu.addEventListener("click", (e) => {
     const action = (e.target as HTMLElement).dataset.action;
     if (action === "open") handlers.onOpen();
-    if (action === "dock") handlers.onToggleDock();
     if (action === "archive") handlers.onToggleArchive();
     if (action === "delete") handlers.onDelete();
     close();

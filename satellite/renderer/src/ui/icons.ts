@@ -24,8 +24,12 @@ export const iconRail = base(
   `<rect x="1.5" y="2.5" width="13" height="11" rx="1"/><line x1="5.5" y1="2.5" x2="5.5" y2="13.5"/>`,
 );
 
-export const iconSettings = base(
-  `<circle cx="8" cy="8" r="2.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M3.5 12.5l1.4-1.4M11.1 4.9l1.4-1.4"/>`,
+export const iconMic = base(
+  `<rect x="6" y="1.5" width="4" height="8" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><line x1="8" y1="12" x2="8" y2="14.5"/><line x1="5.5" y1="14.5" x2="10.5" y2="14.5"/>`,
+);
+
+export const iconChart = base(
+  `<line x1="2.5" y1="13.5" x2="13.5" y2="13.5"/><rect x="3.5" y="8.5" width="2.5" height="5" rx="0.5"/><rect x="7" y="5" width="2.5" height="8.5" rx="0.5"/><rect x="10.5" y="7" width="2.5" height="6.5" rx="0.5"/>`,
 );
 
 export const iconClear = base(

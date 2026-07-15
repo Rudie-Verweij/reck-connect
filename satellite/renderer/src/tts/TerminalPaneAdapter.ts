@@ -4,7 +4,11 @@
 // keeps a single XtermHighlighter alive across boundary events and
 // disposes it together with the adapter.
 
-import { pixelToCell, resolveSpokenChunk } from "./PaneTextResolver";
+import {
+  pixelToCell,
+  resolveSpokenChunk,
+  resolveUpcomingChunk,
+} from "./PaneTextResolver";
 import type { ResolverTerminal } from "./PaneTextResolver";
 import {
   XtermHighlighter,
@@ -34,7 +38,14 @@ export interface TerminalPaneAdapterOptions {
   cellHeight: number;
   /** Highlight theme. Updated dynamically by re-binding via setTheme. */
   theme?: HighlightTheme;
+  /** Debounce (ms) for content-change notifications used to re-resolve the
+   *  upcoming words mid-playback. Coalesces bursts of TUI repaints. Default
+   *  CONTENT_CHANGE_DEBOUNCE_MS; tests set 0 for synchronous behaviour. */
+  contentChangeDebounceMs?: number;
 }
+
+/** Default debounce for scroll/render → re-resolve. */
+const CONTENT_CHANGE_DEBOUNCE_MS = 150;
 
 export class TerminalPaneAdapter implements SpeakSurfaceAdapter {
   readonly kind: SurfaceKind = "terminal";
@@ -47,6 +58,10 @@ export class TerminalPaneAdapter implements SpeakSurfaceAdapter {
   private theme: HighlightTheme;
   private highlighter: XtermHighlighter | null;
   private disposed = false;
+  private readonly contentChangeDebounceMs: number;
+  // Whether the active read came from a selection. Selection reads have
+  // user-chosen boundaries, so they are NEVER re-resolved on scroll.
+  private lastReadWasSelection = false;
 
   constructor(opts: TerminalPaneAdapterOptions) {
     this.term = opts.term;
@@ -54,6 +69,8 @@ export class TerminalPaneAdapter implements SpeakSurfaceAdapter {
     this.containerEl = opts.containerEl;
     this.cellWidth = opts.cellWidth;
     this.cellHeight = opts.cellHeight;
+    this.contentChangeDebounceMs =
+      opts.contentChangeDebounceMs ?? CONTENT_CHANGE_DEBOUNCE_MS;
     this.theme = opts.theme ?? { backgroundColor: "rgba(255,255,0,0.6)" };
     // Anchor the highlight overlay to the xterm screen grid so (0,0) maps to
     // the top-left cell. Measure cell metrics LIVE on each reposition (off
@@ -101,8 +118,10 @@ export class TerminalPaneAdapter implements SpeakSurfaceAdapter {
     // Selection always wins.
     const sel = this.term.getSelection();
     if (sel && sel.length > 0) {
+      this.lastReadWasSelection = true;
       return resolveSpokenChunk(this.term);
     }
+    this.lastReadWasSelection = false;
     if (!point) return { text: "", rangeMap: [] };
     const rect = this.xtermEl.getBoundingClientRect();
     const cell = pixelToCell({
@@ -116,7 +135,55 @@ export class TerminalPaneAdapter implements SpeakSurfaceAdapter {
       cols: this.term.cols,
       rows: this.term.rows,
     });
-    return resolveSpokenChunk(this.term, cell);
+    // In a full-screen TUI (alt-screen), strip the pinned status/input block
+    // from the very first read so a later status-only repaint leaves the
+    // upcoming tail identical → no swap, no gap.
+    return resolveSpokenChunk(this.term, cell, {
+      excludeStatusLine: this.isAltScreen(),
+    });
+  }
+
+  /** Re-resolve the visible screen (minus the status line) for a live swap, or
+   *  null when re-resolution must not happen: a selection read (fixed
+   *  boundaries) or a non-alt-screen pane (no pinned status line; scrollback
+   *  keeps its fixed clicked-point scope). */
+  resolveUpcomingChunk(): SpokenChunk | null {
+    if (this.disposed) return null;
+    if (this.lastReadWasSelection || !this.isAltScreen()) return null;
+    return resolveUpcomingChunk(this.term, { excludeStatusLine: true });
+  }
+
+  /** Notify (debounced) when the visible content may have changed — a TUI
+   *  repaints in place (onRender) or the viewport scrolls (onScroll). Mirrors
+   *  XtermHighlighter's subscription set. Returns an unsubscribe fn. */
+  onContentChange(cb: () => void): () => void {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const fire = (): void => {
+      if (this.disposed) return;
+      if (this.contentChangeDebounceMs <= 0) {
+        cb();
+        return;
+      }
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        cb();
+      }, this.contentChangeDebounceMs);
+    };
+    const subs = [
+      this.term.onRender(fire),
+      this.term.onScroll(fire),
+    ];
+    if (this.term.onResize) subs.push(this.term.onResize(fire));
+    return () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      for (const s of subs) s.dispose();
+    };
+  }
+
+  private isAltScreen(): boolean {
+    return this.term.buffer.active.type === "alternate";
   }
 
   highlightBoundary(b: TtsBoundary): void {

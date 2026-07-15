@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reck — Dictation Tuning Lab</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,800;1,400;1,600&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./src/styles.css" />
+    <style>
+      /* Lab-only chrome. The .dictation-* pill classes come from styles.css;
+         nothing here overrides them — only the surrounding lab furniture. */
+      :root {
+        --lab-bg: #14140f;
+        --lab-panel: #1c1c17;
+        --lab-border: rgba(255, 255, 255, 0.1);
+        --lab-text: #e8e4d8;
+        --lab-muted: #9a978c;
+        --lab-accent: #d98a3d;
+        /* Alias the app's control palette to the lab's, so the SHARED
+           .dict-ctrl-* component (appearanceControls.ts) renders native here.
+           These resolve at use time to whichever --lab-* the theme sets. */
+        --app-text: var(--lab-text);
+        --app-text-dim: var(--lab-text);
+        --app-text-muted: var(--lab-muted);
+        --app-border: var(--lab-border);
+        --app-bg-raised: var(--lab-panel);
+        --app-hover: rgba(127, 127, 127, 0.12);
+        --claude-orange: var(--lab-accent);
+      }
+      :root[data-theme="light"] {
+        --lab-bg: #ece8dd;
+        --lab-panel: #f7f4ed;
+        --lab-border: rgba(0, 0, 0, 0.12);
+        --lab-text: #2a2927;
+        --lab-muted: #6b6860;
+        --lab-accent: #c06a1d;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+      }
+      body {
+        background: var(--lab-bg);
+        color: var(--lab-text);
+        font-family: "Lora", Georgia, serif;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .lab-shell {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+      .lab-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 18px;
+      }
+      .lab-head h1 {
+        font-family: "Playfair Display", Georgia, serif;
+        font-size: 24px;
+        margin: 0;
+        font-weight: 700;
+      }
+      .lab-head p {
+        margin: 0;
+        color: var(--lab-muted);
+        font-size: 13px;
+        max-width: 640px;
+      }
+      .lab-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+        gap: 24px;
+        align-items: start;
+      }
+      @media (max-width: 900px) {
+        .lab-grid {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+      .lab-col {
+        min-width: 0;
+      }
+      .lab-card {
+        background: var(--lab-panel);
+        border: 1px solid var(--lab-border);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .lab-card h2 {
+        font-family: "Playfair Display", Georgia, serif;
+        font-size: 15px;
+        margin: 0 0 12px;
+        font-weight: 600;
+      }
+      /* The stage: a dark terminal-pane look-alike. position:relative so the
+         DictationBar's `position:absolute; bottom` anchors inside it. */
+      .lab-stage {
+        position: relative;
+        height: 240px;
+        border-radius: 10px;
+        background: #101013;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        color: #c9c6bd;
+        padding: 14px;
+        box-sizing: border-box;
+      }
+      .lab-stage.light-pane {
+        background: #cfc9ba;
+        color: #2a2927;
+        border-color: rgba(0, 0, 0, 0.18);
+      }
+      .lab-prompt {
+        white-space: pre-wrap;
+        word-break: break-word;
+        opacity: 0.9;
+      }
+      .lab-prompt .caret {
+        display: inline-block;
+        width: 7px;
+        height: 15px;
+        margin-left: 1px;
+        vertical-align: text-bottom;
+        background: var(--lab-accent);
+        animation: lab-caret 1s steps(2, start) infinite;
+      }
+      @keyframes lab-caret {
+        50% {
+          opacity: 0;
+        }
+      }
+      .lab-stage-hint {
+        position: absolute;
+        top: 8px;
+        right: 12px;
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--lab-muted);
+        pointer-events: none;
+      }
+      .lab-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-top: 14px;
+      }
+      .lab-controls button,
+      .lab-btn {
+        font-family: "Lora", serif;
+        font-size: 13px;
+        padding: 6px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--lab-border);
+        background: transparent;
+        color: var(--lab-text);
+        cursor: pointer;
+      }
+      .lab-controls button:hover,
+      .lab-btn:hover {
+        border-color: var(--lab-accent);
+      }
+      .lab-controls button.primary {
+        background: var(--lab-accent);
+        color: #17140f;
+        border-color: var(--lab-accent);
+        font-weight: 600;
+      }
+      .lab-scrub-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .lab-scrub-row input[type="range"] {
+        flex: 1;
+      }
+      .lab-time {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: var(--lab-muted);
+        min-width: 74px;
+        text-align: right;
+      }
+      .lab-field {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        margin-bottom: 14px;
+      }
+      .lab-field-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .lab-field label {
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .lab-field .val {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: var(--lab-accent);
+      }
+      .lab-field .help {
+        font-size: 11.5px;
+        color: var(--lab-muted);
+        line-height: 1.35;
+      }
+      .lab-field input[type="range"] {
+        width: 100%;
+      }
+      .lab-field select {
+        font-family: "Lora", serif;
+        font-size: 13px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid var(--lab-border);
+        background: var(--lab-bg);
+        color: var(--lab-text);
+      }
+      .lab-field.inline {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .lab-field.inline .help {
+        flex: 1;
+      }
+      .lab-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .lab-toolbar {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      /* Scroll container for the shared appearance controls, so every knob is
+         reachable regardless of window height. */
+      .lab-scroll {
+        max-height: calc(100vh - 220px);
+        overflow-y: auto;
+        padding-right: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .lab-picker {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .lab-picker select {
+        font-family: "Lora", serif;
+        font-size: 13px;
+        padding: 5px 8px;
+        border-radius: 8px;
+        border: 1px solid var(--lab-border);
+        background: var(--lab-bg);
+        color: var(--lab-text);
+      }
+      .lab-toast {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--lab-accent);
+        color: #17140f;
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s;
+      }
+      .lab-toast.show {
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="lab" class="lab-shell"></div>
+    <script type="module" src="./src/dictation-lab.ts"></script>
+  </body>
+</html>

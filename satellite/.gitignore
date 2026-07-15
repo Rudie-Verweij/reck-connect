@@ -5,3 +5,4 @@ coverage
 .DS_Store
 playwright-report
 test-results
+e2e/artifacts

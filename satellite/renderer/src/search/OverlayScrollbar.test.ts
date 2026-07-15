@@ -216,20 +216,32 @@ describe("OverlayScrollbar — mouse-tracking TUI pane (Claude / less / vim)", (
 
   it("wheel-up pages up (dir -1), wheel-down pages down (dir +1)", () => {
     const f = fakeSurface(FROZEN, true);
-    sb = createOverlayScrollbar({ host, surface: f.surface });
+    // Pin the page step so the test is independent of the default.
+    sb = createOverlayScrollbar({ host, surface: f.surface, pageStepPx: 100 });
     host.dispatchEvent(wheelEvent(-100));
     expect(f.surface.pageScroll).toHaveBeenCalledWith(-1);
     host.dispatchEvent(wheelEvent(100));
     expect(f.surface.pageScroll).toHaveBeenCalledWith(1);
   });
 
-  it("accumulates sub-page wheel deltas — one page per ~100px, not per event", () => {
+  it("accumulates sub-page wheel deltas — one page per pageStepPx, not per event", () => {
     const f = fakeSurface(FROZEN, true);
-    sb = createOverlayScrollbar({ host, surface: f.surface });
+    sb = createOverlayScrollbar({ host, surface: f.surface, pageStepPx: 100 });
     host.dispatchEvent(wheelEvent(-40));
     host.dispatchEvent(wheelEvent(-40)); // -80, still below the page step
     expect(f.surface.pageScroll).not.toHaveBeenCalled();
     host.dispatchEvent(wheelEvent(-40)); // -120 → crosses one page
+    expect(f.surface.pageScroll).toHaveBeenCalledTimes(1);
+    expect(f.surface.pageScroll).toHaveBeenCalledWith(-1);
+  });
+
+  it("honours a larger pageStepPx — needs more wheel travel per page (slower scroll)", () => {
+    const f = fakeSurface(FROZEN, true);
+    sb = createOverlayScrollbar({ host, surface: f.surface, pageStepPx: 300 });
+    host.dispatchEvent(wheelEvent(-100));
+    host.dispatchEvent(wheelEvent(-100)); // -200, below the 300px step
+    expect(f.surface.pageScroll).not.toHaveBeenCalled();
+    host.dispatchEvent(wheelEvent(-100)); // -300 → crosses exactly one page
     expect(f.surface.pageScroll).toHaveBeenCalledTimes(1);
     expect(f.surface.pageScroll).toHaveBeenCalledWith(-1);
   });

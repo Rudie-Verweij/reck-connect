@@ -54,8 +54,8 @@ func ensureTestDaemonToken(t *testing.T) {
 // request did not already provide one — so a test that explicitly sets
 // "Bearer wrong" still sees its 401, and a test that sends no
 // Authorization on a route the server is supposed to reject (e.g. CORS
-// tests, supervisor-token tests) gets the right behaviour as long as it
-// sets its own DAEMON_TOKEN before calling newServer.
+// tests) gets the right behaviour as long as it sets its own
+// DAEMON_TOKEN before calling newServer.
 func newTestHandler(t *testing.T, s *Server) nethttp.Handler {
 	t.Helper()
 	ensureTestDaemonToken(t)
@@ -253,8 +253,8 @@ func TestProjectDetail_autoSpawnDefault(t *testing.T) {
 // `?autospawn=false` opts out of the new-project starter-pane side-effect
 // so a station-resident project doesn't grow a phantom pane on local
 // every time the user re-enters it. Mirrors the bug repro: open project,
-// click Mission Control, click project again — the secondary fetch
-// shouldn't side-effect a spawn.
+// navigate away, click the project again — the secondary fetch shouldn't
+// side-effect a spawn.
 func TestProjectDetail_autoSpawnOptOut(t *testing.T) {
 	s := newServer(t)
 	srv := httptest.NewServer(newTestHandler(t, s))

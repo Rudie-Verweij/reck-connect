@@ -3,10 +3,12 @@ import { allLeaves, findLeaf, focusNav, setRatio } from "../layout/split-tree";
 import { TerminalPane } from "@client-core/terminal/terminal-pane";
 import type { PasteUploadResult } from "@client-core/terminal/terminal-pane";
 import type { PaneWSCloseInfo } from "@client-core/api/ws";
-import type { Stoplight } from "@proto/proto";
+import type { PaneUsage, Stoplight } from "@proto/proto";
 import type { HostRef } from "../host";
-import { iconClose, iconSplitDown, iconSplitRight, iconDetach, iconHistory } from "./icons";
+import { iconClose, iconSplitDown, iconSplitRight, iconDetach, iconHistory, iconMic } from "./icons";
 import { ensureHistoryButton } from "./paneControls";
+import { ensureDictationFab } from "../transcription/micOverlay";
+import { installVoiceErrorHint } from "../transcription/voiceErrorHint";
 import { computeReorder } from "./reorder";
 import { HoverFocusController } from "./hover-focus-controller";
 
@@ -47,6 +49,11 @@ export interface PaneLayoutCallbacks {
   // Resolves current stoplight for a pane so the tab bar can render a
   // per-tab status dot. Return "gray" if unknown.
   getStoplight: (paneId: string) => Stoplight;
+  // Resolves the latest usage glance for a pane so the tab bar can render
+  // a minimal "ctx 43% · 5h 61%" badge on Claude tabs. Returns undefined
+  // when unknown (no sample yet, non-Claude pane, or telemetry disabled).
+  // Optional so tests / non-Satellite consumers can omit it.
+  getUsage?: (paneId: string) => PaneUsage | undefined;
   // User events
   onSwitchTab: (leafId: string, tabId: string) => void;
   onCloseTab: (leafId: string, tabId: string) => void;
@@ -119,9 +126,32 @@ export interface PaneLayoutCallbacks {
     host: HostRef,
     blob: Blob,
     mime: string,
+    filename?: string,
   ) => Promise<PasteUploadResult>;
   /** Optional paste-upload error hook; relayed to the TerminalPane. */
   onPasteUploadError?: (paneId: string, err: unknown, mime: string) => void;
+  /**
+   * Current drop prompt template (thunk so freshly-created panes pick up
+   * a Preferences edit without a reload). Relayed to TerminalPane as
+   * `dropPromptTemplate`; when undefined a drop types the raw path.
+   */
+  dropPromptTemplate?: () => string | undefined;
+  /**
+   * Gate a dropped file against the user's allow-list + size cap. Relayed
+   * to TerminalPane as `validateDroppedFile`.
+   */
+  validateDroppedFile?: (file: {
+    name: string;
+    size: number;
+    type: string;
+  }) => { ok: true } | { ok: false; reason: "type" | "size" };
+  /** Surface a rejected drop (e.g. a toast). Relayed as `onDropRejected`. */
+  onDropRejected?: (info: {
+    name: string;
+    reason: "type" | "size";
+    ext: string;
+    sizeBytes: number;
+  }) => void;
   /**
    * Detach `paneId` to its own popout window . Called by the
    * per-pane "Detach" button and the ⌘⇧O shortcut. The callback is
@@ -146,6 +176,12 @@ export interface PaneLayoutCallbacks {
    * transcript. Optional for the same reason as `onDetachPane`.
    */
   onHistoryPane?: (paneId: string, leafId: string) => void;
+  /**
+   * Toggle voice dictation for a Claude pane (issue #67). When present, a
+   * mic button is mounted in the pane's control stack. Optional — omitted
+   * when the dictation feature isn't wired.
+   */
+  onDictationToggle?: (paneId: string, leafId: string) => void;
 }
 
 /**
@@ -196,6 +232,19 @@ interface LeafView {
   tabBarEl: HTMLElement;
   termsEl: HTMLElement;
   terminals: Map<string, TabRecord>;
+}
+
+// formatPaneUsage renders the minimal tab badge string, e.g.
+// "ctx 43% · 5h 61%". Returns "" when no usable value is present so the
+// caller can skip the DOM node entirely. Exported for unit testing.
+// Number.isFinite (not typeof === "number") guards against a NaN slipping
+// in from a locally-constructed PaneUsage.
+export function formatPaneUsage(u: PaneUsage | undefined): string {
+  if (!u) return "";
+  const parts: string[] = [];
+  if (Number.isFinite(u.context_pct)) parts.push(`ctx ${Math.round(u.context_pct as number)}%`);
+  if (Number.isFinite(u.five_hour_pct)) parts.push(`5h ${Math.round(u.five_hour_pct as number)}%`);
+  return parts.join(" · ");
 }
 
 export class PaneLayout {
@@ -506,7 +555,7 @@ export class PaneLayout {
       handle.classList.remove("dragging");
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      requestAnimationFrame(() => this.refitAllActiveTerminals());
+      requestAnimationFrame(() => this.refitAllActiveTerminals(false));
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -664,11 +713,23 @@ export class PaneLayout {
         // TerminalPane installs no paste handler and pasted images
         // drop as before.
         onPasteUpload: this.cb.onPasteUpload
-          ? (blob, mime) => this.cb.onPasteUpload!(t.paneId, t.host, blob, mime)
+          ? (blob, mime, filename) =>
+              this.cb.onPasteUpload!(t.paneId, t.host, blob, mime, filename)
           : undefined,
         onPasteUploadError: this.cb.onPasteUploadError
           ? (err, mime) => this.cb.onPasteUploadError!(t.paneId, err, mime)
           : undefined,
+        // Voice-dictation hint (Phase 0): only Claude panes run `/voice`,
+        // so watch just those for its station-capture failure and, once,
+        // toast the user. `installVoiceErrorHint` mounts into the pane
+        // wrapper; the sink no-ops after it has fired.
+        onDecodedOutput:
+          t.kind === "claude"
+            ? installVoiceErrorHint(wrapper).onOutput
+            : undefined,
+        dropPromptTemplate: this.cb.dropPromptTemplate?.(),
+        validateDroppedFile: this.cb.validateDroppedFile,
+        onDropRejected: this.cb.onDropRejected,
         theme: this.currentTheme,
       });
       wrapper.appendChild(term.container);
@@ -687,6 +748,19 @@ export class PaneLayout {
           onToggle: () => {
             this.focusLeaf(leaf.id);
             this.cb.onHistoryPane?.(t.paneId, leaf.id);
+          },
+        });
+      }
+      // Voice-dictation mic (issue #67) — Claude panes only: the floating
+      // draggable button anchored to the pane's bottom-left (the chosen
+      // design), not the top-right stack. Focuses the pane, then toggles
+      // dictation there.
+      if (this.cb.onDictationToggle && t.kind === "claude") {
+        ensureDictationFab(wrapper, {
+          icon: iconMic,
+          onToggle: () => {
+            this.focusLeaf(leaf.id);
+            this.cb.onDictationToggle?.(t.paneId, leaf.id);
           },
         });
       }
@@ -859,6 +933,9 @@ export class PaneLayout {
       tabEl.appendChild(dotEl);
       if (hostBadgeEl) tabEl.appendChild(hostBadgeEl);
       tabEl.appendChild(titleEl);
+      // (Per-tab usage badge removed — it cluttered every tab and repeated
+      // the account-level 5h quota on each one. Usage data still collects
+      // in the background; a proper usage view is a separate later pass.)
       tabEl.appendChild(closeEl);
 
       tabEl.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -1184,8 +1261,9 @@ export class PaneLayout {
     input.addEventListener("blur", onBlur);
   }
 
-  private refitAllActiveTerminals() {
-    if (!this.tree) return;
+  private refitAllActiveTerminals(pinToBottom: boolean): boolean {
+    if (!this.tree) return true;
+    let allLaidOut = true;
     for (const leaf of allLeaves(this.tree)) {
       const view = this.views.get(leaf.id);
       const record = view?.terminals.get(leaf.activeTabId);
@@ -1196,18 +1274,30 @@ export class PaneLayout {
       // so a user who scrolled up to read history isn't yanked
       // back to the tail on Alt-Tab.
       const wasAtBottom = record.term.isAtBottom();
-      record.term.refit();
-      if (wasAtBottom) record.term.scrollToBottom();
+      if (!record.term.refit()) allLaidOut = false;
+      if (pinToBottom) {
+        // Project-switch path: a real scroll gesture that lands at the
+        // tail, repainting a freshly remounted (possibly blank) viewport.
+        record.term.nudgeScrollToBottom();
+      } else if (wasAtBottom) {
+        record.term.scrollToBottom();
+      }
     }
+    return allLaidOut;
   }
 
   /**
    * Re-fit every visible pane and re-send its geometry to the PTY. Used
    * by the boot wiring on window focus: a phone client may have resized
    * the shared PTY while the desktop was in the background, so on refocus
-   * the desktop reasserts its own dimensions.
+   * the desktop reasserts its own dimensions. Returns false when any
+   * pane skipped its fit because the container wasn't laid out yet —
+   * the project-switch path uses that to schedule a one-shot retry (and
+   * passes pinToBottom so remounted panes end scrolled to the tail).
    */
-  refitActive() { this.refitAllActiveTerminals(); }
+  refitActive(opts?: { pinToBottom?: boolean }): boolean {
+    return this.refitAllActiveTerminals(opts?.pinToBottom === true);
+  }
 
   private updateActiveClasses() {
     for (const [leafId, view] of this.views) {

@@ -75,7 +75,7 @@ function fakeTerm(
 
 function setup(
   init?: Parameters<typeof fakeTerm>[0],
-  theme: HighlightTheme = { backgroundColor: "rgb(1, 2, 3)" },
+  theme: HighlightTheme = { backgroundColor: "#010203" }, // rgb(1, 2, 3)
 ) {
   const env = fakeTerm(init);
   const parent = document.createElement("div");
@@ -124,7 +124,11 @@ describe("XtermHighlighter — re-find placement", () => {
     expect(el!.style.top).toBe("0px"); // row 0
     expect(el!.style.left).toBe("88px"); // col 11 * 8
     expect(el!.style.width).toBe("40px"); // 5 cells * 8
-    expect(el!.style.backgroundColor).toBe("rgb(1, 2, 3)");
+    // Shared highlight styling: translucent fill + opaque ring (no border
+    // before; matches the markdown / file-viewer surfaces now).
+    expect(el!.style.background).toBe("rgba(1, 2, 3, 0.5)");
+    expect(el!.style.outline).toBe("1.5px solid #010203");
+    expect(el!.style.opacity).toBe(""); // element opacity never set
   });
 
   it("ignores a STALE snapshot column and finds the real position", () => {
@@ -237,10 +241,10 @@ describe("XtermHighlighter — theme", () => {
   it("uses the latest theme colour on each reposition", () => {
     const s = setup({ lines: ["alpha"], viewportY: 0 });
     s.h.highlight(B(0, 0, "alpha"));
-    expect(s.overlay()!.style.backgroundColor).toBe("rgb(1, 2, 3)");
-    s.setTheme({ backgroundColor: "rgb(4, 5, 6)" });
+    expect(s.overlay()!.style.background).toBe("rgba(1, 2, 3, 0.5)");
+    s.setTheme({ backgroundColor: "#040506" }); // rgb(4, 5, 6)
     s.fireRender();
-    expect(s.overlay()!.style.backgroundColor).toBe("rgb(4, 5, 6)");
+    expect(s.overlay()!.style.background).toBe("rgba(4, 5, 6, 0.5)");
     s.h.dispose();
     s.parent.remove();
   });

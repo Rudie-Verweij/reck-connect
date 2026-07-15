@@ -9,7 +9,7 @@ function mkProject(
   stoplight: Project["stoplight"],
   paneCount = 0,
 ): Project {
-  return { id, name, cwd: "/", stoplight, pane_count: paneCount, docked: false };
+  return { id, name, cwd: "/", stoplight, pane_count: paneCount };
 }
 
 describe("Rail", () => {
@@ -108,61 +108,6 @@ describe("Rail", () => {
     menu?.remove();
   });
 
-  it("adds .docked class on the rail item when project is docked", () => {
-    const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
-    const docked = { ...mkProject("a", "Alpha", "gray"), docked: true };
-    r.setProjects([docked, mkProject("b", "Bravo", "gray")]);
-    const rows = root.querySelectorAll<HTMLElement>(".rail-item");
-    expect(rows[0].classList.contains("docked")).toBe(true);
-    expect(rows[1].classList.contains("docked")).toBe(false);
-  });
-
-  it("toggles .docked when a project's docked flag changes", () => {
-    const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
-    r.setProjects([mkProject("a", "Alpha", "gray")]);
-    r.setProjects([{ ...mkProject("a", "Alpha", "gray"), docked: true }]);
-    const row = root.querySelector<HTMLElement>(".rail-item")!;
-    expect(row.classList.contains("docked")).toBe(true);
-    r.setProjects([{ ...mkProject("a", "Alpha", "gray"), docked: false }]);
-    expect(row.classList.contains("docked")).toBe(false);
-  });
-
-  it("context menu dock toggle uses the latest docked state after setProjects updates", () => {
-    let toggled: { id: string; docked: boolean } | null = null;
-    const r = new Rail({
-      root,
-      onSelect: () => {},
-      onAddProject: () => {},
-      onToggleDock: (id, docked) => {
-        toggled = { id, docked };
-      },
-    });
-    r.setProjects([mkProject("a", "Alpha", "gray")]);
-    r.setProjects([{ ...mkProject("a", "Alpha", "gray"), docked: true }]);
-
-    const row = root.querySelector<HTMLElement>(".rail-item")!;
-    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
-    const dockButton = document.querySelector<HTMLButtonElement>(
-      '.rail-context-menu button[data-action="dock"]',
-    )!;
-    expect(dockButton.textContent).toBe("Undock from Mission Control");
-    dockButton.click();
-
-    expect(toggled).toEqual({ id: "a", docked: false });
-    document.querySelector(".rail-context-menu")?.remove();
-  });
-
-  it("updates the MC rail light via setMissionControlLight", () => {
-    const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
-    r.setMissionControlLight("orange");
-    const dot = root.querySelector<HTMLElement>("#rail-mc-dot")!;
-    expect(dot.classList.contains("orange")).toBe(true);
-    expect(dot.classList.contains("green")).toBe(false);
-    r.setMissionControlLight("green");
-    expect(dot.classList.contains("green")).toBe(true);
-    expect(dot.classList.contains("orange")).toBe(false);
-  });
-
   // an earlier release: per-pane dot colors.
   describe("pane_stoplights ", () => {
     it("colours each dot independently when pane_stoplights is supplied", () => {
@@ -174,7 +119,6 @@ describe("Rail", () => {
         stoplight: "orange",
         pane_count: 2,
         pane_stoplights: ["orange", "green"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -194,7 +138,6 @@ describe("Rail", () => {
         stoplight: "green",
         pane_count: 2,
         pane_stoplights: ["green", "green"],
-        docked: false,
       };
       r.setProjects([before]);
       const firstDot = root.querySelector<HTMLElement>(
@@ -236,7 +179,6 @@ describe("Rail", () => {
         stoplight: "gray",
         pane_count: 0,
         pane_stoplights: [],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -266,7 +208,6 @@ describe("Rail", () => {
           "red",
           "red",
         ],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -301,7 +242,6 @@ describe("Rail", () => {
         pane_count: 3,
         pane_stoplights: ["red", "green", "orange"],
         pane_ids: ["P1", "P2", "P3"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -328,7 +268,6 @@ describe("Rail", () => {
         pane_count: 2,
         pane_stoplights: ["red", "green"],
         pane_ids: ["P1", "P2"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -355,7 +294,6 @@ describe("Rail", () => {
         pane_count: 2,
         pane_stoplights: ["red", "green"],
         // pane_ids absent.
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -383,7 +321,6 @@ describe("Rail", () => {
         pane_count: 3,
         pane_stoplights: ["green", "orange", "red"],
         pane_ids: ["P1", "P2", "P3"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -413,7 +350,6 @@ describe("Rail", () => {
         pane_count: 2,
         pane_stoplights: ["green", "orange"],
         pane_ids: ["P1", "P2"],
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -439,7 +375,6 @@ describe("Rail", () => {
         pane_count: 2,
         pane_stoplights: ["green", "orange"],
         pane_ids: ["P1"], // length mismatch
-        docked: false,
       };
       r.setProjects([p]);
       const dots = root.querySelectorAll<HTMLElement>(
@@ -552,6 +487,156 @@ describe("Rail", () => {
       expect(list.hidden).toBe(false);
       header.click();
       expect(list.hidden).toBe(true);
+    });
+  });
+
+  // Rail collapse redesign: 48px mini state with initials avatars.
+  // Names/indicators/chevron/header crossfade via per-element
+  // opacity/visibility transitions keyed off .rail-mini, so these tests
+  // assert the class contract + markup rather than computed styles
+  // (jsdom doesn't load the stylesheet).
+  describe("mini mode", () => {
+    it("setMode toggles the rail-mini class", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      expect(root.classList.contains("rail-mini")).toBe(false);
+      r.setMode("mini");
+      expect(root.classList.contains("rail-mini")).toBe(true);
+      r.setMode("expanded");
+      expect(root.classList.contains("rail-mini")).toBe(false);
+    });
+
+    it("header carries the Projects text and the brand mark for the mini crossfade", () => {
+      new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      const text = root.querySelector(".rail-header .rail-header-text");
+      const mark = root.querySelector(".rail-header .rail-header-mark");
+      expect(text?.textContent).toBe("Projects");
+      expect(mark).not.toBeNull();
+      expect(mark?.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("clicking the header mark in mini mode fires onExpand (not a row/button)", () => {
+      let expanded = 0;
+      const r = new Rail({
+        root,
+        onSelect: () => {},
+        onAddProject: () => {},
+        onExpand: () => expanded++,
+      });
+      r.setMode("mini");
+      (root.querySelector(".rail-header-mark") as HTMLElement).click();
+      expect(expanded).toBe(1);
+    });
+
+    it("every row carries an initials avatar", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      r.setProjects([
+        mkProject("a", "reck-connect", "gray"),
+        mkProject("b", "docs", "gray"),
+      ]);
+      const labels = root.querySelectorAll<HTMLElement>(".rail-item .rail-avatar-label");
+      expect(labels.length).toBe(2);
+      expect(labels[0].textContent).toBe("rc");
+      expect(labels[1].textContent).toBe("do");
+    });
+
+    it("avatar badge reflects the aggregate (max-severity) stoplight", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      const p: Project = {
+        id: "a",
+        name: "Alpha",
+        cwd: "/",
+        stoplight: "green",
+        pane_count: 2,
+        pane_stoplights: ["green", "red"],
+      };
+      r.setProjects([p]);
+      const badge = root.querySelector<HTMLElement>(".rail-avatar-badge")!;
+      expect(badge.classList.contains("red")).toBe(true);
+      // Severity drops → badge follows.
+      r.setProjects([{ ...p, pane_stoplights: ["green", "gray"] }]);
+      expect(badge.classList.contains("red")).toBe(false);
+      expect(badge.classList.contains("green")).toBe(true);
+    });
+
+    it("rename updates the avatar initials and tooltip", () => {
+      const r = new Rail({ root, onSelect: () => {}, onAddProject: () => {} });
+      r.setProjects([mkProject("a", "old name", "gray")]);
+      r.setProjects([mkProject("a", "new title", "gray")]);
+      const avatar = root.querySelector<HTMLElement>(".rail-avatar")!;
+      expect(avatar.querySelector(".rail-avatar-label")?.textContent).toBe("nt");
+      expect(avatar.title).toBe("new title");
+    });
+
+    it("footer has the expand chevron and it fires onExpand", () => {
+      let expanded = 0;
+      const r = new Rail({
+        root,
+        onSelect: () => {},
+        onAddProject: () => {},
+        onExpand: () => expanded++,
+      });
+      r.setMode("mini");
+      const chip = root.querySelector<HTMLElement>(".rail-collapse-chip")!;
+      expect(chip).not.toBeNull();
+      expect(chip.closest(".rail-footer")).not.toBeNull();
+      chip.click();
+      expect(expanded).toBe(1);
+    });
+
+    it("clicking empty rail area in mini mode fires onExpand", () => {
+      let expanded = 0;
+      const r = new Rail({
+        root,
+        onSelect: () => {},
+        onAddProject: () => {},
+        onExpand: () => expanded++,
+      });
+      r.setProjects([mkProject("a", "Alpha", "gray")]);
+      r.setMode("mini");
+      (root.querySelector(".rail-list") as HTMLElement).click();
+      expect(expanded).toBe(1);
+      (root.querySelector(".rail-header") as HTMLElement).click();
+      expect(expanded).toBe(2);
+    });
+
+    it("empty-area click does nothing while expanded", () => {
+      let expanded = 0;
+      new Rail({
+        root,
+        onSelect: () => {},
+        onAddProject: () => {},
+        onExpand: () => expanded++,
+      });
+      (root.querySelector(".rail-list") as HTMLElement).click();
+      expect(expanded).toBe(0);
+    });
+
+    it("row and button clicks in mini mode do not also fire onExpand", () => {
+      let expanded = 0;
+      let selected = 0;
+      const r = new Rail({
+        root,
+        onSelect: () => selected++,
+        onAddProject: () => {},
+        onExpand: () => expanded++,
+      });
+      r.setProjects([mkProject("a", "Alpha", "gray")]);
+      r.setMode("mini");
+      (root.querySelector(".rail-item") as HTMLElement).click();
+      expect(selected).toBe(1);
+      const chip = root.querySelector<HTMLElement>(".rail-collapse-chip")!;
+      chip.click();
+      // Only the chevron's own handler fired — not the delegated one too.
+      expect(expanded).toBe(1);
+    });
+
+    it("rows still fire onSelect in mini mode (avatar click selects)", () => {
+      let got: string | null = null;
+      const r = new Rail({ root, onSelect: (id) => (got = id), onAddProject: () => {} });
+      r.setProjects([mkProject("a", "Alpha", "gray")]);
+      r.setMode("mini");
+      (root.querySelector(".rail-item .rail-avatar") as HTMLElement).click();
+      expect(got).toBe("a");
     });
   });
 });

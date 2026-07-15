@@ -2041,3 +2041,21 @@ func TestCreatePaneWith_globalPreamble_passesToArgv(t *testing.T) {
 	}
 	t.Fatalf("expected %s in --append-system-prompt argv; tail=%q", marker, string(pane.ReplayTail(2048)))
 }
+
+func TestIsHiddenProjectID(t *testing.T) {
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"__internal", true},
+		{"__foo", true},
+		{"_reck", false},
+		{"foo", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := IsHiddenProjectID(c.id); got != c.want {
+			t.Errorf("IsHiddenProjectID(%q) = %v, want %v", c.id, got, c.want)
+		}
+	}
+}

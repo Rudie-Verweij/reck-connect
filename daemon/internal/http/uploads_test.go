@@ -60,7 +60,7 @@ func makeUploadBody(t *testing.T, contentType string, payload []byte) (io.Reader
 // upload endpoint's live-pane-binding check doesn't care about pane
 // kind, so a shell pane (which needs no Claude CLI resolved) is the
 // cheapest test vehicle. Not named `createShellPane` because that
-// name's already taken by docking_test.go for a different flow that
+// name's already taken by pane_io_test.go for a different flow that
 // creates a brand-new project first.
 func createShellPaneInP1(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
@@ -273,15 +273,17 @@ func TestPaneUpload_cleanupOnPaneClose(t *testing.T) {
 }
 
 // TestPaneUpload_unsupportedMIME415 pins the MIME allowlist contract
-// from the plan's security section: non-image content is rejected
-// with 415 Unsupported Media Type before it reaches disk.
+// from the plan's security section: a declared type outside the
+// allowlist is rejected with 415 Unsupported Media Type before it
+// reaches disk. application/octet-stream stands in for any binary the
+// renderer would never send (it only sends allowlisted MIMEs).
 func TestPaneUpload_unsupportedMIME415(t *testing.T) {
 	s := newServer(t)
 	srv := httptest.NewServer(newTestHandler(t, s))
 	defer srv.Close()
 
 	paneID := createShellPaneInP1(t, srv)
-	body, ct := makeUploadBody(t, "application/pdf", []byte("%PDF-1.4 fake"))
+	body, ct := makeUploadBody(t, "application/octet-stream", []byte("arbitrary bytes"))
 	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
 	if err != nil {
 		t.Fatal(err)
@@ -296,10 +298,174 @@ func TestPaneUpload_unsupportedMIME415(t *testing.T) {
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".pdf") {
-			t.Fatalf("rejected MIME left file on disk: %q", e.Name())
+	if len(entries) > 0 {
+		t.Fatalf("rejected MIME left %d file(s) on disk", len(entries))
+	}
+}
+
+// TestPaneUpload_pdfAccepted covers Scope B: a PDF (strict sniff, magic
+// bytes recognised by the stdlib) uploads and lands with a .pdf name.
+func TestPaneUpload_pdfAccepted(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	// "%PDF-" prefix makes http.DetectContentType report application/pdf.
+	body, ct := makeUploadBody(t, "application/pdf", []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n"))
+	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		b, _ := io.ReadAll(r.Body)
+		t.Fatalf("status=%d body=%s, want 200", r.StatusCode, string(b))
+	}
+	dir := filepath.Join(os.TempDir(), "reck-pane-"+paneID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".pdf") {
+		t.Fatalf("want one .pdf on disk, got %v", entries)
+	}
+}
+
+// TestPaneUpload_textMarkdownAccepted covers the sniffText policy: a
+// Markdown file is declared text/markdown but sniffs as text/plain, and
+// must be accepted (equality would wrongly reject it) and saved .md.
+func TestPaneUpload_textMarkdownAccepted(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	body, ct := makeUploadBody(t, "text/markdown", []byte("# Title\n\nSome **markdown** body.\n"))
+	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		b, _ := io.ReadAll(r.Body)
+		t.Fatalf("status=%d body=%s, want 200", r.StatusCode, string(b))
+	}
+	dir := filepath.Join(os.TempDir(), "reck-pane-"+paneID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".md") {
+		t.Fatalf("want one .md on disk, got %v", entries)
+	}
+}
+
+// makeUploadBodyNamed is makeUploadBody with a caller-chosen client
+// filename, for exercising the arbitrary-file path (extension derived
+// from the untrusted filename).
+func makeUploadBodyNamed(t *testing.T, contentType, filename string, payload []byte) (io.Reader, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	hdr := textproto.MIMEHeader{}
+	hdr.Set("Content-Disposition", `form-data; name="file"; filename="`+filename+`"`)
+	hdr.Set("Content-Type", contentType)
+	part, err := w.CreatePart(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &buf, w.FormDataContentType()
+}
+
+// TestPaneUpload_arbitraryFileByExtension covers the drag-drop any-file
+// path: a type not in the MIME allowlist is stored, with its extension
+// taken from the (untrusted) client filename and no content sniff.
+func TestPaneUpload_arbitraryFileByExtension(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	body, ct := makeUploadBodyNamed(t, "application/octet-stream", "analysis.py", []byte("import os\nprint('hi')\n"))
+	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		b, _ := io.ReadAll(r.Body)
+		t.Fatalf("status=%d body=%s, want 200", r.StatusCode, string(b))
+	}
+	dir := filepath.Join(os.TempDir(), "reck-pane-"+paneID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".py") {
+		t.Fatalf("want one .py on disk, got %v", entries)
+	}
+	// Server-generated basename must not echo the client filename.
+	if strings.Contains(entries[0].Name(), "analysis") {
+		t.Fatalf("stored name %q leaks client filename", entries[0].Name())
+	}
+}
+
+// TestPaneUpload_arbitraryRejectsUnusableExtension: an unknown MIME with
+// no usable extension (no dot, or a non-alphanumeric one) is rejected —
+// the server has nothing safe to name the file.
+func TestPaneUpload_arbitraryRejectsUnusableExtension(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	for _, name := range []string{"Makefile", "../../etc/passwd", "weird.name!", "trailingdot."} {
+		body, ct := makeUploadBodyNamed(t, "application/octet-stream", name, []byte("data"))
+		r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+		if err != nil {
+			t.Fatal(err)
 		}
+		r.Body.Close()
+		if r.StatusCode != nethttp.StatusUnsupportedMediaType {
+			t.Fatalf("filename %q: status=%d, want 415", name, r.StatusCode)
+		}
+	}
+}
+
+// TestPaneUpload_textRejectsBinary covers the sniffText security gate: a
+// binary payload declared under a text extension (here text/plain with
+// PKZip bytes) must be rejected, so an executable/archive can't be
+// smuggled in disguised as a .txt.
+func TestPaneUpload_textRejectsBinary(t *testing.T) {
+	s := newServer(t)
+	srv := httptest.NewServer(newTestHandler(t, s))
+	defer srv.Close()
+
+	paneID := createShellPaneInP1(t, srv)
+	zipBytes := []byte{0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00}
+	body, ct := makeUploadBody(t, "text/plain", zipBytes)
+	r, err := nethttp.Post(srv.URL+"/panes/"+paneID+"/uploads", ct, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != nethttp.StatusUnsupportedMediaType {
+		t.Fatalf("status=%d, want 415", r.StatusCode)
+	}
+	dir := filepath.Join(os.TempDir(), "reck-pane-"+paneID)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) > 0 {
+		t.Fatalf("binary-as-text upload left %d file(s) on disk", len(entries))
 	}
 }
 
@@ -600,32 +766,5 @@ func TestListPaneUploads_unknownPane404(t *testing.T) {
 	r.Body.Close()
 	if r.StatusCode != nethttp.StatusNotFound {
 		t.Fatalf("status=%d want 404", r.StatusCode)
-	}
-}
-
-// TestListPaneUploads_supervisorForbidden pins the supervisor carve-out
-// on the GET (same shape as the POST's supervisor reject). The
-// supervisor has no business enumerating pane uploads even for docked
-// projects; this keeps the paste surface strictly human-driven.
-func TestListPaneUploads_supervisorForbidden(t *testing.T) {
-	t.Setenv("DAEMON_TOKEN", "main-token")
-	s, pane := newServerWithPane(t)
-	s.SupervisorAuth = &fakeSupervisorAuth{
-		token:          "sup-token",
-		dockedProjects: map[string]bool{"p1": true}, // supervisor CAN see p1
-		panes:          map[string]string{pane.ID: "p1"},
-	}
-	srv := httptest.NewServer(newTestHandler(t, s))
-	defer srv.Close()
-
-	req, _ := nethttp.NewRequest("GET", srv.URL+"/panes/"+pane.ID+"/uploads", nil)
-	req.Header.Set("Authorization", "Bearer sup-token")
-	r, err := nethttp.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.Body.Close()
-	if r.StatusCode != nethttp.StatusForbidden {
-		t.Fatalf("supervisor → GET uploads: status=%d want 403", r.StatusCode)
 	}
 }

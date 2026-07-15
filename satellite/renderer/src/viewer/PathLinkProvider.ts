@@ -14,6 +14,7 @@
 //     open straight into the viewer, intended paths land in create-mode.
 
 import { detectPathsInLine } from "./LinkDetector";
+import { showLinkTooltip, hideLinkTooltip } from "./linkTooltip";
 
 export interface ResolvedPath {
   /** The canonical absolute path (post-allowlist) returned by main. */
@@ -481,10 +482,12 @@ function buildLinksFromWrapRun(
           });
           deps.onActivate(textArg, ev);
         },
-        hover() {
+        hover(ev) {
+          showLinkTooltip("⌘+click to view file", ev);
           paintHoverSiblings(term, groupLinks, range, groupId, groupDecorations);
         },
         leave() {
+          hideLinkTooltip();
           disposeGroupDecorations(groupId, groupDecorations);
         },
       };

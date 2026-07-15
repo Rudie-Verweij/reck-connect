@@ -26,6 +26,7 @@
 // only assert structural behaviour (overlay mounted, removed on clear).
 
 import type { SpokenChunk, TtsBoundary, RangeMapEntry } from "./TtsEngine";
+import { applyHighlightColors } from "./highlightStyle";
 import type {
   SpeakSurfaceAdapter,
   SurfaceHighlightTheme,
@@ -33,9 +34,9 @@ import type {
   SurfacePoint,
 } from "./SpeakSurfaceAdapter";
 
-// Translucency applied to the (solid) configured highlight colour so the
-// prose reads through the tint — matching the terminal overlay's opacity.
-const OVERLAY_OPACITY = "0.5";
+// The highlight's translucent-fill + opaque-ring styling is shared with the
+// terminal highlighter so the reading highlight looks identical on every
+// surface — see ./highlightStyle.
 
 export interface MarkdownSurfaceAdapterOptions {
   /** Where to mount the SpeakControlBar (and the highlight overlay).
@@ -112,6 +113,12 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
         const t = node as Text;
         const text = t.data;
         if (!text) continue;
+        // Speak what the user sees: skip text folded away inside a
+        // collapsed <details> (the transcript overlay tucks tool_use /
+        // tool_result / thinking payloads there — often hundreds of KB,
+        // which as one utterance stalls speech synthesis outright). The
+        // <summary> of a collapsed group stays visible, so it stays spoken.
+        if (isHiddenInCollapsedDetails(t, this.body)) continue;
         if (needsSeparator && cursor > 0) {
           parts.push("\n");
           cursor += 1;
@@ -191,9 +198,10 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
       this.overlayEl.className = "tts-highlight-overlay";
       this.overlayEl.style.position = "absolute";
       this.overlayEl.style.pointerEvents = "none";
-      this.overlayEl.style.background = this.highlightColor;
-      this.overlayEl.style.opacity = OVERLAY_OPACITY;
       this.overlayEl.style.borderRadius = "2px";
+      // Translucent fill + opaque same-colour ring. The element opacity is
+      // NOT set (it would fade the ring too); the fill carries its own alpha.
+      this.applyOverlayColors();
       // Append into the scroll container (body) so
       // scrolling the body translates the overlay with the content.
       // Previously this was `this.container` (#viewer-root) which is the
@@ -270,10 +278,17 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
     }
   }
 
+  /** Paint the overlay's translucent fill + opaque outline from the current
+   *  highlight colour. Kept in one place so creation and setTheme agree. */
+  private applyOverlayColors(): void {
+    if (!this.overlayEl) return;
+    applyHighlightColors(this.overlayEl, this.highlightColor);
+  }
+
   setTheme(theme: SurfaceHighlightTheme): void {
     if (this.disposed) return;
     this.highlightColor = theme.backgroundColor;
-    if (this.overlayEl) this.overlayEl.style.background = this.highlightColor;
+    this.applyOverlayColors();
   }
 
   dispose(): void {
@@ -290,6 +305,28 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
       this.onBodyScroll = null;
     }
   }
+}
+
+/**
+ * True when `node`'s text is hidden by a collapsed `<details>` ancestor
+ * within `root`. Text inside the collapsed group's own `<summary>` is
+ * visible (and therefore not hidden); a closed `<details>` nested inside
+ * another element hides everything below it, including nested summaries.
+ * Structural (attribute-based) rather than style-based so it behaves
+ * identically under jsdom, where layout/computed styles aren't real.
+ */
+function isHiddenInCollapsedDetails(node: Node, root: HTMLElement): boolean {
+  let el: Element | null = node.parentElement;
+  while (el && el !== root) {
+    const details = el.closest("details");
+    if (!details || !root.contains(details)) return false;
+    if (!details.hasAttribute("open")) {
+      const summary = details.querySelector(":scope > summary");
+      if (!summary || !summary.contains(node)) return true;
+    }
+    el = details.parentElement;
+  }
+  return false;
 }
 
 function locateAnchor(

@@ -11,6 +11,7 @@ import {
   localDaemonToken,
 } from "./daemon-spawn";
 import { registerRsyncIpc } from "./rsync-copy";
+import { registerTranscriptionIpc } from "./transcription/router";
 import { checkExternalUrl, resolveInsideMountPoint } from "./ipc-validation";
 import { planMigration } from "./settings-migration";
 import { planBootstrapImport } from "./bootstrap-import";
@@ -31,6 +32,17 @@ import { composeFileViewerRoots } from "./file-roots";
 // station token / settings / layouts a packaged run wrote. Calling setName
 // here aligns both modes onto the packaged name (a no-op when packaged).
 app.setName("reck-connect-satellite");
+
+// Enable WebGPU for on-device Whisper dictation (issue #67). transformers.js
+// prefers WebGPU (much faster than WASM on Apple Silicon); `allow_unsafe_apis`
+// exposes the experimental subgroup limits its kernels read. Best-effort — if
+// WebGPU still isn't usable, the worker's warm-up falls back to WASM.
+app.commandLine.appendSwitch("enable-unsafe-webgpu");
+app.commandLine.appendSwitch("enable-dawn-features", "allow_unsafe_apis");
+// SharedArrayBuffer unlocks onnxruntime-web's MULTITHREADED WASM backend —
+// single-threaded WASM Whisper is ~4-8× slower, which is the difference
+// between live dictation keeping up and lagging hopelessly behind.
+app.commandLine.appendSwitch("enable-features", "SharedArrayBuffer");
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -137,7 +149,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    minWidth: 900,
+    minWidth: 450,
     minHeight: 600,
     title: "Reck Connect Satellite",
     webPreferences: {
@@ -157,6 +169,14 @@ function createWindow() {
   }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // The dictation tuning lab is a local same-origin page (dev: localhost;
+    // prod: file:// sibling of index.html) — open it in its own window.
+    if (url.includes("dictation-lab.html")) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: { width: 1240, height: 860, title: "Dictation Tuning Lab" },
+      };
+    }
     // Only forward allowlisted schemes (see ipc-validation.ts). A compromised
     // renderer could otherwise call `window.open('mailto:…')` /
     // `x-apple-reminderkit://…` / custom handlers and force the main process
@@ -1022,6 +1042,10 @@ ipcMain.handle(
 // --- IPC: rsync copy-to-station for "From existing folder…" flow ---
 
 registerRsyncIpc(() => mainWindow);
+
+// --- IPC: voice dictation (Deepgram cloud streaming; issue #67) ---
+
+registerTranscriptionIpc(() => mainWindow);
 
 // --- IPC: file-viewer popup + Cmd+click path linkifier ---
 //

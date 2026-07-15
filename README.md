@@ -61,11 +61,18 @@ A **rail** of projects on the left. Each project a stack of **panes**: Claude Co
 
 <sub>// 04 &nbsp;·&nbsp; features</sub>
 
-## Three things you actually feel.
+## Features, at a glance.
 
-1. **Private connection over Tailscale.** Code never leaves the station. No public endpoint. No middleman. Your laptop and your station meet on a tailnet that only the two of them can see.
-2. **Automatic folder sync.** Files exist on the station and appear on the satellite as if they were local. No `rsync`, no `scp`, no "did it save?" Open the file in your local editor; the station already has it.
-3. **Crash-proof.** Close the laptop and nothing stops. Laptop crashes? Bring it back up and the panes are right where they were.
+- **Private connection over Tailscale.** Code never leaves the station. No public endpoint, no middleman.
+- **Automatic folder sync.** Station files appear on the satellite as if they were local. No `rsync`, no `scp`.
+- **Crash-proof.** Close the laptop and nothing stops. Reopen it and every pane is right where it was.
+- **Stoplight status.** Every pane signals green (done), orange (running), or red (waiting on you).
+- **Voice dictation.** Talk to your agent from the satellite — on-device Whisper or Deepgram — with live text typed straight into the pane.
+- **Text-to-speech.** The satellite reads agent replies aloud and highlights the text as it goes.
+- **Drag & drop files.** Drop images, PDFs, and other allowlisted files onto a pane; they reach the agent via a prompt template you control.
+- **Clickable links.** URLs and file paths are linkified in terminals, transcripts, and rendered docs, with hover tooltips telling them apart.
+- **Token-usage telemetry.** The station records per-turn token and quota usage locally and serves it over `/usage` routes.
+- **Collapsible project rail.** Squeeze-drag the rail into a mini rail when you want the pixels back.
 
 ---
 

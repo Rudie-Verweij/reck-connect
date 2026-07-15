@@ -36,7 +36,9 @@ export interface LaunchedApp {
  * isolated per-test. macOS-specific: `ELECTRON_DISABLE_SECURITY_WARNINGS`
  * keeps the console clean.
  */
-export async function launchApp(opts: { env?: NodeJS.ProcessEnv } = {}): Promise<LaunchedApp> {
+export async function launchApp(
+  opts: { env?: NodeJS.ProcessEnv; args?: string[] } = {},
+): Promise<LaunchedApp> {
   const mainPath = path.resolve(__dirname, "..", "dist", "main", "main.js");
   if (!fs.existsSync(mainPath)) {
     throw new Error(
@@ -48,7 +50,7 @@ export async function launchApp(opts: { env?: NodeJS.ProcessEnv } = {}): Promise
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "reck-e2e-home-"));
 
   const app = await electron.launch({
-    args: [mainPath, `--user-data-dir=${userDataDir}`],
+    args: [mainPath, `--user-data-dir=${userDataDir}`, ...(opts.args ?? [])],
     env: {
       ...process.env,
       HOME: homeDir,

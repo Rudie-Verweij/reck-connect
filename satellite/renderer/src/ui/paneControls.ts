@@ -63,12 +63,64 @@ export function ensureHistoryButton(
   return btn;
 }
 
+export interface MicButtonOptions {
+  /** Inner SVG markup for the mic icon. */
+  icon: string;
+  title?: string;
+  onToggle(): void;
+}
+
+const MIC_TITLE = "Voice dictation — click or press the hotkey to talk";
+
+/** Ensure a single dictation (mic) button lives in `anchor`'s control stack.
+ *  Idempotent — repeated calls return the existing button. */
+export function ensureMicButton(
+  anchor: HTMLElement,
+  opts: MicButtonOptions,
+): HTMLButtonElement {
+  const stack = ensurePaneControls(anchor);
+  for (const child of Array.from(stack.children)) {
+    if (child.classList.contains("pane-controls-mic")) {
+      return child as HTMLButtonElement;
+    }
+  }
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "icon-btn pane-controls-mic";
+  // `data-state` (idle | listening | transcribing) drives the CSS treatment
+  // (e.g. a pulsing hue while recording); see setMicButtonState.
+  btn.dataset.state = "idle";
+  btn.title = opts.title ?? MIC_TITLE;
+  btn.innerHTML = opts.icon;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    opts.onToggle();
+  });
+  stack.appendChild(btn);
+  return btn;
+}
+
+/** Reflect the dictation state on `anchor`'s mic button (no-op if absent). */
+export function setMicButtonState(
+  anchor: HTMLElement,
+  state: "idle" | "preparing" | "listening" | "transcribing",
+): void {
+  const btn = anchor.querySelector<HTMLButtonElement>(
+    ":scope > .pane-controls > .pane-controls-mic",
+  );
+  if (!btn) return;
+  btn.dataset.state = state;
+  btn.setAttribute("aria-pressed", state === "listening" ? "true" : "false");
+}
+
 /** Reflect the History overlay's open state on `anchor`'s clock button.
  *  While open the clock holds the orange "lit" hue (CSS keys off
  *  `aria-pressed`) and the tooltip flips to the way back. No-op when the
  *  anchor has no History button (non-Claude panes, teardown races). The
- *  `:scope >` selector deliberately skips nested control stacks (the
- *  transcript overlay mounts its own inside the pane wrapper). */
+ *  `:scope >` selector only matches `anchor`'s own stack, never one in a
+ *  nested surface. Every control — search bar, TTS bar, History clock,
+ *  in live AND History mode — mounts into this single stack, so the CSS
+ *  `order` (search → TTS → history) always holds. */
 export function setHistoryButtonActive(anchor: HTMLElement, active: boolean): void {
   const btn = anchor.querySelector<HTMLButtonElement>(
     ":scope > .pane-controls > .pane-controls-history",

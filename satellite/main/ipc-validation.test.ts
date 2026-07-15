@@ -172,10 +172,9 @@ describe("checkExternalUrl", () => {
     expect(result).toEqual({ ok: true, url: "https://docs.reckonlabs.com/" });
   });
 
-  it("rejects http by default", () => {
+  it("accepts an http url (clickable web links)", () => {
     const result = checkExternalUrl("http://example.com/");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/scheme http:/);
+    expect(result).toEqual({ ok: true, url: "http://example.com/" });
   });
 
   it("rejects mailto:", () => {
@@ -217,10 +216,10 @@ describe("checkExternalUrl", () => {
     expect(checkExternalUrl({}).ok).toBe(false);
   });
 
-  it("allowlist only contains https", () => {
+  it("allowlist only contains https and http", () => {
     // Guard against accidental widening of the allowlist without a grep-find
     // of real in-repo callers first. Intentional widening should update this
     // test too.
-    expect([...ALLOWED_EXTERNAL_SCHEMES]).toEqual(["https:"]);
+    expect([...ALLOWED_EXTERNAL_SCHEMES]).toEqual(["https:", "http:"]);
   });
 });

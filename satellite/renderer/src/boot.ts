@@ -1,4 +1,5 @@
 import { HttpError } from "@client-core/api/client";
+import { registerDictationSelfTest } from "./transcription/selfTest";
 import { describeError } from "./daemon/connection";
 import type { ConnectionInfo } from "./daemon/connection";
 import { decidePollFailureAction } from "./daemon/poll-failure-policy";
@@ -33,8 +34,10 @@ import { promptForClaudeLaunchArgs } from "./ui/claude-launch-dialog";
 import { Rail } from "./ui/rail";
 import { effectiveStoplight as filterEffectiveStoplight } from "./ui/effective-stoplight";
 import { AppBar, type Theme } from "./ui/app-bar";
+import { openUsageOverlay } from "./ui/usage-view";
 import { PaneLayout } from "./ui/pane-layout";
 import { installPathLinkProvider } from "./viewer/PathLinkProvider";
+import { installUrlLinkProvider } from "./viewer/UrlLinkProvider";
 import { ensurePaneControls } from "./ui/paneControls";
 import { resolveActivatePath } from "./viewer/resolveActivatePath";
 import {
@@ -44,12 +47,10 @@ import {
 import { HoverFocusController } from "./ui/hover-focus-controller";
 import { StatusBar } from "./ui/status-bar";
 import { deriveConnectionReason, type TailscaleVerdict } from "./ui/connection-reason";
-import { MissionControl } from "./ui/mission-control";
 import {
   askPaneKind,
   confirmDialog,
   pickSession,
-  showAddProjectInfo,
 } from "./ui/new-pane-dialog";
 import { codexUnavailableMessage } from "./ui/codex-availability";
 import { showToast } from "./viewer/Toast";
@@ -59,6 +60,7 @@ import { addProjectFlow } from "./ui/add-project-dialog";
 import { confirmDeleteProject } from "./ui/delete-project-dialog";
 import { confirmRestoreProject } from "./ui/confirm-restore-dialog";
 import { initTts } from "./tts/initTts";
+import { initTranscription, type TranscriptionHandle } from "./transcription/initTranscription";
 import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
 import { initSearch } from "./search/initSearch";
 import { TerminalSearchAdapter } from "./search/TerminalSearchAdapter";
@@ -106,7 +108,13 @@ import {
   loadLayouts,
   loadProjectNameOverrides,
   loadProjectOrder,
+  loadRailMode,
   loadRailWidth,
+  loadRailWiggle,
+  loadDropPromptTemplate,
+  loadDragDropAllowlist,
+  DEFAULT_DRAGDROP_EXTENSIONS,
+  DRAGDROP_MAX_BYTES,
   loadSettings,
   loadTheme,
   resolveActiveUrl,
@@ -117,11 +125,21 @@ import {
   saveLayout,
   saveProjectNameOverride,
   saveProjectOrder,
+  saveRailMode,
   saveRailWidth,
   saveStationToken,
   saveTheme,
+  type RailMode,
 } from "./config";
-import type { PaneKind, Project, Stoplight } from "@proto/proto";
+import {
+  RAIL_COLLAPSE_AT,
+  RAIL_MAX,
+  RAIL_MINI,
+  createWidthAnimator,
+  railDragDecision,
+  railDragRelease,
+} from "./ui/rail-collapse";
+import type { Pane, PaneKind, PaneUsage, Project, Stoplight } from "@proto/proto";
 import { mergeHybridProjects } from "./hybrid-merge";
 import type { StartupSplashController } from "./ui/startup-splash";
 
@@ -169,6 +187,10 @@ function unmountRestoringOverlay(root: HTMLElement) {
 
 export async function boot(splash?: StartupSplashController) {
   const app = document.getElementById("app")!;
+
+  // Dictation diagnostics — harmless global hook used by the e2e-electron
+  // dictation spec and by humans in DevTools (`reckDictationSelfTest.run()`).
+  registerDictationSelfTest();
 
   // Theme: apply as early as possible to avoid flash. The <html>
   // data-theme attribute also lets the boot splash pick the right
@@ -308,45 +330,234 @@ export async function boot(splash?: StartupSplashController) {
     acknowledgeSeen(currentProjectId, activeTab?.paneId);
   });
 
+  // --- Rail collapse (expanded ⟷ mini) --------------------------------
+  // The 48px mini rail is the ONLY collapsed state — the rail is never
+  // fully hidden. RAIL_MAX (240) is both the default and the maximum
+  // width. Mode + expanded width persist independently so the rail
+  // restores exactly as the user left it.
   const savedRailWidth = await loadRailWidth();
-  let railWidth = savedRailWidth ?? 240;
-  let railHidden = false;
+  const savedRailMode = await loadRailMode();
+  const railWiggle = await loadRailWiggle();
+  // Drop prompt template (mutable — a Preferences save updates this in
+  // place so newly-created panes pick it up without a reload).
+  let dropPromptTemplate = await loadDropPromptTemplate();
+  // Droppable-extensions allow-list (lowercase, no dot). Seeded on first
+  // run. A Preferences save reloads the renderer, so a fresh Set is read
+  // then; live panes use the snapshot captured here.
+  const dragDropAllowlist = new Set(
+    (await loadDragDropAllowlist()) ?? DEFAULT_DRAGDROP_EXTENSIONS,
+  );
+  const railEl = document.getElementById("rail")!;
+  // Old configs could persist up to the removed 420px upper clamp; a
+  // corrupted value must not feed NaN into the grid template.
+  const savedWidthSafe = typeof savedRailWidth === "number" && Number.isFinite(savedRailWidth) ? savedRailWidth : RAIL_MAX;
+  let railExpandedWidth = Math.max(RAIL_MINI, Math.min(RAIL_MAX, savedWidthSafe));
+  let railMode: RailMode = savedRailMode;
+  let railWidth = railMode === "mini" ? RAIL_MINI : railExpandedWidth;
+  let railDragActive = false;
   applyGrid();
 
   function applyGrid() {
-    if (railHidden) {
-      appMain.style.gridTemplateColumns = `0 0 1fr`;
-      appMain.classList.add("rail-hidden");
-    } else {
-      appMain.style.gridTemplateColumns = `${railWidth}px 6px 1fr`;
-      appMain.classList.remove("rail-hidden");
-    }
+    appMain.style.gridTemplateColumns = `${railWidth}px 6px 1fr`;
+  }
+
+  // Shared rAF width animator: drives collapse/expand and the wiggle.
+  // Every frame writes through the same path as a mouse drag (update
+  // railWidth → applyGrid) so pane ResizeObservers see real grid
+  // deltas rather than a CSS transition they'd sample late.
+  const reducedMotionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  const railAnimator = createWidthAnimator({
+    getWidth: () => railWidth,
+    onFrame: (w) => {
+      railWidth = w;
+      applyGrid();
+    },
+    reducedMotion: () => reducedMotionQuery?.matches === true,
+  });
+
+  const RAIL_SNAP_MS = 200;
+
+  // Late-bound: `layout` is constructed further down, but the nav
+  // rail-toggle is clickable as soon as the app bar mounts — during
+  // boot's awaits a collapse could finish before `layout` exists (TDZ
+  // on the const). Rebound to the real refit once PaneLayout is up.
+  let refitActiveTerminals: () => void = () => {};
+
+  function setRailMode(mode: RailMode) {
+    if (railMode === mode) return;
+    // The pointer owns the width while a divider drag is live — a
+    // keyboard toggle mid-drag would race the mousemove writes.
+    if (railDragActive) return;
+    // A newer mode change is authoritative — a wiggle's delayed restore
+    // must never stomp the width we're about to animate to.
+    cancelWiggle(false);
+    railMode = mode;
+    void saveRailMode(mode);
+    appBar.setRailExpanded(mode === "expanded");
+    // The crossfade between rows and avatars is pure CSS, keyed off
+    // .rail-mini (per-element opacity/visibility transitions in
+    // styles.css) — outgoing content fades fast so the stoplight dots
+    // never linger mid-flight at a wrong offset from the rail edge.
+    rail.setMode(mode);
+    // Spring both directions — collapse and expand share the same
+    // bouncy pop, whichever trigger (button, chevron, keys, click).
+    railAnimator.animateTo(mode === "mini" ? RAIL_MINI : railExpandedWidth, {
+      durationMs: RAIL_SNAP_MS,
+      easing: "spring",
+      onDone: () => {
+        refitActiveTerminals();
+      },
+    });
   }
 
   railResizeEl.addEventListener("mousedown", (e) => {
     e.preventDefault();
+    // The drag owns the width now: settle any in-flight wiggle back to
+    // its base and stop mode animations before sampling the start width.
+    cancelWiggle(true);
+    railAnimator.cancel();
+    railDragActive = true;
     railResizeEl.classList.add("dragging");
     const startX = e.clientX;
     const startW = railWidth;
-    const onMove = (ev: MouseEvent) => {
-      const next = Math.max(180, Math.min(420, startW + (ev.clientX - startX)));
-      railWidth = next;
-      applyGrid();
-    };
-    const onUp = () => {
+    const endDrag = () => {
+      railDragActive = false;
       railResizeEl.classList.remove("dragging");
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      void saveRailWidth(railWidth);
+    };
+    const onMove = (ev: MouseEvent) => {
+      const decision = railDragDecision(startW + (ev.clientX - startX), railMode === "mini");
+      switch (decision.kind) {
+        case "collapse":
+          // The pointer travelled past the sticky zone — collapse
+          // straight into mini mid-drag with a spring, ending the drag.
+          endDrag();
+          setRailMode("mini");
+          break;
+        case "stretch":
+          // Elastic accidental-collapse guard: the rail trails the
+          // pointer with damped rubber-band resistance, signalling
+          // "keep pulling to collapse" instead of freezing solid.
+          railExpandedWidth = RAIL_COLLAPSE_AT;
+          railWidth = decision.width;
+          applyGrid();
+          break;
+        case "expand":
+          // Dragging the handle back out of mini re-expands at the
+          // pointer position (no animation — the pointer is authoritative).
+          railMode = "expanded";
+          rail.setMode("expanded");
+          appBar.setRailExpanded(true);
+          void saveRailMode("expanded");
+          railExpandedWidth = decision.width;
+          railWidth = decision.width;
+          applyGrid();
+          break;
+        case "resize":
+          railExpandedWidth = decision.width;
+          railWidth = decision.width;
+          applyGrid();
+          break;
+        case "track":
+          // Mini rail follows the pointer live; the release decides
+          // whether the pull committed to an expand.
+          railWidth = decision.width;
+          applyGrid();
+          break;
+      }
+    };
+    const onUp = () => {
+      endDrag();
+      const release = railDragRelease(railWidth, railMode === "mini");
+      switch (release.kind) {
+        case "spring-expand":
+          // A small outward pull means "expand": spring open from the
+          // tracked width to the full expanded width.
+          setRailMode("expanded");
+          break;
+        case "settle-mini":
+          railAnimator.animateTo(RAIL_MINI, { durationMs: RAIL_SNAP_MS, easing: "spring" });
+          break;
+        case "bounce-back":
+          // Released mid-stretch without committing the collapse — the
+          // elastic snaps the rail back to the row minimum.
+          railAnimator.animateTo(RAIL_COLLAPSE_AT, { durationMs: RAIL_SNAP_MS, easing: "spring" });
+          void saveRailWidth(railExpandedWidth);
+          break;
+        case "stay":
+          void saveRailWidth(railExpandedWidth);
+          break;
+      }
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   });
 
+  railResizeEl.addEventListener("dblclick", () => {
+    setRailMode(railMode === "mini" ? "expanded" : "mini");
+  });
+
   function toggleRail() {
-    railHidden = !railHidden;
-    applyGrid();
-    appBar.setRailHidden(railHidden);
+    setRailMode(railMode === "mini" ? "expanded" : "mini");
+  }
+
+  // --- Separator wiggle ------------------------------------------------
+  // After a project switch the divider auto-nudges out and back through
+  // the shared animator (railWidth → applyGrid each frame), then forces
+  // a terminal refit — replacing the manual divider jiggle previously
+  // needed to unstick a stale grid after a switch.
+  let wiggleActive = false;
+  let wiggleBase = 0;
+  let wiggleRetryTimer: number | null = null;
+
+  function cancelWiggle(restoreBase: boolean) {
+    if (wiggleRetryTimer !== null) {
+      window.clearTimeout(wiggleRetryTimer);
+      wiggleRetryTimer = null;
+    }
+    if (!wiggleActive) return;
+    wiggleActive = false;
+    railAnimator.cancel();
+    railResizeEl.classList.remove("dragging");
+    if (restoreBase) {
+      railWidth = wiggleBase;
+      applyGrid();
+    }
+  }
+
+  function wiggleSeparator(attempt = 0) {
+    if (!railWiggle.enabled || wiggleActive || railDragActive) return;
+    if (railAnimator.isAnimating()) {
+      // A collapse/expand is mid-flight (e.g. a mini-avatar click just
+      // expanded the rail) — retry once after it settles. Tracked so a
+      // later drag or mode change can cancel the stale retry.
+      if (attempt === 0 && wiggleRetryTimer === null) {
+        wiggleRetryTimer = window.setTimeout(() => {
+          wiggleRetryTimer = null;
+          wiggleSeparator(1);
+        }, RAIL_SNAP_MS + 40);
+      }
+      return;
+    }
+    wiggleActive = true;
+    wiggleBase = railWidth;
+    railResizeEl.classList.add("dragging");
+    railAnimator.animateTo(wiggleBase + railWiggle.pixels, {
+      durationMs: railWiggle.legMs,
+      onDone: () => {
+        if (!wiggleActive) return;
+        railAnimator.animateTo(wiggleBase, {
+          durationMs: railWiggle.legMs,
+          onDone: () => {
+            if (!wiggleActive) return;
+            wiggleActive = false;
+            railResizeEl.classList.remove("dragging");
+            refitActiveTerminals();
+          },
+        });
+      },
+    });
   }
 
   function toggleTheme() {
@@ -360,15 +571,12 @@ export async function boot(splash?: StartupSplashController) {
   const appBar = new AppBar({
     root: navRoot,
     onToggleRail: () => toggleRail(),
-    onOpenSettings: () => {
-      void showAddProjectInfo(
-        document.body,
-        "Edit ~/.config/reck/projects.toml (or the --config path) then restart reck-stationd.",
-      );
-    },
     onToggleTheme: () => toggleTheme(),
+    // Usage data lives in the primary host's daemon (the station's
+    // SQLite store); the overlay fetches everything it needs itself.
+    onOpenUsage: () => openUsageOverlay({ api: apiForHost(primaryHost) }),
   });
-  appBar.setRailHidden(false);
+  appBar.setRailExpanded(railMode === "expanded");
   appBar.setTheme(theme);
   // propagate initial theme to the pane layout (for newly mounted terminals)
   // done after layout is constructed below
@@ -503,6 +711,18 @@ export async function boot(splash?: StartupSplashController) {
     for (const p of panes) {
       const flag = p.capabilities?.clipboard_image === true;
       paneClipboardImage.set(p.id, flag);
+    }
+  }
+
+  // Latest per-pane usage glance (context / quota %) from a daemon pane
+  // list, feeding the minimal tab badge. Populated on the same
+  // fetchHostPanes path as capabilities above; a pane without a sample
+  // clears its entry.
+  const paneUsage = new Map<string, PaneUsage>();
+  function recordPaneUsageFromHost(panes: Pane[]) {
+    for (const p of panes) {
+      if (p.usage) paneUsage.set(p.id, p.usage);
+      else paneUsage.delete(p.id);
     }
   }
 
@@ -684,7 +904,7 @@ export async function boot(splash?: StartupSplashController) {
   }
 
   const rail = new Rail({
-    root: document.getElementById("rail")!,
+    root: railEl,
     onSelect: (projectId) => {
       // Clicking an archived project restores it (behind a confirm) rather
       // than selecting an empty, panes-killed view.
@@ -693,8 +913,11 @@ export async function boot(splash?: StartupSplashController) {
         void requestUnarchive(projectId);
         return;
       }
+      // A mini-rail avatar click selects the project AND expands the rail.
+      if (railMode === "mini") setRailMode("expanded");
       void selectProject(projectId);
     },
+    onExpand: () => setRailMode("expanded"),
     onAddProject: () => void handleAddProject(),
     onRename: (projectId, newName) => {
       // Optimistic: paint the new name right away, then persist on the
@@ -746,16 +969,6 @@ export async function boot(splash?: StartupSplashController) {
         console.error("openPath failed:", res.error);
       }
     },
-    onSelectMissionControl: () => void showMissionControl(),
-    onToggleDock: async (projectId, docked) => {
-      try {
-        if (docked) await client.dockProject(projectId);
-        else await client.undockProject(projectId);
-      } catch (e) {
-        console.error("dock toggle failed", e);
-      }
-      // Next poll picks up the new `docked` flag and the rail re-renders.
-    },
     onToggleArchive: async (projectId, archived) => {
       if (!archived) {
         // Unarchive (menu "Unarchive" or drag-out) goes through the same
@@ -793,69 +1006,7 @@ export async function boot(splash?: StartupSplashController) {
       return allTabs(tree).map((t) => t.paneId);
     },
   });
-
-  // Mission Control view. Lazily constructed on first activation —
-  // keeps the terminal widget (heavy) out of initial boot.
-  let missionControl: MissionControl | null = null;
-  let missionControlActive = false;
-
-  async function showMissionControl() {
-    rail.select(null);
-    rail.setMissionControlSelected(true);
-    currentProjectId = null;
-    if (!missionControl) {
-      // Phase 11: MC accepts per-host clients and merges cards. Local is
-      // always populated ; station is included when the
-      // user has it enabled. The MC constructor asserts at least one is
-      // set, which `local` always satisfies.
-      const mcClients: { station?: typeof client; local?: typeof client } = {
-        local: apiForHost("local"),
-      };
-      if (settings!.station?.enabled) mcClients.station = apiForHost("station");
-      missionControl = new MissionControl({
-        root: rightPane,
-        clients: mcClients,
-        theme: theme === "light" ? "light" : "dark",
-        onOpenProject: (projectId) => {
-          void selectProject(projectId);
-        },
-        onUndockProject: (projectId) => {
-          // Fire undock at every enabled host. Hybrid mode: a project
-          // may live on only one host, so the others reply 404 — fine
-          // to swallow. The next /projects poll on each host syncs the
-          // rail's per-host docked flag, and MC's MCStateMessage feed
-          // re-renders without the card.
-          const targets: HostRef[] = mcClients.station ? ["station", "local"] : ["local"];
-          for (const host of targets) {
-            void apiForHost(host)
-              .undockProject(projectId)
-              .catch((err) => {
-                // 404 = project isn't on this host; expected in hybrid setups.
-                if (err?.status !== 404) {
-                  console.error(`undock ${projectId} on ${host} failed`, err);
-                }
-              });
-          }
-        },
-        onAggregateChange: (stoplight) => {
-          rail.setMissionControlLight(stoplight);
-        },
-      });
-    }
-    // Hide the normal pane-layout root while MC owns the right side.
-    layoutRoot.style.display = "none";
-    missionControlActive = true;
-    await missionControl.show();
-    renderStatus();
-  }
-
-  function hideMissionControl() {
-    if (!missionControlActive) return;
-    missionControl?.hide();
-    missionControlActive = false;
-    rail.setMissionControlSelected(false);
-    layoutRoot.style.display = "";
-  }
+  rail.setMode(railMode);
 
   window.reckAPI.onMenuAddProject(() => void handleAddProject());
   // Phase 12: the "Preferences…" menu item hands control to the
@@ -1074,8 +1225,16 @@ export async function boot(splash?: StartupSplashController) {
           })
           .catch((e) => console.warn("[click:transcript] openInViewer error", e));
       },
+      // ⌘+click an http/https URL in the transcript → OS default browser.
+      onExternalActivate: (href) => {
+        window.open(href, "_blank", "noopener");
+      },
     }),
   });
+
+  // Voice dictation handle (#67), assigned by the async initTranscription
+  // below. The layout's mic-button callback and the ⌘⇧V hotkey route here.
+  let dictationHandle: TranscriptionHandle | null = null;
 
   const layout: PaneLayout = new PaneLayout({
     root: layoutRoot,
@@ -1193,6 +1352,14 @@ export async function boot(splash?: StartupSplashController) {
             });
         },
       });
+      // Clickable http/https URLs alongside the path linkifier. ⌘-click
+      // opens the OS default browser: window.open is intercepted by main's
+      // setWindowOpenHandler and forwarded to shell.openExternal.
+      installUrlLinkProvider(pane.getXterm(), {
+        onActivateUrl: (url) => {
+          window.open(url, "_blank", "noopener");
+        },
+      });
     },
     onStoplightChange: (paneId, s) => {
       // Bump the shared epoch first thing so any in-flight poll
@@ -1278,6 +1445,7 @@ export async function boot(splash?: StartupSplashController) {
       if (raw === "green" && !paneUnseenGreen.get(paneId)) return "gray";
       return raw;
     },
+    getUsage: (paneId) => paneUsage.get(paneId),
     onExit: () => {},
     onPaneConnClose: (paneId, info) => {
       // Standard WebSocket close codes — see RFC 6455 §7.4.
@@ -1515,7 +1683,7 @@ export async function boot(splash?: StartupSplashController) {
     //
     // Errors bubble up to TerminalPane's onPasteUploadError hook; the
     // renderer doesn't toast by default — a console warning is enough.
-    onPasteUpload: async (paneId, host, blob, mime) => {
+    onPasteUpload: async (paneId, host, blob, mime, filename) => {
       const api = apiForHost(host);
       // Classify *why* we may end up on the path-typing branch so the
       // TerminalPane can emit a visible breadcrumb. Without this, the
@@ -1523,7 +1691,13 @@ export async function boot(splash?: StartupSplashController) {
       // from a bug from the user's seat. See PasteUploadResult.
       let fallbackReason: "no-capability" | "daemon-error" | "upload-only" | undefined;
       let fallbackDetail: string | undefined;
-      if (paneClipboardImage.get(paneId) === true) {
+      // The clipboard-image sidecar only handles image pasteboard writes;
+      // non-image drops (PDF, text, Scope B) go straight to /uploads. Flag
+      // it as the expected upload-only route rather than a failure.
+      const isImage = mime.toLowerCase().startsWith("image/");
+      if (!isImage) {
+        fallbackReason = "upload-only";
+      } else if (paneClipboardImage.get(paneId) === true) {
         try {
           const ok = await api.pasteImage(paneId, blob, mime);
           if (ok) return { kind: "chip" };
@@ -1559,11 +1733,32 @@ export async function boot(splash?: StartupSplashController) {
         // it so the user knows it's by design, not a bug.
         fallbackReason = "no-capability";
       }
-      const resp = await api.uploadFile(paneId, blob, mime);
+      const resp = await api.uploadFile(paneId, blob, mime, filename);
       return { kind: "path", path: resp.path, fallbackReason, fallbackDetail };
     },
     onPasteUploadError: (paneId, err, mime) => {
       console.warn("[paste-upload] failed", { paneId, mime, err });
+    },
+    // Current drop prompt template, read fresh per pane creation so a
+    // Preferences edit takes effect on the next-created pane.
+    dropPromptTemplate: () => dropPromptTemplate,
+    // Gate a dropped file against the user's allow-list + 10 MB cap.
+    validateDroppedFile: (file) => {
+      if (file.size > DRAGDROP_MAX_BYTES) return { ok: false, reason: "size" };
+      const dot = file.name.lastIndexOf(".");
+      const ext = dot > 0 ? file.name.slice(dot + 1).toLowerCase() : "";
+      if (!ext || !dragDropAllowlist.has(ext)) return { ok: false, reason: "type" };
+      return { ok: true };
+    },
+    onDropRejected: (info) => {
+      const mb = (info.sizeBytes / (1000 * 1000)).toFixed(1);
+      const msg =
+        info.reason === "size"
+          ? `“${info.name}” is ${mb} MB — drag-drop is capped at 10 MB.`
+          : info.ext
+            ? `“.${info.ext}” files aren’t allowed. Add the type in Settings → Drag & drop files.`
+            : `“${info.name}” has no extension. Add allowed types in Settings → Drag & drop files.`;
+      showToast(document.body, msg, { kind: "error" });
     },
     // an earlier release: detach the pane to its own popout window. The flow:
     //   1. ask main for the leaf's screen rect (via getActiveLeafRect)
@@ -1615,8 +1810,15 @@ export async function boot(splash?: StartupSplashController) {
     onHistoryPane: (paneId) => {
       void transcripts.toggle(paneId);
     },
+    // Voice dictation (#67): the mic button focuses the pane (in the layout)
+    // then routes here; the active-pane target is resolved when it starts.
+    onDictationToggle: () => {
+      dictationHandle?.toggle();
+    },
   });
   layout.setTheme(theme);
+  // Bind the rail-collapse/wiggle refit hook now that the layout exists.
+  refitActiveTerminals = () => void layout.refitActive();
 
   // an earlier release: subscribe to popout-closed notifications. The
   // unsubscribe thunk is captured here so the next reload doesn't stack
@@ -1980,6 +2182,8 @@ export async function boot(splash?: StartupSplashController) {
     onFocusUp: () => layout.navigate("up"),
     onFocusDown: () => layout.navigate("down"),
     onToggleRail: () => toggleRail(),
+    onCollapseRail: () => setRailMode("mini"),
+    onExpandRail: () => setRailMode("expanded"),
     onClearTerminal: () => clearActiveTerminal(),
     // an earlier release: detach the focused pane via the same callback path
     // the per-pane button uses. We resolve "focused pane" from the
@@ -2067,6 +2271,31 @@ export async function boot(splash?: StartupSplashController) {
     }
   })();
 
+  // Voice dictation (#67): capture the mic on this Mac, transcribe (local
+  // Whisper or Deepgram), and type the text into the active pane's PTY.
+  // Non-fatal like TTS above.
+  void (async () => {
+    try {
+      dictationHandle = await initTranscription({
+        resolveSession: () => {
+          const rec = layout.getActiveTerminalRecord();
+          if (!rec) return null;
+          const encoder = new TextEncoder();
+          return {
+            target: {
+              insert: (text) => rec.term.sendInput(encoder.encode(text)),
+              submit: () => rec.term.sendInput(encoder.encode("\r")),
+            },
+            surface: rec.wrapper,
+          };
+        },
+        onError: (msg) => showToast(document.body, msg, { kind: "error", durationMs: 6000 }),
+      });
+    } catch (e) {
+      console.warn("[dictation] disabled:", e);
+    }
+  })();
+
   // In-view search (⌘/Ctrl+F). Resolves the active terminal pane as a
   // TerminalSearchAdapter (same pattern as the TTS surface above) and
   // routes match-position ticks to that pane's overlay scrollbar.
@@ -2076,11 +2305,14 @@ export async function boot(splash?: StartupSplashController) {
         const rec = layout.getActiveTerminalRecord();
         if (!rec) return null;
         // An open History overlay owns ⌘F for its pane (#51): search
-        // the whole transcript, not the terminal's visible rows.
+        // the whole transcript, not the terminal's visible rows. The bar
+        // mounts into the PANE wrapper's stack (with the history clock +
+        // TTS bar), not a nested one inside the overlay — one stack,
+        // History always at the bottom.
         const overlay = transcripts.get(rec.tab.paneId);
         if (overlay) {
           return new MarkdownSearchAdapter({
-            container: ensurePaneControls(overlay.view.root),
+            container: ensurePaneControls(rec.wrapper),
             body: overlay.view.body,
           });
         }
@@ -2152,8 +2384,27 @@ export async function boot(splash?: StartupSplashController) {
     renderStatus();
   }
 
+  // Root-cause fix for the stale grid after a cross-project switch:
+  // setTree freshly remounts panes, and a pane whose container isn't
+  // laid out yet makes TerminalPane.refit() early-return without
+  // re-arming — a same-geometry switch then produces no ResizeObserver
+  // delta, so nothing ever re-fits. Double-rAF lets the new tree paint
+  // first; if any pane still reports not-laid-out, retry once shortly
+  // after.
+  function scheduleProjectSwitchRefit() {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        // pinToBottom: end the switch with a real scroll that lands at
+        // the tail — a remounted pane can present blank until scrolled.
+        const allLaidOut = layout.refitActive({ pinToBottom: true });
+        if (!allLaidOut) {
+          window.setTimeout(() => layout.refitActive({ pinToBottom: true }), 100);
+        }
+      });
+    });
+  }
+
   async function selectProject(projectId: string) {
-    if (missionControlActive) hideMissionControl();
     if (currentProjectId === projectId) return;
 
     // Cancel any in-flight fetch from the prior selection; reserve a
@@ -2248,7 +2499,7 @@ export async function boot(splash?: StartupSplashController) {
             // the primary host, but a phantom-spawn vector here. A
             // station-resident project always reads as "empty" on local
             // (panes live elsewhere), so without `autoSpawn: false`
-            // every Mission Control roundtrip leaks a fresh local
+            // every secondary-host roundtrip leaks a fresh local
             // Claude pane. Reconcile Pass 3 then surfaces it as a tab.
             const detail = await apiForHost(h).getProject(projectId, {
               autoSpawn: false,
@@ -2294,6 +2545,7 @@ export async function boot(splash?: StartupSplashController) {
     let livePanesByHost = await fetchHostPanes(primaryPanes);
     for (const panes of Object.values(livePanesByHost)) {
       recordPaneCapabilitiesFromHost(panes);
+      recordPaneUsageFromHost(panes);
     }
 
     const saved = savedLayouts[projectId] ?? null;
@@ -2312,6 +2564,8 @@ export async function boot(splash?: StartupSplashController) {
       if (firstLeaf) layout.focusLeaf(firstLeaf.id);
     }
     renderStatus();
+    scheduleProjectSwitchRefit();
+    wiggleSeparator();
 
     // Daemon-restart race: the daemon's restore walk takes several
     // seconds on wake-up, so `getProject` may return a subset of the
@@ -2379,6 +2633,7 @@ export async function boot(splash?: StartupSplashController) {
             livePanesByHost = retried;
             for (const panes of Object.values(livePanesByHost)) {
               recordPaneCapabilitiesFromHost(panes);
+              recordPaneUsageFromHost(panes);
             }
             reconciled = reconcile(saved, livePanesByHost);
             didRetry = true;
@@ -2421,6 +2676,9 @@ export async function boot(splash?: StartupSplashController) {
         const firstLeaf = reconciled ? allLeaves(reconciled)[0] : null;
         if (firstLeaf) layout.focusLeaf(firstLeaf.id);
         renderStatus();
+        // The repaint remounted panes again — same not-laid-out hazard
+        // as the fast-path paint above.
+        scheduleProjectSwitchRefit();
       }
     }
     // Housekeeping: clear the in-flight AbortController now that the
@@ -2704,10 +2962,10 @@ export async function boot(splash?: StartupSplashController) {
   // accessed by host. Phase 4 keeps the single-display status bar:
   // we wire `connInfo` from the *primary* host's events
   // (`derivedMode`-resolved, currently station-if-enabled-else-local)
-  // until Phase 11 extends the status bar / Mission Control to
-  // surface both hosts. Local's events still run through the registry
-  // so Phase 9 (project-list push) and Phase 11 (UI aggregation)
-  // plug in without a second rewrite.
+  // until a later phase extends the status bar to surface both
+  // hosts. Local's events still run through the registry so Phase 9
+  // (project-list push) and later UI aggregation plug in without a
+  // second rewrite.
   // Drives the startup splash off the real boot pipeline. Dismissed
   // once the first project is rendered — or shortly after, if there
   // are none / the daemon is unreachable. We don't want to trap the
@@ -2737,7 +2995,7 @@ export async function boot(splash?: StartupSplashController) {
       renderStatus();
     },
     onResult: async (projects, { firstSuccess, firstNonEmpty }) => {
-      if (!currentProjectId && !missionControlActive && projects.length > 0) {
+      if (!currentProjectId && projects.length > 0) {
         if (firstNonEmpty) splash?.step("layout");
         await selectProject(projects[0].id);
       }
@@ -2866,9 +3124,9 @@ export async function boot(splash?: StartupSplashController) {
       }
       // Phase 4: status bar is still single-display. Forward only
       // the primary host's info (matches the existing CONN dot
-      // semantics). Phase 11 (Mission Control aggregation) will
-      // extend the status bar to surface both hosts; until then
-      // local's info is consumed by the registry but not surfaced.
+      // semantics). A later phase may extend the status bar to
+      // surface both hosts; until then local's info is consumed by
+      // the registry but not surfaced.
       if (host !== primaryHost) return;
       connInfo = info;
       // When the station goes unreachable (not a token problem), probe

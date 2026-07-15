@@ -17,12 +17,25 @@ import {
   saveReckConnectPrompt,
   resolveEffectiveReckConnectPrompt,
   DEFAULT_RECK_CONNECT_PROMPT,
+  DEFAULT_RAIL_WIGGLE,
+  loadRailMode,
+  saveRailMode,
+  loadRailWiggle,
+  saveRailWiggle,
+  DEFAULT_DRAGDROP_EXTENSIONS,
+  DEFAULT_DROP_PROMPT_TEMPLATE,
+  DRAGDROP_MAX_BYTES,
+  loadDragDropAllowlist,
+  saveDragDropAllowlist,
+  loadDropPromptTemplate,
+  saveDropPromptTemplate,
+  renderDropPrompt,
   type Settings,
 } from "./config";
 import type { Project } from "@proto/proto";
 
 function mk(id: string, name: string): Project {
-  return { id, name, cwd: "/", stoplight: "gray", pane_count: 0, docked: false };
+  return { id, name, cwd: "/", stoplight: "gray", pane_count: 0 };
 }
 
 describe("project order persistence", () => {
@@ -510,5 +523,110 @@ describe("Reck Connect prompt (load/save/resolve)", () => {
 
     await saveReckConnectPrompt("custom rules");
     expect(await resolveEffectiveReckConnectPrompt()).toBe("custom rules");
+  });
+});
+
+describe("rail mode + wiggle persistence", () => {
+  const store = new Map<string, unknown>();
+  beforeEach(() => {
+    store.clear();
+    (window as unknown as { reckAPI: unknown }).reckAPI = {
+      config: {
+        get: async <T>(k: string) => (store.has(k) ? (store.get(k) as T) : null),
+        set: async (k: string, v: unknown) => {
+          store.set(k, v);
+          return true;
+        },
+      },
+    };
+  });
+
+  it("railMode defaults to expanded on fresh install", async () => {
+    expect(await loadRailMode()).toBe("expanded");
+  });
+
+  it("railMode round-trips mini", async () => {
+    await saveRailMode("mini");
+    expect(await loadRailMode()).toBe("mini");
+    await saveRailMode("expanded");
+    expect(await loadRailMode()).toBe("expanded");
+  });
+
+  it("railMode coerces a malformed persisted value to expanded", async () => {
+    store.set("railMode", "hidden");
+    expect(await loadRailMode()).toBe("expanded");
+    store.set("railMode", 3);
+    expect(await loadRailMode()).toBe("expanded");
+  });
+
+  it("rail wiggle defaults on fresh install", async () => {
+    expect(await loadRailWiggle()).toEqual(DEFAULT_RAIL_WIGGLE);
+    // Deliberately slow default — a fast wiggle read as jarring in use.
+    expect(DEFAULT_RAIL_WIGGLE.legMs).toBe(240);
+  });
+
+  it("rail wiggle round-trips all three fields", async () => {
+    await saveRailWiggle({ enabled: false, pixels: 20, legMs: 90 });
+    expect(await loadRailWiggle()).toEqual({ enabled: false, pixels: 20, legMs: 90 });
+  });
+
+  it("rail wiggle falls back per-field on malformed values", async () => {
+    store.set("railWiggleEnabled", "yes"); // non-boolean → default true
+    store.set("railWigglePixels", -4); // non-positive → default
+    store.set("railWiggleLegMs", "fast"); // non-number → default
+    expect(await loadRailWiggle()).toEqual(DEFAULT_RAIL_WIGGLE);
+  });
+});
+
+describe("drag-drop config", () => {
+  const store = new Map<string, unknown>();
+  beforeEach(() => {
+    store.clear();
+    (window as unknown as { reckAPI: unknown }).reckAPI = {
+      config: {
+        get: async <T>(k: string) => (store.has(k) ? (store.get(k) as T) : null),
+        set: async (k: string, v: unknown) => {
+          store.set(k, v);
+          return true;
+        },
+      },
+    };
+  });
+
+  it("max size is 10 MB (decimal)", () => {
+    expect(DRAGDROP_MAX_BYTES).toBe(10 * 1000 * 1000);
+  });
+
+  it("allowlist is null on fresh install (callers seed defaults)", async () => {
+    expect(await loadDragDropAllowlist()).toBeNull();
+    expect(DEFAULT_DRAGDROP_EXTENSIONS).toContain("pdf");
+    expect(DEFAULT_DRAGDROP_EXTENSIONS).toContain("png");
+  });
+
+  it("allowlist normalises (lowercase, strips leading dot) and dedupes", async () => {
+    await saveDragDropAllowlist([".PNG", "png", "  Pdf ", ""]);
+    expect(await loadDragDropAllowlist()).toEqual(["png", "pdf"]);
+  });
+
+  it("allowlist round-trips an emptied list as [] (not null)", async () => {
+    await saveDragDropAllowlist([]);
+    expect(await loadDragDropAllowlist()).toEqual([]);
+  });
+
+  it("prompt template defaults when unset or blank", async () => {
+    expect(await loadDropPromptTemplate()).toBe(DEFAULT_DROP_PROMPT_TEMPLATE);
+    store.set("dragDrop.promptTemplate", "   ");
+    expect(await loadDropPromptTemplate()).toBe(DEFAULT_DROP_PROMPT_TEMPLATE);
+  });
+
+  it("prompt template round-trips a custom value", async () => {
+    await saveDropPromptTemplate("look at {filename}");
+    expect(await loadDropPromptTemplate()).toBe("look at {filename}");
+  });
+
+  it("renderDropPrompt substitutes {path} and {filename} (all occurrences)", () => {
+    expect(renderDropPrompt("{path} :: {filename} :: {path}", "sub/x.md", "x.md")).toBe(
+      "sub/x.md :: x.md :: sub/x.md",
+    );
   });
 });

@@ -231,6 +231,21 @@ function makeFixture(): Fixture {
     path.join(proj, "docs", "sub", "readme-link.md"),
     "[x](docs/x.md)\n",
   );
+  // 2026-07-10 obsidian-brain field layout: a wiki note in a subfolder
+  // linking to a dot-dir target relative to the PROJECT ROOT.
+  fs.mkdirSync(path.join(proj, "wiki", "concepts"), { recursive: true });
+  fs.mkdirSync(
+    path.join(proj, ".raw", "personal", "clients", "unidis", "notes"),
+    { recursive: true },
+  );
+  fs.writeFileSync(
+    path.join(proj, "wiki", "concepts", "page.md"),
+    "sources:\n- .raw/personal/clients/unidis/notes/note.md\n",
+  );
+  fs.writeFileSync(
+    path.join(proj, ".raw", "personal", "clients", "unidis", "notes", "note.md"),
+    "# interview notes\n",
+  );
   return { tmp, mountPoint, home, proj, plansDir, planFile };
 }
 
@@ -565,6 +580,95 @@ describe("openInViewer resolution pipeline", () => {
       expect(payload.searchedRoots).toEqual(
         expect.arrayContaining([fix.proj]),
       );
+    },
+  );
+
+  // R8 — the 2026-07-10 obsidian-brain field failure. A rendered-markdown
+  // popup (LOCAL mount popup with a STATION badge) forwards the Pi-form
+  // projectCwd from its URL but sends NO sourceHost. The old flag-gated
+  // translation left the Pi cwd untranslated; the truthy-but-Mac-
+  // nonexistent path shadowed deriveProjectAnchor and every rescue
+  // collapsed to the popup file's own folder ("Searched: …/wiki/concepts").
+  // Must open the real project file directly, no search.
+  it(
+    "R8: Pi-form projectCwd WITHOUT sourceHost still recovers a root-relative link",
+    async () => {
+      const res = await click({
+        // renderer's resolveAgainst joined the href onto the popup dir:
+        path: `${fix.proj}/wiki/concepts/.raw/personal/clients/unidis/notes/note.md`,
+        originalText: ".raw/personal/clients/unidis/notes/note.md",
+        opener: `${fix.proj}/wiki/concepts/page.md`,
+        // no sourceHost — cascaded local-popup clicks never send one
+        projectCwd: PI_PROJ, // Pi form, exactly as stamped on the popup URL
+      });
+      expect(res).toEqual({ ok: true });
+      expect(popupWindows()).toHaveLength(1);
+      const params = urlParams(popupWindows()[0]);
+      expect(params.get("path")).toBe(
+        path.join(fix.proj, ".raw", "personal", "clients", "unidis", "notes", "note.md"),
+      );
+      expect(params.get("suffixSearchPending")).toBeNull();
+    },
+  );
+
+  // R9 — same click with projectCwd fully absent: deriveProjectAnchor
+  // must recover the anchor from the miss path (guards the local-popup
+  // cascade where no cwd was ever threaded).
+  it(
+    "R9: root-relative dot-dir link recovers via the derived anchor when projectCwd is absent",
+    async () => {
+      const res = await click({
+        path: `${fix.proj}/wiki/concepts/.raw/personal/clients/unidis/notes/note.md`,
+        originalText: ".raw/personal/clients/unidis/notes/note.md",
+        opener: `${fix.proj}/wiki/concepts/page.md`,
+      });
+      expect(res).toEqual({ ok: true });
+      const params = urlParams(popupWindows()[0]);
+      expect(params.get("path")).toBe(
+        path.join(fix.proj, ".raw", "personal", "clients", "unidis", "notes", "note.md"),
+      );
+      expect(params.get("suffixSearchPending")).toBeNull();
+    },
+  );
+
+  // R10 — a stale/garbage threaded cwd must fall through (pathExists
+  // guard) to the derived anchor instead of poisoning the rescues.
+  it(
+    "R10: nonexistent projectCwd falls through to the derived anchor",
+    async () => {
+      const res = await click({
+        path: `${fix.proj}/wiki/concepts/.raw/personal/clients/unidis/notes/note.md`,
+        originalText: ".raw/personal/clients/unidis/notes/note.md",
+        opener: `${fix.proj}/wiki/concepts/page.md`,
+        projectCwd: "/nonexistent/gone",
+      });
+      expect(res).toEqual({ ok: true });
+      const params = urlParams(popupWindows()[0]);
+      expect(params.get("path")).toBe(
+        path.join(fix.proj, ".raw", "personal", "clients", "unidis", "notes", "note.md"),
+      );
+      expect(params.get("suffixSearchPending")).toBeNull();
+    },
+  );
+
+  // R11 — stamping invariant: local popups carry the LOCAL (mount) form
+  // on their URL regardless of the form the click threaded, so cascaded
+  // clicks stay self-healing without depending on sourceHost.
+  it(
+    "R11: popup URLs are stamped with the mount-form projectCwd",
+    async () => {
+      const res = await click({
+        path: `${PI_PROJ}/docs/x.md`,
+        originalText: "docs/x.md",
+        opener: PI_PLAN_FILE,
+        sourceHost: "station",
+        projectCwd: PI_PROJ, // Pi form in…
+      });
+      expect(res).toEqual({ ok: true });
+      const params = urlParams(popupWindows()[0]);
+      expect(params.get("path")).toBe(path.join(fix.proj, "docs", "x.md"));
+      // …mount form out.
+      expect(params.get("projectCwd")).toBe(fix.proj);
     },
   );
 });

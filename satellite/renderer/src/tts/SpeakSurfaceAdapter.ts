@@ -64,6 +64,19 @@ export interface SpeakSurfaceAdapter {
    *  same configured colour. Optional for forward-compatibility. */
   setTheme?(theme: SurfaceHighlightTheme): void;
 
+  /** Subscribe to "the visible content may have changed" (scroll / repaint),
+   *  debounced. The controller uses this to re-resolve the upcoming words
+   *  mid-playback. Returns an unsubscribe fn. Surfaces with a fixed document
+   *  (markdown, CodeMirror) leave this undefined → the controller never
+   *  re-resolves them. Optional. */
+  onContentChange?(cb: () => void): () => void;
+
+  /** Re-resolve "what is on screen now, minus the pinned status line" for a
+   *  live re-swap. Returns null when re-resolution should not happen (e.g. a
+   *  selection-based read, or a non-alt-screen terminal). Optional; only the
+   *  terminal implements it. */
+  resolveUpcomingChunk?(): SpokenChunk | null;
+
   /** Tear down resources (overlays, decorations, listeners). */
   dispose(): void;
 }
