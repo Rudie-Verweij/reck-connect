@@ -231,6 +231,11 @@ plist's `EnvironmentVariables`, so the daemon picks up
 `RECK_STATION_ROOT` at every launch (it fail-fasts at startup if
 missing — see `daemon/cmd/reck-stationd/main.go`).
 
+Both values only need to be provided on the **first** run: after
+validation the script persists them to `~/.config/reck/station.env`
+and reads them back as defaults on every later run. Explicitly set
+env vars still override the persisted values.
+
 `install-station.sh` writes `~reck-connect/.reck-install-result.json`
 (mode 0600) at the end:
 
