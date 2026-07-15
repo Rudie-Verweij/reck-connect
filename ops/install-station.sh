@@ -27,12 +27,26 @@ set -euo pipefail
 # /etc/reck-stationd/token, ENV_FILE, or generated fresh. End state:
 # single value at ~/.config/reck/token, mode 0600, owned by reck-connect.
 
-# Required env vars — fail-fast at the top before any work. Mirrors
-# install-satellite.sh: silent fallback to upstream defaults would let a
-# misconfigured station serve projects under a path the satellite's
-# translateStationCwd() doesn't recognize, vanishing them from the rail.
-: "${RECK_STATION_USER:?must be set (this user, e.g. reck-connect)}"
-: "${RECK_STATION_ROOT:?must be set (absolute station projects root, e.g. /Users/reck-connect/projects)}"
+# Required config — RECK_STATION_USER and RECK_STATION_ROOT. Explicitly
+# set env vars win; otherwise fall back to the values persisted by a
+# prior successful run at ~/.config/reck/station.env, so re-installs
+# don't need the variables retyped. Fail-fast if neither source has
+# them. Mirrors install-satellite.sh: silent fallback to upstream
+# defaults would let a misconfigured station serve projects under a
+# path the satellite's translateStationCwd() doesn't recognize,
+# vanishing them from the rail.
+STATION_ENV_FILE="$HOME/.config/reck/station.env"
+if [[ -f "$STATION_ENV_FILE" ]]; then
+    _cli_user="${RECK_STATION_USER:-}"
+    _cli_root="${RECK_STATION_ROOT:-}"
+    # shellcheck disable=SC1090
+    source "$STATION_ENV_FILE"
+    [[ -n "$_cli_user" ]] && RECK_STATION_USER="$_cli_user"
+    [[ -n "$_cli_root" ]] && RECK_STATION_ROOT="$_cli_root"
+    unset _cli_user _cli_root
+fi
+: "${RECK_STATION_USER:?must be set (this user, e.g. reck-connect) — persisted to ~/.config/reck/station.env after the first successful run}"
+: "${RECK_STATION_ROOT:?must be set (absolute station projects root, e.g. /Users/reck-connect/projects) — persisted to ~/.config/reck/station.env after the first successful run}"
 
 # RECK_STATION_ROOT lands in a sed replacement and a plist <string>;
 # whitelist the same charset install-satellite.sh accepts so a
@@ -49,6 +63,12 @@ if [[ "$(whoami)" != "$RECK_STATION_USER" ]]; then
     echo "Create the user first via System Settings → Users & Groups (see ops/README.md §1)."
     exit 1
 fi
+
+# Both values validated — persist them so the next run needs no env
+# vars. Written only after validation so a bad value never sticks.
+mkdir -p "$(dirname "$STATION_ENV_FILE")"
+printf 'RECK_STATION_USER=%s\nRECK_STATION_ROOT=%s\n' \
+    "$RECK_STATION_USER" "$RECK_STATION_ROOT" > "$STATION_ENV_FILE"
 
 # Non-interactive SSH shells don't source ~/.zprofile, so brew isn't on
 # PATH. Pull it in ourselves (Apple Silicon + Intel fallback).
