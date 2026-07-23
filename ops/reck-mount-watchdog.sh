@@ -118,6 +118,13 @@ SSHFS_ERR="$LOG_DIR/mount-sshfs.err"
     `# sshfs then tries to interpret 'B' as its own option. The` \
     `# Ciphers directive in ssh_config is the canonical place anyway.` \
     -o Compression=yes \
+    `# FUSE-T's NFS loopback negotiates 32 KB rsize/wsize by default, so` \
+    `# every write crosses NFS -> FUSE -> SFTP as a separate 32 KB round` \
+    `# trip; sustained writes measured ~1.3 MB/s on a LAN whose raw ssh` \
+    `# does ~58 MB/s. 1 MB chunks give ~2.2x sustained throughput and` \
+    `# near-instant small copies via write-back. The FSKit backend on` \
+    `# macOS 26+ ignores this option, so it is safe on both backends.` \
+    -o rwsize=1048576 \
     -o defer_permissions 2>"$SSHFS_ERR" ) 2>/dev/null
 ec=$?
 if [[ $ec -ne 0 ]]; then
