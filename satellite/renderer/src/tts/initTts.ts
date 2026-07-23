@@ -21,6 +21,11 @@ export interface InitTtsOptions {
 
 export interface TtsHandle {
   dispose(): void;
+  /** Stop any in-flight speech and reset the UI. Callers hook this to
+   *  context switches (project change) where continuing to read a
+   *  now-hidden pane makes no sense and mid-teardown cancel/speak churn
+   *  risks wedging the OS speech service. */
+  stop(): void;
 }
 
 /**
@@ -95,6 +100,10 @@ export async function initTts(opts: InitTtsOptions): Promise<TtsHandle> {
       window.removeEventListener("mousemove", onMouse);
       controller.dispose();
       engine.dispose();
+    },
+    stop() {
+      if (disposed) return;
+      controller.stop();
     },
   };
 }

@@ -72,10 +72,18 @@ export class TtsController {
 
   start(): void {
     const surface = this.opts.getActiveSurface();
-    if (!surface) return;
+    if (!surface) {
+      // Diagnosable, not silent: "speak did nothing" reports kept coming
+      // in with an empty console. Every early exit says why.
+      console.info("[tts] start: no active surface to speak");
+      return;
+    }
 
     const chunk = this.resolveChunk(surface);
-    if (!chunk || !chunk.text) return;
+    if (!chunk || !chunk.text) {
+      console.info("[tts] start: resolved chunk is empty — nothing to speak");
+      return;
+    }
 
     // Clear any stale highlight from a previous surface BEFORE we swap.
     // Bug observed: starting TTS on B
@@ -98,6 +106,14 @@ export class TtsController {
         this.voicesCache,
         detectLanguage(chunk.text) ?? undefined,
       );
+    // One structured line per speak: enough to see what was resolved and
+    // with which voice/rate, without dumping the content itself.
+    const preview = chunk.text.slice(0, 60).replace(/\s+/g, " ").trim();
+    console.info(
+      `[tts] start: ${chunk.text.length} chars / ${chunk.rangeMap.length} words · ` +
+        `voice=${voice ? `${voice.name} (${voice.lang})` : "NONE"} · ` +
+        `rate=${this.settings.rate} · "${preview}…"`,
+    );
     this.opts.engine.start(chunk, { voice, rate: this.settings.rate });
     this.state = "playing";
     this.currentSurface = surface;

@@ -1,4 +1,9 @@
 import { snapRate } from "./TtsEngine";
+
+/** Rate readout, always two decimals ("2.05×", "2.20×", "1.00×") so the
+ *  label — and therefore the whole control bar — keeps a constant width
+ *  as the ± steppers move through mixed-precision values. */
+const fmtRate = (r: number): string => `${r.toFixed(2)}×`;
 import type { TtsTheme } from "./ttsTheme";
 
 export type SpeakState = "idle" | "playing" | "paused";
@@ -121,7 +126,7 @@ export function createSpeakControlBar(
   rateLabel.type = "button";
   rateLabel.title = "Click to type a speed";
   rateLabel.setAttribute("aria-label", "Speech rate — click to type a value");
-  rateLabel.textContent = `${slider.value}×`;
+  rateLabel.textContent = fmtRate(Number(slider.value));
 
   const rateInput = document.createElement("input");
   rateInput.className = "tts-rate-input";
@@ -168,7 +173,7 @@ export function createSpeakControlBar(
     suppressInput = true;
     slider.value = String(r);
     suppressInput = false;
-    rateLabel.textContent = `${r}×`;
+    rateLabel.textContent = fmtRate(r);
     if (animate) {
       rateLabel.classList.remove("tts-rate-pulse");
       // Force a reflow so re-adding the class restarts the animation.

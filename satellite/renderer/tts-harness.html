@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>TTS harness</title>
+  </head>
+  <body>
+    <!-- Dev/debug-only page: drives the real TtsEngine against the real
+         window.speechSynthesis and logs every event so speech progress is
+         observable without audio. Not part of the production build. -->
+    <button id="speak" style="font-size:18px;padding:12px">Speak (voiced)</button>
+    <button id="speak-voiceless" style="font-size:18px;padding:12px">Speak (no voice)</button>
+    <button id="stop" style="font-size:18px;padding:12px">Stop</button>
+    <pre id="log" style="font:12px monospace;white-space:pre-wrap"></pre>
+    <script type="module" src="/src/tts-harness.ts"></script>
+  </body>
+</html>

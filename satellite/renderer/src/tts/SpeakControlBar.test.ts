@@ -413,7 +413,9 @@ describe("SpeakControlBar typed rate editing", () => {
     pressEnter(input);
     expect(rates).toEqual([2.5]);
     expect(input.hidden).toBe(true);
-    expect(label.textContent).toBe("2.5×");
+    // Always two decimals so the readout (and the whole bar) keeps a
+    // constant width — "2.50×", never "2.5×" vs "2.05×" jitter.
+    expect(label.textContent).toBe("2.50×");
     bar.dispose();
   });
 
