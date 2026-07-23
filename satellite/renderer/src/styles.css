@@ -188,6 +188,22 @@ html, body, #app {
   top: 1px;
 }
 
+/* Current Claude subscription tier, next to the usage button. Matches
+   .nav-subtitle's treatment so the bar keeps one voice; the range-by-range
+   breakdown lives in the usage view, which is where a range exists. */
+.nav-plan {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--claude-mid);
+  align-self: center;
+  opacity: 0.7;
+  margin-right: 0.25rem;
+  white-space: nowrap;
+}
+
 .nav-spacer { flex: 1; }
 
 .nav-meta {
@@ -4989,6 +5005,26 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   text-transform: uppercase;
   color: var(--claude-mid);
   margin: 0;
+}
+
+/* Subscription tier for the visible range: a single tier ("Max"), or the
+   day composition when the range spans several ("40d Max · 10d Pro").
+   Follows the title and inherits its type treatment, a step quieter so it
+   reads as an annotation rather than a second heading. */
+.usage-plan {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 1px;
+  color: var(--claude-mid);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.usage-plan::before {
+  content: "·";
+  margin-right: 0.5rem;
+  opacity: 0.5;
 }
 
 .usage-chips {

@@ -29,7 +29,9 @@ import (
 // schemaVersion is bumped whenever the DDL below changes in a way that
 // needs a migration. Today migrations are additive (CREATE TABLE/INDEX IF
 // NOT EXISTS) so a fresh open of an old DB just adds the missing objects.
-const schemaVersion = 1
+//
+// v2 added plan_samples (the account's subscription tier over time).
+const schemaVersion = 2
 
 // DBFilename is the SQLite file name inside the store directory.
 const DBFilename = "usage.db"
@@ -217,6 +219,20 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   first_seen   INTEGER NOT NULL,
   last_seen    INTEGER NOT NULL
 );
+
+-- The account's subscription tier over time. Written only when the tier
+-- CHANGES, because a plan is state, not an event: the value in force at
+-- any instant is the latest row at or before it. That is the same
+-- forward-fill reading the usage view already applies to quota, and it
+-- keeps a table that would otherwise be pure repetition down to a handful
+-- of rows a year.
+CREATE TABLE IF NOT EXISTS plan_samples (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts              INTEGER NOT NULL,
+  subscription    TEXT    NOT NULL,           -- 'pro'|'max'|'team'|'enterprise'|'none'
+  rate_limit_tier TEXT    NOT NULL DEFAULT '' -- e.g. 'default_claude_max_20x'
+);
+CREATE INDEX IF NOT EXISTS idx_plan_ts ON plan_samples(ts);
 `
 
 func (s *Store) migrate() error {

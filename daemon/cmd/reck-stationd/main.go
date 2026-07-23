@@ -43,6 +43,9 @@ func main() {
 		noInstallHooks = flag.Bool("no-install-hooks", false, "skip auto-installing Claude Code hooks at startup")
 		modeFlag       = flag.String("mode", string(agent.ModeStation), "host posture: station (default; daemon runs on the always-on station Mac) or local (daemon runs on the user's laptop alongside Satellite)")
 		launcherPath   = flag.String("pane-launcher", defaultPaneLauncherPath(), "absolute path to the reck-pane-launcher helper binary; empty disables the helper and reverts to in-process pane spawn (issue #225)")
+
+		quotaPollInterval = flag.Duration("usage-poll-interval", usage.DefaultQuotaPollInterval,
+			"how often to poll account-level 5h/7d quota, independent of pane activity; 0 disables polling")
 	)
 	flag.Parse()
 
@@ -347,6 +350,8 @@ func main() {
 	var usageStore *usage.Store
 	var usageIngester *usage.Ingester
 	var usageBackfiller *usage.Backfiller
+	var usageQuotaPoller *usage.QuotaPoller
+	var usagePlanProbe *usage.PlanProbe
 	if usageDir := usage.DefaultDir(); usageDir != "" {
 		if store, err := usage.Open(usageDir); err != nil {
 			logger.Warn("usage telemetry unavailable", "err", err, "dir", usageDir)
@@ -354,7 +359,9 @@ func main() {
 			usageStore = store
 			usageIngester = usage.NewIngester(store)
 			usageBackfiller = usage.NewBackfiller(store, "")
-			logger.Info("usage telemetry ready", "dir", usageDir)
+			usageQuotaPoller = usage.NewQuotaPoller(store)
+			usagePlanProbe = usage.NewPlanProbe(store)
+			logger.Info("usage telemetry ready", "dir", usageDir, "quota_poll", *quotaPollInterval)
 		}
 	}
 
@@ -405,6 +412,19 @@ func main() {
 	// Flush any usage samples the change-gate withheld under the per-session
 	// rate cap. Writes nothing for idle sessions — no heartbeat rows.
 	startBackground(func(ctx context.Context) { usage.RunSampler(ctx, usageIngester, time.Minute) })
+	// Poll account-level 5h/7d quota on a timer. The statusline path only
+	// reports quota as a side effect of a Claude API response, so without
+	// this the series goes blind whenever panes are idle, quota is spent
+	// elsewhere, or a window resets. Unlike the sampler this DOES write
+	// unconditionally, so a gap means the poller was down.
+	startBackground(func(ctx context.Context) {
+		usage.RunQuotaPoller(ctx, usageQuotaPoller, *quotaPollInterval)
+	})
+	// Record the account's subscription tier (change-only), so quota
+	// percentages can be read against the plan they are a percentage of.
+	startBackground(func(ctx context.Context) {
+		usage.RunPlanProbe(ctx, usagePlanProbe, usage.DefaultPlanProbeInterval)
+	})
 	// Backfill authoritative per-turn token counts from each live Claude
 	// session's JSONL transcript (deduped by message_id). Claude panes are
 	// exactly the panes carrying a SessionID.

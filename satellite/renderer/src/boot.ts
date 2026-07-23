@@ -578,6 +578,18 @@ export async function boot(splash?: StartupSplashController) {
   });
   appBar.setRailExpanded(railMode === "expanded");
   appBar.setTheme(theme);
+  // Subscription tier for the app-bar badge. Best-effort and fire-and-
+  // forget: a plan changes a handful of times a year, so one read at boot
+  // is plenty. A station without usage tracking — or one that hasn't
+  // observed a plan yet — simply leaves the badge hidden.
+  void (async () => {
+    try {
+      const summary = await apiForHost(primaryHost).getUsageSummary();
+      appBar.setPlan(summary.enabled ? summary.plan?.subscription : undefined);
+    } catch (err) {
+      console.warn("[boot] usage summary fetch failed", err);
+    }
+  })();
   // propagate initial theme to the pane layout (for newly mounted terminals)
   // done after layout is constructed below
 
