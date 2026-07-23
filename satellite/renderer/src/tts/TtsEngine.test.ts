@@ -117,6 +117,9 @@ function makeEngine(synth: StubSynth, opts: { restartDebounceMs?: number } = {})
     // Default to 0 so existing tests keep their synchronous semantics;
     // the dedicated rapid-drag test below opts back into the real default.
     restartDebounceMs: opts.restartDebounceMs ?? 0,
+    // Synchronous speak in tests (the real default defers 80ms after a
+    // cancel to avoid the macOS same-tick cancel→speak wedge).
+    cancelCooldownMs: 0,
   });
 }
 
@@ -242,18 +245,37 @@ describe("TtsEngine.stop / pause / resume", () => {
     expect(synth.paused).toBe(false);
   });
 
-  it("pause() pauses the synth", () => {
-    engine.start(chunkOfWords(["a"]));
+  // synth.pause() progressively wedges macOS Chromium's speech service
+  // (speech works after app launch, then dies for the whole process).
+  // The engine therefore NEVER calls synth.pause(): pause is implemented
+  // as cancel-and-remember, resume as re-speak-from-last-boundary.
+  it("pause() cancels instead of pausing the global queue", () => {
+    engine.start(chunkOfWords(["a", "b", "c"]));
+    const cancelsAfterStart = synth.cancelCount;
     engine.pause();
-    expect(synth.pauseCount).toBe(1);
+    expect(synth.pauseCount).toBe(0);
+    expect(synth.cancelCount).toBe(cancelsAfterStart + 1);
+    expect(engine.isPaused()).toBe(true);
   });
 
-  it("resume() resumes the synth", () => {
-    engine.start(chunkOfWords(["a"]));
-    const resumesAfterStart = synth.resumeCount;
+  it("resume() re-speaks from the last word boundary", () => {
+    engine.start(chunkOfWords(["aa", "bb", "cc"]));
+    synth.spoken[0].fireBoundary(3, 2); // cursor on "bb"
     engine.pause();
+    const spokenBefore = synth.spoken.length;
     engine.resume();
-    expect(synth.resumeCount).toBe(resumesAfterStart + 1);
+    expect(engine.isPaused()).toBe(false);
+    expect(synth.spoken.length).toBe(spokenBefore + 1);
+    expect(synth.spoken[spokenBefore].text).toBe("bb cc");
+  });
+
+  it("resume() with no boundary progress re-speaks the whole chunk", () => {
+    engine.start(chunkOfWords(["aa", "bb"]));
+    engine.pause();
+    const spokenBefore = synth.spoken.length;
+    engine.resume();
+    expect(synth.spoken.length).toBe(spokenBefore + 1);
+    expect(synth.spoken[spokenBefore].text).toBe("aa bb");
   });
 
   it("isSpeaking reflects synth.speaking", () => {
@@ -263,7 +285,7 @@ describe("TtsEngine.stop / pause / resume", () => {
     expect(engine.isSpeaking()).toBe(false);
   });
 
-  it("isPaused reflects synth.paused", () => {
+  it("isPaused reflects the engine's pause state", () => {
     engine.start(chunkOfWords(["a"]));
     engine.pause();
     expect(engine.isPaused()).toBe(true);
@@ -272,13 +294,12 @@ describe("TtsEngine.stop / pause / resume", () => {
   });
 });
 
-describe("TtsEngine paused-queue wedge (pause → cancel → speak)", () => {
-  // pause() pauses the GLOBAL SpeechSynthesis queue and cancel() empties
-  // the queue WITHOUT unpausing it. So pause → stop/re-speak used to leave
-  // the queue paused forever: every later speak() (any surface, any pane)
-  // sat silently queued until app restart, and the heartbeat couldn't
-  // rescue it because a never-started utterance has speaking === false.
-  // The engine must therefore clear the paused state whenever it cancels.
+describe("TtsEngine stale global pause (external wedge recovery)", () => {
+  // The engine itself never calls synth.pause() anymore, but the GLOBAL
+  // SpeechSynthesis queue can still be paused from outside (another
+  // surface, a previous app state). cancel() does NOT unpause it, so a
+  // stale pause would silently swallow every later speak(). The engine
+  // must clear the paused state whenever it starts or stops.
   let synth: StubSynth;
   let engine: TtsEngine;
 
@@ -289,25 +310,25 @@ describe("TtsEngine paused-queue wedge (pause → cancel → speak)", () => {
 
   afterEach(() => engine.dispose());
 
-  it("stop() while paused clears the global paused state", () => {
+  it("stop() clears an externally-paused global queue", () => {
     engine.start(chunkOfWords(["a", "b"]));
-    engine.pause();
+    synth.paused = true; // wedged from outside
     engine.stop();
     expect(synth.paused).toBe(false);
   });
 
-  it("start() while paused un-wedges the queue so the new utterance can play", () => {
+  it("start() over an externally-paused queue un-wedges it", () => {
     engine.start(chunkOfWords(["a", "b"]));
-    engine.pause();
+    synth.paused = true;
     engine.start(chunkOfWords(["c", "d"]));
     expect(synth.paused).toBe(false);
     expect(synth.spoken).toHaveLength(2);
   });
 
-  it("start() clears a paused queue even with no current utterance (ended while paused)", () => {
+  it("start() clears a paused queue even with no current utterance", () => {
     engine.start(chunkOfWords(["a"]));
-    engine.pause();
-    synth.spoken[0].fireEnd(); // engine drops currentUtt; queue stays paused
+    synth.spoken[0].fireEnd();
+    synth.paused = true;
     engine.start(chunkOfWords(["b"]));
     expect(synth.paused).toBe(false);
     expect(synth.spoken).toHaveLength(2);
@@ -558,14 +579,74 @@ describe("TtsEngine setRate debounce (rapid drag coalescing)", () => {
   });
 });
 
-describe("TtsEngine 10-second stall workaround (heartbeat)", () => {
+describe("TtsEngine cancel→speak cooldown (macOS same-tick wedge)", () => {
+  // Same-tick cancel()+speak() intermittently wedges macOS Chromium's
+  // speech service. With a non-zero cooldown, the actual speak defers,
+  // and anything newer (another start, stop, pause) drops it.
+  let synth: StubSynth;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    synth = new StubSynth();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function mkCooldown(): TtsEngine {
+    return new TtsEngine({
+      synth: synth as unknown as SpeechSynthesis,
+      UtteranceCtor: StubUtterance as unknown as typeof SpeechSynthesisUtterance,
+      heartbeatIntervalMs: 100_000, // watchdog out of the way
+      restartDebounceMs: 0,
+      cancelCooldownMs: 50,
+    });
+  }
+
+  it("defers the speak past the cooldown", () => {
+    const engine = mkCooldown();
+    engine.start(chunkOfWords(["aa", "bb"]));
+    expect(synth.spoken).toHaveLength(0);
+    vi.advanceTimersByTime(50);
+    expect(synth.spoken).toHaveLength(1);
+    engine.dispose();
+  });
+
+  it("a rapid second start supersedes the first — only the newest speaks", () => {
+    const engine = mkCooldown();
+    engine.start(chunkOfWords(["old", "text"]));
+    engine.start(chunkOfWords(["new", "text"]));
+    vi.advanceTimersByTime(200);
+    expect(synth.spoken).toHaveLength(1);
+    expect(synth.spoken[0].text).toBe("new text");
+    engine.dispose();
+  });
+
+  it("stop() during the cooldown drops the deferred speak", () => {
+    const engine = mkCooldown();
+    engine.start(chunkOfWords(["aa"]));
+    engine.stop();
+    vi.advanceTimersByTime(200);
+    expect(synth.spoken).toHaveLength(0);
+    engine.dispose();
+  });
+});
+
+describe("TtsEngine stall watchdog (no-progress recovery)", () => {
+  // Replaces the old pause()+resume() heartbeat: synth.pause() is exactly
+  // the call that progressively wedges macOS Chromium's speech service, so
+  // the engine must NEVER emit it. Instead a watchdog watches for word-
+  // boundary progress; after two silent intervals it cancels and re-speaks
+  // from the last spoken word, and after repeated failed recoveries it
+  // gives up with an 'error' so the UI can reset.
   let synth: StubSynth;
   let engine: TtsEngine;
 
   beforeEach(() => {
     vi.useFakeTimers();
     synth = new StubSynth();
-    engine = makeEngine(synth); // heartbeat 100ms in test
+    engine = makeEngine(synth); // watchdog interval 100ms in test
   });
 
   afterEach(() => {
@@ -573,35 +654,83 @@ describe("TtsEngine 10-second stall workaround (heartbeat)", () => {
     vi.useRealTimers();
   });
 
-  it("calls pause+resume on a heartbeat cadence while speaking", () => {
+  it("never calls synth.pause(), even across many intervals", () => {
     engine.start(chunkOfWords(["a"]));
-    const resumesAfterStart = synth.resumeCount;
+    vi.advanceTimersByTime(1000);
     expect(synth.pauseCount).toBe(0);
-    vi.advanceTimersByTime(100);
-    expect(synth.pauseCount).toBe(1);
-    expect(synth.resumeCount).toBe(resumesAfterStart + 1);
-    vi.advanceTimersByTime(100);
-    expect(synth.pauseCount).toBe(2);
-    expect(synth.resumeCount).toBe(resumesAfterStart + 2);
   });
 
-  it("does NOT heartbeat after stop()", () => {
+  it("leaves a progressing stream alone", () => {
+    engine.start(chunkOfWords(["aa", "bb", "cc", "dd", "ee", "ff"]));
+    const cancels = synth.cancelCount;
+    const spoken = synth.spoken.length;
+    for (let i = 0; i < 5; i++) {
+      synth.spoken[synth.spoken.length - 1].fireBoundary(i * 3, 2);
+      vi.advanceTimersByTime(100);
+    }
+    expect(synth.cancelCount).toBe(cancels);
+    expect(synth.spoken.length).toBe(spoken);
+  });
+
+  it("cancels and re-speaks from the last word after two stalled intervals", () => {
+    engine.start(chunkOfWords(["aa", "bb", "cc"]));
+    synth.spoken[0].fireBoundary(3, 2); // progress to "bb", then silence
+    vi.advanceTimersByTime(100); // interval 1: progress seen
+    const cancels = synth.cancelCount;
+    const spoken = synth.spoken.length;
+    vi.advanceTimersByTime(100); // interval 2: stall strike 1
+    expect(synth.spoken.length).toBe(spoken);
+    vi.advanceTimersByTime(100); // interval 3: stall strike 2 → recover
+    expect(synth.cancelCount).toBeGreaterThan(cancels);
+    expect(synth.spoken.length).toBe(spoken + 1);
+    expect(synth.spoken[spoken].text).toBe("bb cc");
+  });
+
+  it("gives up with an 'error' after repeated failed recoveries", () => {
+    const errors: Error[] = [];
+    engine.on("error", (e) => errors.push(e));
+    engine.start(chunkOfWords(["aa", "bb"]));
+    // No boundary ever fires; every recovery re-speaks and stalls again.
+    vi.advanceTimersByTime(3000);
+    expect(errors.length).toBe(1);
+    expect(errors[0].message).toContain("unresponsive");
+    // Engine is reset — no further recoveries after giving up.
+    const spoken = synth.spoken.length;
+    vi.advanceTimersByTime(1000);
+    expect(synth.spoken.length).toBe(spoken);
+  });
+
+  it("does NOT run after stop()", () => {
     engine.start(chunkOfWords(["a"]));
     engine.stop();
-    const beforePauses = synth.pauseCount;
+    const cancels = synth.cancelCount;
+    const spoken = synth.spoken.length;
     vi.advanceTimersByTime(500);
-    expect(synth.pauseCount).toBe(beforePauses);
+    expect(synth.cancelCount).toBe(cancels);
+    expect(synth.spoken.length).toBe(spoken);
   });
 
-  it("does NOT heartbeat while user-initiated pause is active", () => {
+  it("does NOT run while user-paused", () => {
     engine.start(chunkOfWords(["a"]));
     engine.pause();
-    const beforePauses = synth.pauseCount;
-    const beforeResumes = synth.resumeCount;
+    const cancels = synth.cancelCount;
+    const spoken = synth.spoken.length;
     vi.advanceTimersByTime(500);
-    // No additional pause/resume from heartbeat — would un-pause the user.
-    expect(synth.pauseCount).toBe(beforePauses);
-    expect(synth.resumeCount).toBe(beforeResumes);
+    expect(synth.cancelCount).toBe(cancels);
+    expect(synth.spoken.length).toBe(spoken);
+  });
+
+  it("does not restart a degenerate-but-audible stream (charIndex always 0)", () => {
+    engine.start(chunkOfWords(["aa", "bb", "cc"]));
+    const spoken = synth.spoken.length;
+    // Boundary EVENTS keep arriving (audio is progressing) but their
+    // charIndex is garbage (all zeros). The watchdog must treat events
+    // as progress — restarting would loop forever.
+    for (let i = 0; i < 20; i++) {
+      synth.spoken[synth.spoken.length - 1].fireBoundary(0, 2);
+      vi.advanceTimersByTime(50);
+    }
+    expect(synth.spoken.length).toBe(spoken);
   });
 });
 
@@ -830,6 +959,7 @@ describe("utterance segmentation (long tool payloads must not wedge)", () => {
       UtteranceCtor: StubUtterance as unknown as typeof SpeechSynthesisUtterance,
       heartbeatIntervalMs: 100,
       restartDebounceMs: 0,
+      cancelCooldownMs: 0,
       maxUtteranceChars: max,
     });
   }
@@ -888,23 +1018,22 @@ describe("utterance segmentation (long tool payloads must not wedge)", () => {
     expect(synth.spoken).toHaveLength(1);
   });
 
-  it("holds the next segment when a pause races a segment end, then speaks it on resume (no wedge)", () => {
+  it("a pause racing a segment end never wedges: end is ignored, resume re-speaks", () => {
     const engine = makeEngineCapped(10);
     engine.start(chunkOfWords(["aaaa", "bbbb", "cccc", "dddd"])); // 2 segments
     expect(synth.spoken).toHaveLength(1);
-    // User pauses just as segment 0 finishes — pause() lands, then the
-    // browser still delivers the finishing utterance's end.
+    // User pauses just as segment 0 finishes — cancel-based pause detaches
+    // the utterance, so the racing end event is simply ignored.
     engine.pause();
-    expect(synth.paused).toBe(true);
+    expect(synth.pauseCount).toBe(0); // never the wedge-prone synth.pause()
     synth.spoken[0].fireEnd();
-    // Segment 1 must NOT be pushed into the paused queue (that wedges forever).
+    // Nothing is spoken while paused.
     expect(synth.spoken).toHaveLength(1);
-    expect(synth.paused).toBe(true);
-    // Resume runs the held segment.
+    // Resume re-speaks from the last word boundary (none fired → start);
+    // the 10-char segment cap slices "aaaa bbbb " back off the full chunk.
     engine.resume();
-    expect(synth.paused).toBe(false);
     expect(synth.spoken).toHaveLength(2);
-    expect(synth.spoken[1].text).toBe("cccc dddd");
+    expect(synth.spoken[1].text).toBe("aaaa bbbb ");
   });
 
   it("a rate change in the gap between segments restarts from the new segment, not the prior one", () => {
@@ -951,6 +1080,7 @@ describe("TtsEngine — reswap (recompute upcoming words on scroll)", () => {
       UtteranceCtor: StubUtterance as unknown as typeof SpeechSynthesisUtterance,
       heartbeatIntervalMs: 100,
       restartDebounceMs: 0,
+      cancelCooldownMs: 0,
       respliceMode,
     });
   }
@@ -1032,9 +1162,11 @@ describe("TtsEngine — reswap (recompute upcoming words on scroll)", () => {
     const engine = mk();
     engine.start(chunkOfWords(["alpha", "beta", "gamma", "delta"]));
     synth.spoken[0].fireBoundary(0, 5);
-    engine.pause();
+    engine.pause(); // cancel-based pause cancels once itself
+    const cancelsAfterPause = synth.cancelCount;
     engine.reswap(chunkOfWords(["alpha", "beta", "DELTA", "delta"]));
-    expect(synth.cancelCount).toBe(0);
+    // The reswap itself must neither cancel nor speak anything.
+    expect(synth.cancelCount).toBe(cancelsAfterPause);
     expect(synth.spoken).toHaveLength(1);
     engine.dispose();
   });

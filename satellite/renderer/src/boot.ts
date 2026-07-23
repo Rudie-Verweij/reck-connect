@@ -59,7 +59,7 @@ import { renderSettings } from "./ui/settings-view";
 import { addProjectFlow } from "./ui/add-project-dialog";
 import { confirmDeleteProject } from "./ui/delete-project-dialog";
 import { confirmRestoreProject } from "./ui/confirm-restore-dialog";
-import { initTts } from "./tts/initTts";
+import { initTts, type TtsHandle } from "./tts/initTts";
 import { initTranscription, type TranscriptionHandle } from "./transcription/initTranscription";
 import { TerminalPaneAdapter } from "./tts/TerminalPaneAdapter";
 import { initSearch } from "./search/initSearch";
@@ -1235,6 +1235,7 @@ export async function boot(splash?: StartupSplashController) {
   // Voice dictation handle (#67), assigned by the async initTranscription
   // below. The layout's mic-button callback and the ⌘⇧V hotkey route here.
   let dictationHandle: TranscriptionHandle | null = null;
+  let ttsHandle: TtsHandle | null = null;
 
   const layout: PaneLayout = new PaneLayout({
     root: layoutRoot,
@@ -2232,7 +2233,7 @@ export async function boot(splash?: StartupSplashController) {
   // doesn't expose speechSynthesis (e.g. headless test harness).
   void (async () => {
     try {
-      await initTts({
+      ttsHandle = await initTts({
         getActiveSpeakSurface: () => {
           const rec = layout.getActiveTerminalRecord();
           if (!rec) return null;
@@ -2406,6 +2407,11 @@ export async function boot(splash?: StartupSplashController) {
 
   async function selectProject(projectId: string) {
     if (currentProjectId === projectId) return;
+
+    // Stop any in-flight read-aloud: the pane being spoken is about to
+    // unmount, and cancel/speak churn against a dying surface is one of
+    // the sequences that wedges macOS's speech service process-wide.
+    ttsHandle?.stop();
 
     // Cancel any in-flight fetch from the prior selection; reserve a
     // fresh sequence number. A newer switch is authoritative — the

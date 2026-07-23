@@ -77,15 +77,32 @@ export interface UsageHistogramBin {
   seven_day_peak?: number;
 }
 
+/** The account's subscription tier in force at the end of one local day.
+ * `subscription` is `"pro" | "max" | "team" | "enterprise" | "none"`, or
+ * `"unknown"` for days before the daemon first observed a plan. `day` is
+ * the local-midnight bin start in unix seconds. */
+export interface UsagePlanDay {
+  day: number;
+  subscription: string;
+}
+
 /** Envelope for `GET /usage/histogram`. `enabled: false` means the
- * daemon runs without a usage store (bins/bucket absent). */
+ * daemon runs without a usage store (bins/bucket absent).
+ *
+ * `plan_days` / `plan_summary` are ALWAYS day-granular regardless of
+ * `bucket`: zooming narrows the range but never subdivides the plan.
+ * `plan_summary` counts days per tier (e.g. `{max: 40, pro: 5}`). Both
+ * are absent when the plan lookup failed. */
 export interface UsageHistogramResponse {
   enabled: boolean;
   bucket?: UsageHistogramBucket;
   since?: number;
   until?: number;
   bins?: UsageHistogramBin[];
+  plan_days?: UsagePlanDay[];
+  plan_summary?: Record<string, number>;
 }
+
 
 /** Caller-side params for `getUsageHistogram`. `tzOffsetMin` is minutes
  * east of UTC (i.e. `-new Date().getTimezoneOffset()`), so day/month
@@ -237,6 +254,7 @@ export class ApiClient {
     }
     return this.fetch<UsageHistogramResponse>(`/usage/histogram?${q}`, init);
   }
+
 
   createPane(
     projectId: string,

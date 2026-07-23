@@ -40,6 +40,7 @@ import {
   widthsForSpan,
   type Granularity,
 } from "./usage-range";
+import { planRangeLabel } from "./usage-plan";
 import { iconClose } from "./icons";
 
 export interface UsageOverlayOpts {
@@ -98,6 +99,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
     <div class="usage-card" role="dialog" aria-label="Usage" tabindex="-1">
       <div class="usage-head">
         <h2 class="usage-title">Usage</h2>
+        <span class="usage-plan" hidden></span>
         <div class="usage-chips" role="tablist"></div>
         <button class="icon-btn usage-close" title="Close (Esc)">${iconClose}</button>
       </div>
@@ -125,6 +127,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
   `;
   const card = overlay.querySelector(".usage-card") as HTMLElement;
   const chipsEl = overlay.querySelector(".usage-chips") as HTMLElement;
+  const planEl = overlay.querySelector(".usage-plan") as HTMLElement;
   const periodEl = overlay.querySelector(".usage-period") as HTMLElement;
   const drillUpBtn = overlay.querySelector(".usage-drill-up") as HTMLButtonElement;
   const nextBtn = overlay.querySelector('.usage-pager[data-dir="1"]') as HTMLButtonElement;
@@ -340,11 +343,13 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
       if (ac.signal.aborted) return;
       if (!resp.enabled) {
         bins = [];
+        renderPlan(undefined);
         renderChart();
         note("Usage tracking isn't enabled on this station.");
         return;
       }
       bins = resp.bins ?? [];
+      renderPlan(resp.plan_summary);
       renderChart();
       if (!bins.some((b) => b.total > 0 || b.five_hour_peak !== undefined)) {
         note("No usage recorded this period — Claude panes write here as they work.");
@@ -353,6 +358,7 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
       if (ac.signal.aborted) return;
       console.warn("[usage-view] histogram fetch failed", err);
       bins = [];
+      renderPlan(undefined);
       renderChart();
       note("Couldn't reach the station — check the connection and try again.");
     } finally {
@@ -360,6 +366,18 @@ export function openUsageOverlay(opts: UsageOverlayOpts): void {
         chartWrap.classList.remove("loading");
       }
     }
+  }
+
+  // Plan attribution for the visible range. Always day-granular: a range
+  // on one tier reads as that tier, a range spanning several reads as its
+  // day composition. Hidden entirely when there is nothing to say, so the
+  // header doesn't carry a dangling separator on a station that has never
+  // recorded a plan.
+  function renderPlan(summary: Record<string, number> | undefined): void {
+    const label = planRangeLabel(summary);
+    planEl.textContent = label;
+    planEl.hidden = label === "";
+    planEl.title = label === "" ? "" : `Subscription plan over this period: ${label}`;
   }
 
   function cssVar(name: string): string {

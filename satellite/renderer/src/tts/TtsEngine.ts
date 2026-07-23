@@ -36,6 +36,13 @@ export interface TtsEngineOptions {
    * a typical drag. Set to 0 in tests for synchronous semantics.
    */
   restartDebounceMs?: number;
+  /**
+   * Delay between a cancel() and the next speak(). Same-tick cancel→speak
+   * intermittently wedges macOS Chromium's speech service for the whole
+   * process (only an app restart recovers), so real playback waits one
+   * breath. Default 80ms; tests set 0 for synchronous semantics.
+   */
+  cancelCooldownMs?: number;
   /** Override the per-utterance char cap (see MAX_UTTERANCE_CHARS). Tests
    *  set a small value to exercise multi-segment speech cheaply. */
   maxUtteranceChars?: number;
@@ -188,6 +195,10 @@ export class TtsEngine {
   private readonly restartDebounceMs: number;
   private readonly maxUtteranceChars: number;
   private readonly respliceMode: "scheduled" | "immediate";
+  private readonly cancelCooldownMs: number;
+  // Bumped on every speakInternal/stop/pause; a deferred post-cooldown
+  // speak aborts when its captured generation is stale.
+  private speakGeneration = 0;
   private rateRestartTimer: ReturnType<typeof setTimeout> | null = null;
   // A recomputed chunk awaiting a scheduled swap: playback continues on the
   // current chunk until lastBoundaryCharIndex reaches `divCharOld` (or the
@@ -198,6 +209,15 @@ export class TtsEngine {
     | null = null;
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  // Log marker: "audio actually started" (first boundary after a speak).
+  private firstBoundarySeen = true;
+  // Stall watchdog state. Progress = raw boundary EVENTS (any name, even
+  // degenerate charIndex-0 streams — those are audible, just unmappable),
+  // so the watchdog never restarts a stream that is actually playing.
+  private boundaryEvents = 0;
+  private watchdogSeenEvents = 0;
+  private stallStrikes = 0;
+  private recoveries = 0;
   private currentUtt: SpeechSynthesisUtterance | null = null;
   private currentChunk: SpokenChunk | null = null;
   private currentVoice: SpeechSynthesisVoice | null = null;
@@ -244,6 +264,7 @@ export class TtsEngine {
     this.restartDebounceMs = opts.restartDebounceMs ?? 60;
     this.maxUtteranceChars = opts.maxUtteranceChars ?? MAX_UTTERANCE_CHARS;
     this.respliceMode = opts.respliceMode ?? "scheduled";
+    this.cancelCooldownMs = opts.cancelCooldownMs ?? 80;
   }
 
   on<K extends keyof EventMap>(event: K, cb: Listener<EventMap[K]>): () => void {
@@ -268,6 +289,8 @@ export class TtsEngine {
     this.rate = rate;
     this.lastBoundaryCharIndex = 0;
     this.currentVoice = opts.voice ?? null;
+    // A fresh logical playback gets a fresh recovery budget.
+    this.recoveries = 0;
     this.speakInternal(chunk, this.currentVoice, rate);
   }
 
@@ -299,22 +322,6 @@ export class TtsEngine {
     }
     this.stopHeartbeat();
 
-    // Speak the sanitized text but keep the ORIGINAL in
-    // currentChunk: boundary `word` extraction, sliceChunkFrom, and every
-    // adapter's rangeMap continue to index the original string (same
-    // length by construction, so charIndex values are interchangeable).
-    const spokenText = sanitizeUtteranceText(chunk.text);
-    const utt = new this.UtteranceCtor(spokenText);
-    utt.text = spokenText;
-    utt.rate = rate;
-    if (voice) {
-      utt.voice = voice;
-      // Keep lang consistent with the voice; with both unset Chromium
-      // resolves a platform "default" that on macOS can be a novelty
-      // voice (Albert) when the system voice is Siri.
-      utt.lang = voice.lang;
-    }
-
     this.currentChunk = chunk;
     this.currentVoice = voice;
     this.rate = rate;
@@ -330,6 +337,22 @@ export class TtsEngine {
       for (const cb of this.endListeners) cb();
       return;
     }
+    // cancel() → speak() in the same tick is the OTHER sequence (besides
+    // pause(), see pause()) that intermittently wedges macOS Chromium's
+    // speech service — rapid ⌘⇧S restarts and reswap churn eventually
+    // kill audio for the whole process. Give the service one breath
+    // between cancel and the next speak. A generation counter drops the
+    // deferred speak if anything newer (start/stop/pause) intervened.
+    if (this.cancelCooldownMs > 0) {
+      const gen = ++this.speakGeneration;
+      setTimeout(() => {
+        if (gen !== this.speakGeneration) return;
+        if (!this.currentChunk) return;
+        this.speakSegment();
+      }, this.cancelCooldownMs);
+      return;
+    }
+    this.speakGeneration++;
     this.speakSegment();
   }
 
@@ -360,7 +383,15 @@ export class TtsEngine {
     const utt = new this.UtteranceCtor(spokenText);
     utt.text = spokenText;
     utt.rate = this.rate;
-    if (this.currentVoice) utt.voice = this.currentVoice;
+    if (this.currentVoice) {
+      utt.voice = this.currentVoice;
+      // Keep lang consistent with the voice; with both unset Chromium
+      // resolves a platform "default" that on macOS can be a novelty
+      // voice (Albert) when the system voice is Siri. (Regression: the
+      // segmentation refactor set this only on an orphan utterance that
+      // was never spoken.)
+      utt.lang = this.currentVoice.lang;
+    }
 
     this.currentUtt = utt;
 
@@ -369,10 +400,20 @@ export class TtsEngine {
     utt.onerror = (ev: SpeechSynthesisErrorEvent) => this.handleError(ev);
 
     this.synth.speak(utt);
+    // Post-speak snapshot: the single most diagnostic line for silent
+    // failures (queued-but-never-started utterances show speaking=false
+    // or paused=true here and then no boundary line ever follows).
+    console.info(
+      `[tts] segment ${this.segIndex + 1}/${this.segments.length}: ` +
+        `${spokenText.length} chars · after speak(): ` +
+        `speaking=${this.synth.speaking} pending=${this.synth.pending} paused=${this.synth.paused}`,
+    );
+    this.firstBoundarySeen = false;
     this.startHeartbeat();
   }
 
   stop(): void {
+    this.speakGeneration++; // drop any deferred post-cooldown speak
     if (this.rateRestartTimer) {
       clearTimeout(this.rateRestartTimer);
       this.rateRestartTimer = null;
@@ -395,23 +436,43 @@ export class TtsEngine {
     this.stopHeartbeat();
   }
 
+  /**
+   * Pause WITHOUT synth.pause(): on macOS, Chromium implements pause()
+   * against the OS speech service in a way that progressively wedges the
+   * whole renderer process — speech works after app launch, then every
+   * utterance goes speaking=true with no audio until restart (observed
+   * live in the packaged Satellite; a bare utterance in DevTools showed
+   * the same). So pause is cancel-and-remember and resume re-speaks from
+   * the last word boundary — same machinery as a mid-flight rate change.
+   */
   pause(): void {
+    if (this.userPaused) return;
+    this.speakGeneration++; // drop any deferred post-cooldown speak
     this.userPaused = true;
     // Drop any scheduled swap — its divergence point indexes the pre-pause
     // chunk; the next render after resume recomputes a fresh one.
     this.pendingSwap = null;
-    this.synth.pause();
+    this.segmentPending = false;
+    this.stopHeartbeat();
+    if (this.currentUtt) this.detachUtterance(this.currentUtt);
+    this.currentUtt = null;
+    this.synth.cancel();
+    // Clear any stale EXTERNAL pause so resume()'s re-speak can play.
+    this.synth.resume();
   }
 
   resume(): void {
+    if (!this.userPaused) return;
     this.userPaused = false;
-    this.synth.resume();
-    // If a pause raced a segment's end, handleEnd deferred the next segment
-    // rather than speak into the paused queue. Start it now.
-    if (this.segmentPending) {
-      this.segmentPending = false;
-      this.speakSegment();
+    if (!this.currentChunk) return;
+    const remaining = sliceChunkFrom(this.currentChunk, this.lastBoundaryCharIndex);
+    if (!remaining.text) {
+      // Paused exactly at the end — nothing left; finish cleanly.
+      this.currentChunk = null;
+      for (const cb of this.endListeners) cb();
+      return;
     }
+    this.speakInternal(remaining, this.currentVoice, this.rate);
   }
 
   setRate(rate: number): void {
@@ -552,7 +613,9 @@ export class TtsEngine {
   }
 
   isPaused(): boolean {
-    return this.synth.paused;
+    // Engine-level state: pause is cancel-based (see pause()), so the
+    // global synth.paused flag is deliberately never our source of truth.
+    return this.userPaused;
   }
 
   async getVoices(): Promise<SpeechSynthesisVoice[]> {
@@ -577,9 +640,17 @@ export class TtsEngine {
   }
 
   private handleBoundary(ev: SpeechSynthesisEvent): void {
+    // Raw event count feeds the stall watchdog BEFORE any filtering:
+    // every boundary event (word, sentence, degenerate) proves audio is
+    // progressing.
+    this.boundaryEvents++;
     if (ev.name !== "word") return;
     if (!this.currentChunk) return;
     if (this.boundaryDegenerate) return;
+    if (!this.firstBoundarySeen) {
+      this.firstBoundarySeen = true;
+      console.info("[tts] audio started (first word boundary)");
+    }
     // The OS reports charIndex relative to the current SEGMENT's utterance;
     // shift by segBase to index the whole chunk (rangeMap / word / rate
     // restart all work in chunk coordinates).
@@ -674,6 +745,7 @@ export class TtsEngine {
   }
 
   private handleError(ev: SpeechSynthesisErrorEvent): void {
+    console.warn(`[tts] utterance error: ${ev.error || "unknown"}`);
     this.stopHeartbeat();
     // Reset all in-flight state so an error partway through a multi-segment
     // chunk doesn't leave the engine stuck "mid-chunk" (segments that would
@@ -700,14 +772,63 @@ export class TtsEngine {
     u.onresume = null;
   }
 
+  /**
+   * Stall watchdog (replaces the old pause()+resume() heartbeat, which is
+   * exactly the call sequence that wedges macOS Chromium's speech service
+   * — see pause()). Watches for boundary-event progress; after two silent
+   * intervals it cancels and re-speaks from the last spoken word, and
+   * after repeated failed recoveries it gives up with an 'error' so the
+   * controller can reset the UI instead of showing a silent "playing".
+   */
   private startHeartbeat(): void {
     this.stopHeartbeat();
-    this.heartbeatTimer = setInterval(() => {
-      if (this.userPaused) return;
-      if (!this.synth.speaking) return;
-      this.synth.pause();
+    this.watchdogSeenEvents = this.boundaryEvents;
+    this.stallStrikes = 0;
+    this.heartbeatTimer = setInterval(
+      () => this.checkProgress(),
+      this.heartbeatIntervalMs,
+    );
+  }
+
+  private checkProgress(): void {
+    if (this.userPaused) return;
+    if (!this.currentChunk || !this.currentUtt) return;
+    if (this.boundaryEvents !== this.watchdogSeenEvents) {
+      this.watchdogSeenEvents = this.boundaryEvents;
+      this.stallStrikes = 0;
+      this.recoveries = 0;
+      return;
+    }
+    this.stallStrikes++;
+    if (this.stallStrikes < 2) return;
+    this.stallStrikes = 0;
+    if (this.recoveries >= 2) {
+      console.warn(
+        "[tts] speech engine unresponsive — the OS speech service looks " +
+          "wedged; restart the app to recover",
+      );
+      this.stopHeartbeat();
+      if (this.currentUtt) this.detachUtterance(this.currentUtt);
+      this.currentUtt = null;
+      this.currentChunk = null;
+      this.segments = [];
+      this.segIndex = 0;
+      this.segBase = 0;
+      this.segmentPending = false;
+      this.pendingSwap = null;
+      this.synth.cancel();
       this.synth.resume();
-    }, this.heartbeatIntervalMs);
+      const err = new Error("speech engine unresponsive");
+      for (const cb of this.errorListeners) cb(err);
+      return;
+    }
+    this.recoveries++;
+    console.warn(
+      "[tts] no speech progress — cancelling and re-speaking from the last spoken word",
+    );
+    const remaining = sliceChunkFrom(this.currentChunk, this.lastBoundaryCharIndex);
+    if (!remaining.text) return;
+    this.speakInternal(remaining, this.currentVoice, this.rate);
   }
 
   private stopHeartbeat(): void {

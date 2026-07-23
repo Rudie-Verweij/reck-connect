@@ -103,12 +103,22 @@ func (s *Server) handleUsageSummary(w nethttp.ResponseWriter, r *nethttp.Request
 		}
 		out = append(out, row)
 	}
-	writeJSON(w, map[string]any{
+	resp := map[string]any{
 		"enabled":    true,
 		"install_id": s.UsageStore.InstallID(),
 		"quota":      quotaToWire(quota),
 		"sessions":   out,
-	})
+	}
+	// Current subscription tier, for the app-bar badge. Absent until the
+	// plan probe has recorded one — a missing plan is not an error.
+	if plan, err := s.UsageStore.LatestPlan(); err == nil && plan != nil {
+		resp["plan"] = map[string]any{
+			"subscription":    plan.Subscription,
+			"rate_limit_tier": plan.RateLimitTier,
+			"ts":              plan.TS.Unix(),
+		}
+	}
+	writeJSON(w, resp)
 }
 
 // handleUsageSeries returns a time-series for plotting. Query params:
@@ -231,11 +241,29 @@ func (s *Server) handleUsageHistogram(w nethttp.ResponseWriter, r *nethttp.Reque
 		}
 		out = append(out, m)
 	}
-	writeJSON(w, map[string]any{
+	resp := map[string]any{
 		"enabled": true,
 		"bucket":  string(params.Bucket),
 		"since":   params.Since,
 		"until":   params.Until,
 		"bins":    out,
-	})
+	}
+
+	// Plan attribution rides along on the histogram call so the usage view
+	// gets it without a second round trip. It is ALWAYS per-day, whatever
+	// `bucket` the caller asked for: zooming changes the range, never the
+	// granularity of the plan. A store failure here degrades to "no plan
+	// info" rather than failing the whole histogram.
+	if days, err := s.UsageStore.PlanDays(params.Since, params.Until, params.TZOffsetMin); err == nil {
+		planDays := make([]map[string]any, 0, len(days))
+		for _, d := range days {
+			planDays = append(planDays, map[string]any{
+				"day":          d.Day,
+				"subscription": d.Subscription,
+			})
+		}
+		resp["plan_days"] = planDays
+		resp["plan_summary"] = usage.PlanSummary(days)
+	}
+	writeJSON(w, resp)
 }
