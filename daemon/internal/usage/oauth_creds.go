@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -66,6 +67,50 @@ func (c Credentials) Valid(now time.Time) bool {
 // CredentialSource yields the current credentials. Injected so the poller
 // can be tested without a keychain or a real home directory.
 type CredentialSource func() (Credentials, error)
+
+// credRefreshSkew re-reads a little before the token actually expires, so
+// a poll never fires with a token that lapses in flight.
+const credRefreshSkew = time.Minute
+
+// NewCachedCredentialSource wraps src so a successful read is reused until
+// the token is close to expiring.
+//
+// This matters most on macOS, where reading credentials means spawning
+// `security` to hit the login keychain: without caching, a 5-minute poll
+// is ~288 keychain reads a day for a token that only rotates every few
+// hours. On Linux it saves a much cheaper file read, but the behaviour is
+// worth keeping identical across platforms.
+//
+// Only successes are cached — an error always re-reads next time, so a
+// station that has just been authenticated starts working on the next
+// tick rather than waiting out a cache entry.
+func NewCachedCredentialSource(src CredentialSource, now func() time.Time) CredentialSource {
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	var (
+		mu     sync.Mutex
+		cached Credentials
+		ok     bool
+	)
+	return func() (Credentials, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if ok && cached.Valid(now().Add(credRefreshSkew)) {
+			return cached, nil
+		}
+		c, err := src()
+		if err != nil {
+			// Don't let a stale entry mask a credential store that has
+			// genuinely gone away.
+			ok = false
+			cached = Credentials{}
+			return c, err
+		}
+		cached, ok = c, true
+		return c, nil
+	}
+}
 
 // LoadCredentials reads and parses the platform credential store. It
 // returns ErrNoCredentials when nothing readable is present, and

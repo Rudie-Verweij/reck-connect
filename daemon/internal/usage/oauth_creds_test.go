@@ -154,3 +154,86 @@ func TestReadCredentialFile(t *testing.T) {
 		t.Errorf("blob = %q, want %q", got, want)
 	}
 }
+
+func TestCachedCredentialSource(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	clock := func() time.Time { return now }
+
+	t.Run("reuses a live token instead of re-reading", func(t *testing.T) {
+		calls := 0
+		src := NewCachedCredentialSource(func() (Credentials, error) {
+			calls++
+			return Credentials{Token: "tok", ExpiresAt: now.Add(4 * time.Hour)}, nil
+		}, clock)
+
+		for range 100 {
+			if _, err := src(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// This is the point of the cache: on macOS each miss spawns
+		// `security` to hit the login keychain.
+		if calls != 1 {
+			t.Errorf("underlying reads = %d, want 1", calls)
+		}
+	})
+
+	t.Run("re-reads once the token nears expiry", func(t *testing.T) {
+		calls := 0
+		src := NewCachedCredentialSource(func() (Credentials, error) {
+			calls++
+			return Credentials{Token: "tok", ExpiresAt: now.Add(30 * time.Second)}, nil
+		}, clock)
+
+		// Expires inside the refresh skew, so every call must re-read
+		// rather than hand out a token that lapses mid-flight.
+		src()
+		src()
+		if calls != 2 {
+			t.Errorf("underlying reads = %d, want 2", calls)
+		}
+	})
+
+	t.Run("never caches a failure", func(t *testing.T) {
+		calls := 0
+		fail := true
+		src := NewCachedCredentialSource(func() (Credentials, error) {
+			calls++
+			if fail {
+				return Credentials{}, ErrNoCredentials
+			}
+			return Credentials{Token: "tok", ExpiresAt: now.Add(time.Hour)}, nil
+		}, clock)
+
+		if _, err := src(); !errors.Is(err, ErrNoCredentials) {
+			t.Fatalf("err = %v", err)
+		}
+		// A station authenticated just now must start working on the next
+		// tick, not wait out a cache entry.
+		fail = false
+		got, err := src()
+		if err != nil || got.Token != "tok" {
+			t.Fatalf("after recovery: %+v %v", got, err)
+		}
+		if calls != 2 {
+			t.Errorf("underlying reads = %d, want 2", calls)
+		}
+	})
+
+	t.Run("passes expired-token metadata through uncached", func(t *testing.T) {
+		// LoadCredentials returns credentials alongside ErrTokenExpired so
+		// the plan probe can still read the tier; the cache must not eat
+		// either half of that.
+		src := NewCachedCredentialSource(func() (Credentials, error) {
+			return Credentials{Token: "stale", Subscription: "max"}, ErrTokenExpired
+		}, clock)
+
+		got, err := src()
+		if !errors.Is(err, ErrTokenExpired) {
+			t.Errorf("err = %v, want ErrTokenExpired", err)
+		}
+		if got.Subscription != "max" {
+			t.Errorf("Subscription = %q, want max", got.Subscription)
+		}
+	})
+}

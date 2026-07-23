@@ -205,7 +205,7 @@ func NewPlanProbe(store *Store) *PlanProbe {
 	}
 	return &PlanProbe{
 		store:  store,
-		creds:  LoadCredentials,
+		creds:  NewCachedCredentialSource(LoadCredentials, nil),
 		now:    func() time.Time { return time.Now().UTC() },
 		logger: slog.Default(),
 	}

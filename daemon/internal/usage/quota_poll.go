@@ -87,7 +87,7 @@ func NewQuotaPoller(store *Store) *QuotaPoller {
 	}
 	return &QuotaPoller{
 		store:    store,
-		creds:    LoadCredentials,
+		creds:    NewCachedCredentialSource(LoadCredentials, nil),
 		endpoint: DefaultUsageEndpoint,
 		client:   &http.Client{Timeout: quotaPollTimeout},
 		now:      func() time.Time { return time.Now().UTC() },
@@ -261,8 +261,12 @@ func (p *QuotaPoller) pollOnce(ctx context.Context) {
 	case errors.Is(err, ErrNoCredentials), errors.Is(err, ErrTokenExpired):
 		// Expected on a machine where nobody has run Claude lately — but
 		// it is also what a permanently unreadable credential store looks
-		// like (e.g. macOS denying a detached daemon the keychain), so say
-		// it once rather than never.
+		// like, so say it once rather than never. The subtle case is a
+		// daemon whose HOME doesn't match the user that authenticated
+		// Claude: on macOS `security` resolves the login keychain through
+		// $HOME/Library/Keychains, so a wrong HOME silently finds nothing.
+		// (The installed LaunchAgent sets HOME explicitly, so this is a
+		// hand-rolled-invocation hazard, not an install-path one.)
 		if p.state.changed("skip:" + err.Error()) {
 			p.logger.Warn("usage: quota polling inactive — no usable Claude credentials", "reason", err)
 		}
