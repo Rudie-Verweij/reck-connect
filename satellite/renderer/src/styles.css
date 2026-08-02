@@ -147,24 +147,7 @@ html, body, #app {
   /* The bar itself drags the window; interactive children opt back out. */
   -webkit-app-region: drag;
 }
-/* Only INTERACTIVE descendants opt out of the drag region.
-   This used to be `.reck-window-header > *`, which was too broad: the title
-   is a direct child and spans the whole middle of the bar (`flex: 1`), so a
-   blanket child rule made the entire centre of every title bar undraggable.
-   The only draggable pixels left were the traffic-light inset, the flex gaps
-   and the right padding — dragging worked on the empty parts of the bar and
-   died the moment the pointer touched the title text.
-   Match by element/role instead, and match descendants rather than direct
-   children so a control nested inside a wrapper (`.nav-actions button`) still
-   opts out. Anything non-standard can opt out by adding `.no-drag`. */
-.reck-window-header button,
-.reck-window-header a[href],
-.reck-window-header input,
-.reck-window-header select,
-.reck-window-header textarea,
-.reck-window-header [role="button"],
-.reck-window-header [contenteditable="true"],
-.reck-window-header .no-drag {
+.reck-window-header > * {
   -webkit-app-region: no-drag;
 }
 
@@ -1325,14 +1308,13 @@ html, body, #app {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* No `-webkit-app-region: no-drag` here or on the button below: the shared
-   `.reck-window-header button` rule owns that now, so the gap between the
-   buttons stays draggable. */
 .popout-header .popout-actions {
+  -webkit-app-region: no-drag;
   display: flex;
   gap: 4px;
 }
 .popout-header .popout-actions button {
+  -webkit-app-region: no-drag;
   border: 1px solid var(--app-border);
   background: transparent;
   color: var(--app-text-dim);
@@ -2839,6 +2821,7 @@ html, body, #app {
    left of the spinner slot in the header for the markdown viewer; the
    code viewer leaves the slot empty. */
 .file-viewer-header .file-viewer-mode-toggle-slot {
+  -webkit-app-region: no-drag;
   position: relative;
   z-index: 11;
   display: inline-flex;
@@ -2896,10 +2879,8 @@ html, body, #app {
    anchored bottom-right of the body, so they can never collide.
 
    See docs/LEARNINGS.md for the spinner / Speak-bar partition rationale. */
-/* Purely decorative (aria-hidden), so it stays part of the drag region —
-   a 24px dead spot in the corner of the title bar is exactly the kind of
-   "why can't I drag here" the blanket no-drag rule used to cause. */
 .file-viewer-header .file-viewer-spinner-slot {
+  -webkit-app-region: no-drag;
   position: relative;
   width: 24px;
   height: 24px;
@@ -2969,6 +2950,7 @@ html, body, #app {
 }
 
 .file-viewer-header .file-viewer-toc-toggle-slot {
+  -webkit-app-region: no-drag;
   display: flex;
   align-items: center;
   margin-left: auto;
