@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -32,6 +33,13 @@ type PaneLauncher interface {
 }
 
 var paneLauncher PaneLauncher
+
+// ErrPaneNotStarted is returned by pane methods that need a live PTY
+// (Write, Resize) when called against a pane that has been constructed
+// and registered in Manager.byID but whose child has not been started
+// yet. Agent hooks can fire the instant the child execs, so the pane is
+// published before Start; see New for why.
+var ErrPaneNotStarted = errors.New("pane not started")
 
 // SetPaneLauncher swaps in a PaneLauncher so future Spawn calls route the
 // child fork+exec through the reck-pane-launcher helper. Pre-issue-#225
@@ -203,10 +211,10 @@ func newHookSecret() string {
 //   - DISPLAY, SSH_*: only present in interactive-ssh contexts; harmless
 //   - TMPDIR: macOS-specific, required for some Go/rust tooling
 //
-// Anything Reck-specific (RECK_PANE_ID, RECK_PROJECT_ID, RECK_DAEMON_URL)
-// is injected by Spawn explicitly — do NOT rely on the daemon's own env
-// to carry them, because a future daemon refactor may set them only on
-// the child via extraEnv.
+// Anything Reck-specific (RECK_PANE_ID, RECK_PROJECT_ID, RECK_DAEMON_URL,
+// RECK_HOOK_SECRET) is injected by Start explicitly — do NOT rely on the
+// daemon's own env to carry them, because a future daemon refactor may
+// set them only on the child via extraEnv.
 var envAllowlist = map[string]bool{
 	"PATH":            true,
 	"HOME":            true,
@@ -275,40 +283,32 @@ func paneBaseEnv() []string {
 	return out
 }
 
-// Spawn a new pane. `spawnCmd` is the command + args; `cwd` the directory.
-// The pane's ID is generated before exec so it can be exposed to the child
-// via RECK_PANE_ID — this is what agent lifecycle hooks read to correlate
-// their events back to the right pane when POSTing to the daemon.
+// New allocates a pane without starting its child. The pane's ID and
+// hook secret are generated here so they can be exposed to the child via
+// RECK_PANE_ID / RECK_HOOK_SECRET once Start runs — this is what agent
+// lifecycle hooks read to correlate their events back to the right pane
+// when POSTing to the daemon.
 //
-// extraEnv is appended (after the allowlisted base env) to the child's
-// environment. Use this for per-pane values like RECK_DAEMON_URL. The
-// daemon's own environment is NOT inherited wholesale — see paneBaseEnv
-// for the allowlist rationale.
-func Spawn(projectID string, kind proto.PaneKind, spawnCmd []string, cwd string, cols, rows int, extraEnv []string) (*Pane, error) {
-	id := newPaneID()
-	hookSecret := newHookSecret()
-	env := paneBaseEnv()
-	env = append(env,
-		"TERM=xterm-256color",
-		"RECK_PANE_ID="+id,
-		"RECK_PROJECT_ID="+projectID,
-		// Audit fix F4 : per-pane HMAC secret the lifecycle-hook
-		// shim signs agent-event POSTs with. Replaces the old
-		// loopback-exemption that let any local process forge events.
-		// See hookauth.go for the verification side.
-		"RECK_HOOK_SECRET="+hookSecret,
-	)
-	env = append(env, extraEnv...)
-
+// Splitting allocation from exec lets the caller register the pane in
+// Manager.byID *before* the child exists. Some agents (Codex) fire their
+// first lifecycle hook almost immediately after exec, and a hook that
+// arrives before the pane is discoverable is lost — the daemon answers
+// 404 and whatever the payload carried (for Codex, the thread UUID) never
+// lands. Registering first closes that window.
+//
+// Every channel, map and buffer is initialized here, so RecordEvent,
+// HookSecret, ProjectID and Kind are all usable on the returned pane.
+// Callers that need a stable identity in the session index (shell and
+// codex panes) should set SlotID before publishing the pane.
+//
+// IsStarted reports false until Start succeeds.
+func New(projectID string, kind proto.PaneKind) *Pane {
 	uploadsCtx, uploadsCancel := context.WithCancel(context.Background())
-	p := &Pane{
-		ID:            id,
+	return &Pane{
+		ID:            newPaneID(),
 		ProjectID:     projectID,
 		Kind:          kind,
-		Cwd:           cwd,
 		state:         proto.PaneStateRunning,
-		cols:          cols,
-		rows:          rows,
 		subs:          make(map[int]*Subscriber),
 		replay:        newReplayBuffer(64 * 1024),
 		stoplight:     proto.StoplightGray,
@@ -318,19 +318,62 @@ func Spawn(projectID string, kind proto.PaneKind, spawnCmd []string, cwd string,
 		exited:        make(chan struct{}),
 		uploadsCtx:    uploadsCtx,
 		uploadsCancel: uploadsCancel,
-		HookSecret:    hookSecret,
+		HookSecret:    newHookSecret(),
+	}
+}
+
+// Start execs the pane's PTY child, wiring Cmd/Tty (or launcherHandle)
+// and starting readLoop + waitLoop. Single-shot: returns an error if the
+// pane has already been started. On exec failure the pane's uploadsCtx is
+// cancelled, leaving the pane dead — the caller is responsible for
+// undoing any byID or session-index registration it did beforehand.
+//
+// extraEnv is appended (after the allowlisted base env) to the child's
+// environment. Use this for per-pane values like RECK_DAEMON_URL. The
+// daemon's own environment is NOT inherited wholesale — see paneBaseEnv
+// for the allowlist rationale.
+//
+// Two spawn paths:
+//   - launcher mode (production, issue #225 fix): delegate fork+exec
+//     to the reck-pane-launcher helper so the child's TCC
+//     responsible-process is the helper, not reck-stationd. We
+//     receive the pty master fd via SCM_RIGHTS and a pid; the helper
+//     owns cmd.Wait and notifies us on exit via PaneHandle.ExitCh.
+//   - direct mode (tests + legacy fallback): exec.Command +
+//     pty.StartWithSize from inside the daemon process. Identical
+//     behaviour to pre-launcher daemons. waitLoop reaps via
+//     cmd.Wait. Used whenever SetPaneLauncher hasn't been called.
+func (p *Pane) Start(spawnCmd []string, cwd string, cols, rows int, extraEnv []string) error {
+	p.mu.Lock()
+	alreadyStarted := p.Cmd != nil
+	p.mu.Unlock()
+	if alreadyStarted {
+		return errors.New("pane already started")
 	}
 
-	// Two spawn paths:
-	//   (a) launcher mode (production, issue #225 fix): delegate fork+exec
-	//       to the reck-pane-launcher helper so the child's TCC
-	//       responsible-process is the helper, not reck-stationd. We
-	//       receive the pty master fd via SCM_RIGHTS and a pid; the helper
-	//       owns cmd.Wait and notifies us on exit via PaneHandle.ExitCh.
-	//   (b) direct mode (tests + legacy fallback): exec.Command +
-	//       pty.StartWithSize from inside the daemon process. Identical
-	//       behaviour to pre-launcher daemons. waitLoop reaps via
-	//       cmd.Wait. Used whenever SetPaneLauncher hasn't been called.
+	env := paneBaseEnv()
+	env = append(env,
+		"TERM=xterm-256color",
+		"RECK_PANE_ID="+p.ID,
+		"RECK_PROJECT_ID="+p.ProjectID,
+		// Audit fix F4 : per-pane HMAC secret the lifecycle-hook
+		// shim signs agent-event POSTs with. Replaces the old
+		// loopback-exemption that let any local process forge events.
+		// See hookauth.go for the verification side.
+		"RECK_HOOK_SECRET="+p.HookSecret,
+	)
+	env = append(env, extraEnv...)
+
+	// Exec into locals first, then publish Cwd/cols/rows/Cmd/Tty/
+	// launcherHandle atomically under p.mu. The pane is discoverable via
+	// Manager.byID before Start runs, so concurrent readers (mountprobe,
+	// stoplight, the liveness ticker) may touch those fields while we
+	// are still exec'ing — writing them unlocked would be a data race.
+	var (
+		cmd            *exec.Cmd
+		ttyF           *os.File
+		launcherHandle *launcher.PaneHandle
+	)
 	if paneLauncher != nil {
 		h, err := paneLauncher.SpawnPane(launcher.SpawnRequest{
 			Argv: spawnCmd,
@@ -340,11 +383,9 @@ func Spawn(projectID string, kind proto.PaneKind, spawnCmd []string, cwd string,
 			Rows: rows,
 		})
 		if err != nil {
-			uploadsCancel()
-			return nil, err
+			p.uploadsCancel()
+			return err
 		}
-		p.launcherHandle = h
-		p.Tty = h.Tty
 		// Stub Cmd so existing readers (Pane.Info Pid, manager_test
 		// asserting Cmd.Dir on restore) keep working unchanged. The
 		// stub is never .Start'd or .Wait'd — those go through the
@@ -352,7 +393,9 @@ func Spawn(projectID string, kind proto.PaneKind, spawnCmd []string, cwd string,
 		// .Process.Pid and best-effort .Process.Signal calls still
 		// resolve the real child pid the helper handed us back.
 		proc, _ := os.FindProcess(h.Pid)
-		p.Cmd = &exec.Cmd{
+		launcherHandle = h
+		ttyF = h.Tty
+		cmd = &exec.Cmd{
 			Path:    spawnCmd[0],
 			Args:    append([]string(nil), spawnCmd...),
 			Dir:     cwd,
@@ -360,22 +403,53 @@ func Spawn(projectID string, kind proto.PaneKind, spawnCmd []string, cwd string,
 			Process: proc,
 		}
 	} else {
-		cmd := exec.Command(spawnCmd[0], spawnCmd[1:]...)
-		cmd.Dir = cwd
-		cmd.Env = env
+		c := exec.Command(spawnCmd[0], spawnCmd[1:]...)
+		c.Dir = cwd
+		c.Env = env
 		winsize := &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}
-		ttyF, err := pty.StartWithSize(cmd, winsize)
+		f, err := pty.StartWithSize(c, winsize)
 		if err != nil {
-			uploadsCancel()
-			return nil, err
+			p.uploadsCancel()
+			return err
 		}
-		p.Cmd = cmd
-		p.Tty = ttyF
+		cmd = c
+		ttyF = f
 	}
+
+	p.mu.Lock()
+	p.Cwd = cwd
+	p.cols = cols
+	p.rows = rows
+	p.Cmd = cmd
+	p.Tty = ttyF
+	p.launcherHandle = launcherHandle
+	p.mu.Unlock()
 
 	go p.readLoop()
 	go p.waitLoop()
+	return nil
+}
+
+// Spawn allocates a pane and starts it in one call. Production code
+// (Manager.CreatePaneWith) uses New + register + Start instead, so an
+// agent hook firing immediately after exec finds its pane; Spawn is the
+// convenient form for tests and callers with no such requirement.
+func Spawn(projectID string, kind proto.PaneKind, spawnCmd []string, cwd string, cols, rows int, extraEnv []string) (*Pane, error) {
+	p := New(projectID, kind)
+	if err := p.Start(spawnCmd, cwd, cols, rows, extraEnv); err != nil {
+		return nil, err
+	}
 	return p, nil
+}
+
+// IsStarted reports whether Start has fired the pane's child. Callers
+// that scan Manager.AllPanes (the liveness ticker, the stoplight
+// resolver) use it to skip panes that are registered but not yet
+// running, whose state would otherwise read as misleading.
+func (p *Pane) IsStarted() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.Cmd != nil
 }
 
 func (p *Pane) readLoop() {
@@ -658,8 +732,21 @@ func (p *Pane) UploadsCtx() context.Context {
 }
 
 // Write forwards bytes to the PTY master (stdin of the child).
+//
+// Returns ErrPaneNotStarted when the pane is registered but Start has not
+// wired the PTY yet. No client learns a pane's ID until CreatePane
+// returns — after Start — so in practice this is unreachable; the guard
+// keeps it an explicit error rather than a nil dereference if a future
+// caller reaches a pane earlier. Tty is read under the lock because Start
+// publishes it there.
 func (p *Pane) Write(data []byte) error {
-	_, err := p.Tty.Write(data)
+	p.mu.Lock()
+	tty := p.Tty
+	p.mu.Unlock()
+	if tty == nil {
+		return ErrPaneNotStarted
+	}
+	_, err := tty.Write(data)
 	return err
 }
 
@@ -675,6 +762,13 @@ func (p *Pane) Write(data []byte) error {
 func (p *Pane) Resize(cols, rows int) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.Tty == nil {
+		// Registered but not started yet. As with Write, the satellite
+		// has no pane ID to resize until CreatePane returns, so this
+		// should be unreachable; an explicit error makes it loud if a
+		// future caller hits it.
+		return ErrPaneNotStarted
+	}
 	if cols == p.cols && rows == p.rows {
 		return nil
 	}
@@ -1023,6 +1117,17 @@ func (p *Pane) ExitCode() *int {
 
 // AgentState returns the pane's current event-driven agent state. Empty
 // string (AgentStateUnknown) before any hook event has arrived.
+// HasAgentEvents reports whether any lifecycle-hook event has ever been
+// recorded against this pane. Distinguishes "the agent is between turns"
+// from "this pane's hooks were never installed, so we have no signal at
+// all" — both of which leave AgentState at unknown.
+func (p *Pane) HasAgentEvents() bool {
+	if p.eventLog == nil {
+		return false
+	}
+	return p.eventLog.Len() > 0
+}
+
 func (p *Pane) AgentState() proto.AgentState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1039,6 +1144,7 @@ func (p *Pane) EventLog() *events.Log { return p.eventLog }
 // State transitions:
 //
 //	user_prompt / pre_tool / post_tool       → working
+//	pre_compact / post_compact               → working (Codex compaction turn)
 //	post_tool_failure (is_interrupt)         → unknown (user hit Escape mid-tool)
 //	post_tool_failure (other)                → working (Claude will likely retry)
 //	user_interrupt                           → unknown (user hit Escape between tools)
@@ -1073,7 +1179,8 @@ func (p *Pane) RecordEvent(e events.Event) {
 	}
 	var next proto.AgentState
 	switch e.Kind {
-	case events.KindUserPrompt, events.KindPreTool, events.KindPostTool:
+	case events.KindUserPrompt, events.KindPreTool, events.KindPostTool,
+		events.KindPreCompact, events.KindPostCompact:
 		next = proto.AgentStateWorking
 	case events.KindPostToolFailure:
 		if isInterruptPayload(e.Data) {

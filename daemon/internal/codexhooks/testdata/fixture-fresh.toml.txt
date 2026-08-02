@@ -1,0 +1,4 @@
+# Fresh codex install / fresh `codex login` scratch state — codex 0.128.0 does NOT
+# create a config.toml until the user explicitly writes one (auth.json holds creds).
+# This fixture is intentionally empty; preservation tests use it to assert the
+# installer round-trips empty input → header-only Reck-managed slots cleanly.

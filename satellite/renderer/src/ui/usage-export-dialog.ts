@@ -153,11 +153,27 @@ export function openUsageExportDialog(opts: UsageExportDialogOpts): Promise<void
     // Which controls a dataset actually honours: raw rows aren't binned,
     // and quota is account-level, so showing those fields would invite a
     // setting that silently does nothing.
+    //
+    // Reserved rather than removed: the three datasets differ by up to two
+    // rows, and .confirm-overlay centres the card, so collapsing a row moves
+    // the title one way and the buttons the other. `is-reserved` hides the
+    // field but keeps its box (see styles.css). `disabled` is what actually
+    // takes it out of the tab order and guarantees it can't be submitted —
+    // the class alone would only be visual.
+    function reserveField(
+      field: HTMLElement,
+      control: HTMLSelectElement,
+      applies: boolean,
+    ): void {
+      field.classList.toggle("is-reserved", !applies);
+      control.disabled = !applies;
+    }
+
     function refreshFieldVisibility(): void {
       const dataset = datasetSel.value as UsageExportDataset;
       hintEl.textContent = datasetDescription(dataset);
-      intervalField.hidden = isRawDataset(dataset);
-      projectField.hidden = !supportsProjectFilter(dataset);
+      reserveField(intervalField, intervalSel, !isRawDataset(dataset));
+      reserveField(projectField, projectSel, supportsProjectFilter(dataset));
     }
     refreshFieldVisibility();
 

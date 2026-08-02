@@ -386,6 +386,15 @@ type SessionInfo struct {
 	WasLive      bool     `json:"was_live,omitempty"`
 	Kind         PaneKind `json:"kind,omitempty"`
 	SlotID       string   `json:"slot_id,omitempty"`
+	// ThreadID is the Codex CLI thread UUID for kind=="codex" rows, and is
+	// empty for every other kind. It is also empty on a codex row whose
+	// pane exited before reporting a thread — `codex resume` needs a known
+	// UUID, so clients should treat a codex row with no ThreadID as not
+	// resumable and leave it out of the resume picker.
+	//
+	// Clients don't pass this back: a codex resume is requested with
+	// RestoreSlotID and the daemon hydrates the thread id server-side.
+	ThreadID string `json:"thread_id,omitempty"`
 }
 
 type SessionsListResponse struct {

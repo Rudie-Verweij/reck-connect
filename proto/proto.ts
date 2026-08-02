@@ -346,8 +346,18 @@ export interface SessionInfo {
    * "claude" to stay compatible with old daemons.
    */
   kind?: PaneKind;
-  /** Shell-only identifier (Scope B). Empty for Claude entries. */
+  /** Shell and codex identifier (Scope B). Empty for Claude entries. */
   slot_id?: string;
+  /**
+   * Codex CLI thread UUID, present only on `kind === "codex"` rows. Also
+   * empty on a codex row whose pane exited before reporting a thread:
+   * `codex resume` needs a known UUID, so treat a codex row without one as
+   * not resumable and leave it out of the resume picker.
+   *
+   * Never sent back to the daemon — a codex resume is requested with
+   * `restore_slot_id` and the thread id is hydrated server-side.
+   */
+  thread_id?: string;
 }
 
 export interface SessionsListResponse {

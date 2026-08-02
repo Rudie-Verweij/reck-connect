@@ -97,10 +97,20 @@ func TestUsageSummaryReportsPlan(t *testing.T) {
 type histogramWire struct {
 	Enabled  bool `json:"enabled"`
 	PlanDays []struct {
-		Day          int64  `json:"day"`
-		Subscription string `json:"subscription"`
+		Day           int64  `json:"day"`
+		Subscription  string `json:"subscription"`
+		RateLimitTier string `json:"rate_limit_tier"`
 	} `json:"plan_days"`
-	PlanSummary map[string]int `json:"plan_summary"`
+	PlanSummary   map[string]int `json:"plan_summary"`
+	QuotaForecast map[string]struct {
+		TS          int64   `json:"ts"`
+		Pct         float64 `json:"used_percentage"`
+		ResetsAt    int64   `json:"resets_at"`
+		WindowStart int64   `json:"window_start"`
+		RateCentre  float64 `json:"rate_centre"`
+		RateLow     float64 `json:"rate_low"`
+		RateHigh    float64 `json:"rate_high"`
+	} `json:"quota_forecast"`
 }
 
 func TestUsageHistogramReportsPlanDays(t *testing.T) {
@@ -270,4 +280,87 @@ func TestUsageExportCsv(t *testing.T) {
 			}
 		}
 	})
+}
+
+// The entitlement is the field the Satellite labels from: subscriptionType
+// goes stale after an upgrade and cannot express the 5x/20x multiplier at
+// all. See issue #130.
+func TestUsageHistogramReportsRateLimitTier(t *testing.T) {
+	srv, store := planTestServer(t)
+
+	utcDay := func(d int) int64 {
+		return time.Date(2026, 7, d, 0, 0, 0, 0, time.UTC).Unix()
+	}
+	if err := store.InsertPlanSample(usage.PlanSample{
+		TS:            time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC),
+		Subscription:  "pro", // stale
+		RateLimitTier: "default_claude_max_5x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	url := fmt.Sprintf("%s/usage/histogram?bucket=day&since=%d&until=%d&tz_offset_min=0",
+		srv.URL, utcDay(1), utcDay(3))
+	var got histogramWire
+	getJSON(t, url, &got)
+
+	if len(got.PlanDays) != 2 {
+		t.Fatalf("plan_days = %d, want 2", len(got.PlanDays))
+	}
+	for i, d := range got.PlanDays {
+		if d.RateLimitTier != "default_claude_max_5x" {
+			t.Errorf("day %d rate_limit_tier = %q, want default_claude_max_5x", i+1, d.RateLimitTier)
+		}
+	}
+}
+
+func TestUsageHistogramReportsQuotaForecast(t *testing.T) {
+	srv, store := planTestServer(t)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	reset := now.Add(2 * time.Hour).Unix()
+	for i := 0; i < 13; i++ {
+		pct := float64(i) * 5 // 30 %/h at 10-minute steps
+		ts := now.Add(-time.Duration(120-i*10) * time.Minute)
+		if err := store.InsertQuotaSample(usage.QuotaSample{
+			TS:       ts,
+			FiveHour: usage.Bucket{Pct: &pct, ResetsAt: &reset},
+			Source:   "poll",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The forecast describes the LIVE window, so it must appear even though
+	// the plotted range below is a historical one.
+	day := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).Unix()
+	url := fmt.Sprintf("%s/usage/histogram?bucket=day&since=%d&until=%d&tz_offset_min=0",
+		srv.URL, day, day+86400)
+	var got histogramWire
+	getJSON(t, url, &got)
+
+	fh, ok := got.QuotaForecast["five_hour"]
+	if !ok {
+		t.Fatalf("quota_forecast has no five_hour: %+v", got.QuotaForecast)
+	}
+	if fh.ResetsAt != reset {
+		t.Errorf("resets_at = %d, want %d", fh.ResetsAt, reset)
+	}
+	if want := reset - int64((5 * time.Hour).Seconds()); fh.WindowStart != want {
+		t.Errorf("window_start = %d, want %d", fh.WindowStart, want)
+	}
+	if fh.Pct != 60 {
+		t.Errorf("used_percentage = %v, want 60 (the latest actual reading)", fh.Pct)
+	}
+	if fh.RateCentre < 29 || fh.RateCentre > 31 {
+		t.Errorf("rate_centre = %v, want ~30 %%/h", fh.RateCentre)
+	}
+	if !(fh.RateLow <= fh.RateCentre && fh.RateCentre <= fh.RateHigh) {
+		t.Errorf("bounds out of order: %v / %v / %v", fh.RateLow, fh.RateCentre, fh.RateHigh)
+	}
+	// No 7d readings were ever written, so that bucket must be absent
+	// rather than present with zeroes.
+	if _, ok := got.QuotaForecast["seven_day"]; ok {
+		t.Error("seven_day present despite no 7d readings")
+	}
 }

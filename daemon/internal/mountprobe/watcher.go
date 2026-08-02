@@ -241,6 +241,12 @@ func (w *Watcher) tickCtx(ctx context.Context) {
 		if ctx.Err() != nil {
 			break
 		}
+		// Skip panes that are registered but whose child hasn't started.
+		// They have no cwd to probe yet, and reading Cwd without this
+		// gate would race Start's publish of it.
+		if !p.IsStarted() {
+			continue
+		}
 		cwd := p.Cwd
 		if cwd == "" {
 			// Defensive — a pane without a cwd can't be probed.

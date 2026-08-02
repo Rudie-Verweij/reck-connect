@@ -1253,57 +1253,77 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 		return nil, err
 	}
 
-	if opts.ResumeSessionID != "" && opts.RestoreSlotID != "" {
+	// Codex is the exception to the mutual exclusion: restoring a codex pane
+	// needs the SlotID (to key the existing index row and reuse its
+	// identity) AND the thread UUID (to build `codex resume <UUID>`). They
+	// aren't in conflict — one keys the store, the other is value data
+	// passed to the adapter.
+	if opts.ResumeSessionID != "" && opts.RestoreSlotID != "" && kind != proto.PaneKindCodex {
 		return nil, errors.New("resume_session_id and restore_slot_id are mutually exclusive")
 	}
 
 	// Validate resume against the index before we attempt to spawn
 	// anything. We want a clean 4xx at the HTTP layer, not a half-
-	// started pane that dies because the UUID was bogus. Resume is
-	// currently only meaningful for claude panes — other adapters
-	// return ErrResumeUnsupported from BuildSpawn when asked.
+	// started pane that dies because the UUID was bogus.
+	//
+	// Claude: ResumeSessionID *is* the index identity, so look it up and
+	// pin Kind=="claude" defensively.
+	//
+	// Codex: ResumeSessionID is the codex thread UUID, which is not a row
+	// identity — codex rows are keyed by SlotID (see Entry.Identity). There
+	// is nothing to look it up against, and codex itself reports a clean
+	// error if the thread is missing from its own store. Row existence is
+	// checked by the RestoreSlotID branch below, which every codex resume
+	// goes through.
+	//
+	// Shell never resumes; its adapter has no equivalent.
 	var resumeEntry *sessions.Entry
 	if opts.ResumeSessionID != "" {
-		if kind != proto.PaneKindClaude {
+		switch kind {
+		case proto.PaneKindClaude:
+			if m.sessions == nil {
+				return nil, errors.New("session index unavailable")
+			}
+			e, ok, err := m.sessions.Get(projectID, opts.ResumeSessionID)
+			if err != nil {
+				return nil, fmt.Errorf("sessions lookup: %w", err)
+			}
+			if !ok {
+				return nil, errors.New("unknown resume_session_id for this project")
+			}
+			// Defensive: a Claude entry has Kind=="claude"; if callers somehow
+			// reach this path with a shell slot id in hand we want to fail
+			// closed rather than re-exec claude without a session.
+			if e.Kind != proto.PaneKindClaude {
+				return nil, errors.New("resume_session_id refers to a non-claude entry")
+			}
+			// #56: recover the directory the transcript actually lives in so
+			// `claude --resume` rehydrates the existing session instead of
+			// forking a fresh transcript. For a worktree session e.Cwd is the
+			// (mis-recorded) project root; resolveResumeCwd finds the worktree
+			// and we self-heal e.Cwd here — the adapter reads it for plan.Cwd
+			// and the post-spawn Upsert (below) persists the correction. If the
+			// worktree is gone the transcript can't be located; refuse rather
+			// than resume in the wrong cwd.
+			realCwd, ok := m.resolveResumeCwd(proj.Cwd, e.Cwd, e.SessionID)
+			if !ok {
+				return nil, fmt.Errorf("%w: session %s", ErrResumeWorktreeGone, shortSessionID(e.SessionID))
+			}
+			e.Cwd = realCwd
+			resumeEntry = &e
+		case proto.PaneKindCodex:
+			// Deliberately not pre-validated; see above.
+		default:
 			return nil, agent.ErrResumeUnsupported
 		}
-		if m.sessions == nil {
-			return nil, errors.New("session index unavailable")
-		}
-		e, ok, err := m.sessions.Get(projectID, opts.ResumeSessionID)
-		if err != nil {
-			return nil, fmt.Errorf("sessions lookup: %w", err)
-		}
-		if !ok {
-			return nil, errors.New("unknown resume_session_id for this project")
-		}
-		// Defensive: a Claude entry has Kind=="claude"; if callers somehow
-		// reach this path with a shell slot id in hand we want to fail
-		// closed rather than re-exec claude without a session.
-		if e.Kind != proto.PaneKindClaude {
-			return nil, errors.New("resume_session_id refers to a non-claude entry")
-		}
-		// #56: recover the directory the transcript actually lives in so
-		// `claude --resume` rehydrates the existing session instead of
-		// forking a fresh transcript. For a worktree session e.Cwd is the
-		// (mis-recorded) project root; resolveResumeCwd finds the worktree
-		// and we self-heal e.Cwd here — the adapter reads it for plan.Cwd
-		// and the post-spawn Upsert (below) persists the correction. If the
-		// worktree is gone the transcript can't be located; refuse rather
-		// than resume in the wrong cwd.
-		realCwd, ok := m.resolveResumeCwd(proj.Cwd, e.Cwd, e.SessionID)
-		if !ok {
-			return nil, fmt.Errorf("%w: session %s", ErrResumeWorktreeGone, shortSessionID(e.SessionID))
-		}
-		e.Cwd = realCwd
-		resumeEntry = &e
 	}
 
 	// Shell/codex restore: look up the slot entry by SlotID and hand it
-	// to the adapter, which execs Entry.ShellArgv verbatim so the user
-	// gets back the process they actually had running, not what today's
-	// project default would produce. Codex mirrors shell — both are
-	// slot-identified and neither resumes a Claude session.
+	// to the adapter. For shell that means exec'ing Entry.ShellArgv
+	// verbatim, so the user gets back the process they actually had
+	// running rather than what today's project default would produce.
+	// Codex is slot-identified the same way, but carries a thread UUID
+	// used to rebuild `codex resume <UUID>`.
 	var restoreEntry *sessions.Entry
 	if opts.RestoreSlotID != "" {
 		if kind != proto.PaneKindShell && kind != proto.PaneKindCodex {
@@ -1326,6 +1346,19 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 			return nil, fmt.Errorf("restore_slot_id refers to a %s entry, not %s", e.Kind, kind)
 		}
 		restoreEntry = &e
+		// Hydrate the thread UUID server-side. The wire surface hands
+		// clients a slot id, not a thread id, so without this a
+		// client-driven codex restore would fall through to a fresh spawn
+		// and silently lose the conversation. Filling it in here also makes
+		// client-driven restore and auto-restore-on-startup take the same
+		// path.
+		//
+		// Skipped when the caller supplied a thread id explicitly (they're
+		// overriding), and when the row has none — a codex pane that died
+		// before SessionStart fired can only come back fresh.
+		if kind == proto.PaneKindCodex && opts.ResumeSessionID == "" && e.ThreadID != "" {
+			opts.ResumeSessionID = e.ThreadID
+		}
 	}
 
 	// Restore duplicate-prevention (Codex HIGH #2). Before we spawn,
@@ -1394,8 +1427,77 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 	// osascript no longer fail with errAEPrivilegeError, and the
 	// reck-clipboard sidecar — which existed solely to mediate that —
 	// is gone.
-	pane, err := Spawn(projectID, kind, plan.Argv, spawnCwd, cols, rows, opts.ExtraEnv)
-	if err != nil {
+	// Allocate, publish, then start. Agent lifecycle hooks can fire the
+	// instant the child execs, and a hook that arrives before the pane is
+	// in byID gets a 404 — losing whatever the payload carried. So:
+	//   1. New: pre-generates pane.ID + HookSecret and initializes the
+	//      replay buffer / event log, making Subscribe + RecordEvent safe
+	//      on a pane whose child doesn't exist yet.
+	//   2. SlotID assignment for shell + codex, so the pane already
+	//      carries the identity its session-index row is keyed by.
+	//   3. byID registration, so the agent-event endpoint can find it.
+	//   4. Start: env build + exec + readLoop/waitLoop. On failure we undo
+	//      1–3.
+	// Scans over AllPanes gate on IsStarted() so a pane that is published
+	// but not yet running stays invisible to the liveness ticker and the
+	// aggregate stoplight.
+	pane := New(projectID, kind)
+	// codexPlaceholderSlot is set when we wrote a row for a fresh codex pane
+	// before starting it, so a failed Start can undo it.
+	codexPlaceholderSlot := ""
+	if (kind == proto.PaneKindShell || kind == proto.PaneKindCodex) && m.sessions != nil {
+		if restoreEntry != nil {
+			pane.SlotID = restoreEntry.SlotID
+		} else {
+			pane.SlotID = sessions.NewUUID()
+		}
+		// A fresh codex pane needs its row to exist before the child runs:
+		// SessionStart can arrive before Start returns, and SetThreadID is a
+		// no-op against a row that isn't there yet — the thread UUID would
+		// be lost and the conversation unresumable. The post-start upsert
+		// below fills in the argv; Upsert preserves both CreatedAt and any
+		// ThreadID captured in between.
+		//
+		// Only fresh codex panes need this. Claude has no asynchronously
+		// captured identity, shell has no thread, and a codex restore
+		// mutates a row that already exists.
+		if kind == proto.PaneKindCodex && restoreEntry == nil {
+			now := time.Now().UTC()
+			if err := m.sessions.Upsert(projectID, sessions.Entry{
+				Kind:         proto.PaneKindCodex,
+				SlotID:       pane.SlotID,
+				Cwd:          spawnCwd,
+				CreatedAt:    now,
+				LastActiveAt: now,
+				LastPaneID:   pane.ID,
+				WasLive:      true,
+			}); err != nil {
+				// Soft-fail: the pane still spawns and works, it just won't
+				// be resumable, because RecordCodexThread will find no row.
+				slog.Warn("sessions: upsert codex placeholder failed", "err", err, "project", projectID, "slot", shortSessionID(pane.SlotID))
+			} else {
+				codexPlaceholderSlot = pane.SlotID
+			}
+		}
+	}
+
+	m.mu.Lock()
+	m.byID[pane.ID] = pane
+	m.mu.Unlock()
+
+	if err := pane.Start(plan.Argv, spawnCwd, cols, rows, opts.ExtraEnv); err != nil {
+		m.mu.Lock()
+		delete(m.byID, pane.ID)
+		m.mu.Unlock()
+		// Mark the placeholder not-live rather than deleting it: the store
+		// has no row delete, and restore-orphans skips rows that aren't
+		// live, so this keeps a never-started pane from being resurrected on
+		// the next boot.
+		if codexPlaceholderSlot != "" {
+			if serr := m.sessions.SetLive(projectID, codexPlaceholderSlot, false); serr != nil {
+				slog.Warn("sessions: clearing codex placeholder liveness failed", "err", serr, "project", projectID, "slot", shortSessionID(codexPlaceholderSlot))
+			}
+		}
 		return nil, err
 	}
 
@@ -1440,19 +1542,20 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 	}
 
 	// Shell- and codex-pane session bookkeeping (Scope B). Both are
-	// slot-identified (no Claude session): fresh spawns get a new SlotID
-	// and a new Entry with the resolved argv captured for later restore;
-	// the restore path reuses the same SlotID and bumps
-	// LastActiveAt/LastPaneID/WasLive on the existing entry. The exit
-	// callback touches last_active_at same as the Claude flow so the
-	// restore-candidate heuristic has a fresh timestamp to report. Codex
-	// mirrors shell here — it has no session to resume, so slot continuity
-	// is what lets a codex tab survive a daemon restart.
+	// slot-identified (no Claude session): fresh spawns record a new Entry
+	// with the resolved argv captured for later restore; the restore path
+	// reuses the same SlotID and bumps LastActiveAt/LastPaneID/WasLive on
+	// the existing entry. The exit callback touches last_active_at same as
+	// the Claude flow so the restore-candidate heuristic has a fresh
+	// timestamp to report. Codex mirrors shell here — slot continuity is
+	// what lets a codex tab survive a daemon restart.
+	//
+	// SlotID itself was assigned before Start (see above) so the pane
+	// carries its row identity from the moment it is published.
 	if (kind == proto.PaneKindShell || kind == proto.PaneKindCodex) && m.sessions != nil {
 		now := time.Now().UTC()
 		switch {
 		case restoreEntry != nil:
-			pane.SlotID = restoreEntry.SlotID
 			restoreEntry.LastActiveAt = now
 			restoreEntry.LastPaneID = pane.ID
 			restoreEntry.WasLive = true
@@ -1460,7 +1563,6 @@ func (m *Manager) CreatePaneWith(projectID string, kind proto.PaneKind, cols, ro
 				slog.Warn("sessions: upsert on slot restore failed", "kind", kind, "err", err, "project", projectID, "slot", shortSessionID(restoreEntry.SlotID))
 			}
 		default:
-			pane.SlotID = sessions.NewUUID()
 			// plan.Argv is the already-resolved absolute argv the
 			// adapter chose. Storing it + spawnCwd means restore
 			// ignores any subsequent edit to Project.Shell / Project.Cwd
@@ -1528,6 +1630,55 @@ func (m *Manager) PaneByID(paneID string) (*Pane, bool) {
 	defer m.mu.RUnlock()
 	pane, ok := m.byID[paneID]
 	return pane, ok
+}
+
+// RecordCodexThread persists a Codex thread UUID against the codex pane it
+// belongs to. Called by the agent-event handler when a codex hook posts a
+// SessionStart event carrying session_id.
+//
+// Best-effort: a no-op when the session index is disabled, the pane has gone
+// away, or the pane isn't a codex pane with a slot. A missed capture means
+// that pane won't be offered for resume later, but nothing else breaks.
+func (m *Manager) RecordCodexThread(paneID, threadID string) {
+	if m.sessions == nil || paneID == "" || threadID == "" {
+		return
+	}
+	m.mu.RLock()
+	pane, ok := m.byID[paneID]
+	m.mu.RUnlock()
+	if !ok || pane == nil {
+		return
+	}
+	if pane.Kind != proto.PaneKindCodex || pane.SlotID == "" {
+		return
+	}
+	// The thread id lives only on the index row, never on pane.SessionID:
+	// a codex pane's identity is its SlotID, and the liveness/rename/touch
+	// paths prefer SessionID when set, which would send them looking for a
+	// row keyed by a UUID that isn't the row's identity.
+	prev, err := m.sessions.SetThreadID(pane.ProjectID, pane.SlotID, threadID)
+	if err != nil {
+		slog.Warn("sessions: SetThreadID failed",
+			"err", err,
+			"project", pane.ProjectID,
+			"slot", shortSessionID(pane.SlotID),
+		)
+		return
+	}
+	// A row that already had a different thread id means the thread changed
+	// under us — a future codex build rotating ids on resume, or a hook
+	// firing from a child whose session has been replaced. The new value
+	// wins (codex's view of its own active thread is authoritative for the
+	// next resume) but it's worth saying so, since it silently changes
+	// which conversation this row points at.
+	if prev != "" && prev != threadID {
+		slog.Warn("codex: SessionStart reported a different thread id",
+			"pane", paneID,
+			"slot", shortSessionID(pane.SlotID),
+			"old", shortSessionID(prev),
+			"new", shortSessionID(threadID),
+		)
+	}
 }
 
 // isSlotLiveLocked reports whether any currently-registered pane owns
@@ -2061,6 +2212,12 @@ func (m *Manager) RunLivenessTicker(ctx context.Context, interval time.Duration)
 		case <-t.C:
 			now := time.Now().UTC()
 			for _, p := range m.AllPanes() {
+				// Skip panes that are registered but not yet started:
+				// touching their row would mark it live before the child
+				// exists.
+				if !p.IsStarted() {
+					continue
+				}
 				identity := p.SessionID
 				if identity == "" {
 					identity = p.SlotID

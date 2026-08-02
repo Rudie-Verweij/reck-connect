@@ -130,3 +130,35 @@ func fmtBucket(b Bucket) string {
 	}
 	return "{pct=" + p + " resets=" + r + "}"
 }
+
+func TestNormalizeResetsAtSnapsTheJitter(t *testing.T) {
+	// The values seen in a real export: one 18:00:00 window recorded as
+	// both of these, alternating, because the poller truncated a timestamp
+	// carrying sub-second precision.
+	const boundary = 1785175200 // 2026-07-27T18:00:00Z
+	for _, raw := range []int64{1785175199, 1785175200, 1785175170, 1785175229} {
+		got := NormalizeResetsAt(Bucket{ResetsAt: &raw})
+		if got.ResetsAt == nil || *got.ResetsAt != boundary {
+			t.Errorf("NormalizeResetsAt(%d) = %v, want %d", raw, got.ResetsAt, boundary)
+		}
+	}
+
+	// Two readings of one window must become byte-identical — that is the
+	// whole point, since resets_at is a window's identity.
+	a, b := int64(1785175199), int64(1785175200)
+	if *NormalizeResetsAt(Bucket{ResetsAt: &a}).ResetsAt !=
+		*NormalizeResetsAt(Bucket{ResetsAt: &b}).ResetsAt {
+		t.Error("the two jittered forms did not converge")
+	}
+
+	// A nil expiry stays nil rather than becoming a misleading zero.
+	if got := NormalizeResetsAt(Bucket{}); got.ResetsAt != nil {
+		t.Errorf("nil resets_at became %v", *got.ResetsAt)
+	}
+
+	// Pct rides through untouched.
+	pct := 42.5
+	if got := NormalizeResetsAt(Bucket{Pct: &pct, ResetsAt: &a}); got.Pct == nil || *got.Pct != 42.5 {
+		t.Errorf("Pct was disturbed: %v", got.Pct)
+	}
+}

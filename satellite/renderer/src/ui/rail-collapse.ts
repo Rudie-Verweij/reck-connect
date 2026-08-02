@@ -1,4 +1,12 @@
-// Rail collapse model — pure helpers + the shared width animator.
+// The rail's collapse configuration — plus the shared width animator, which
+// every collapsible panel uses.
+//
+// The drag arithmetic itself lives in `./collapse-model.ts`; this file is the
+// rail's instance of it. The file viewer's TOC sidebar is a second instance
+// (`viewer/tocCollapse.ts`), so both panels collapse with exactly the same
+// feel rather than through two near-identical implementations. The exports
+// below keep their original shape, so `boot.ts` — and `rail-collapse.test.ts`,
+// which is the safety net for that extraction — are unaffected.
 //
 // The mini rail (48px of project initials) is the ONLY collapsed state;
 // the rail is never fully hidden. The expanded default width is also the
@@ -8,6 +16,12 @@
 //
 // Design mock: docs/design/sidebar-collapse-variations.html (branch
 // docs/sidebar-collapse-exploration).
+
+import {
+  createCollapseModel,
+  type CollapseDragDecision,
+  type CollapseDragRelease,
+} from "./collapse-model";
 
 export const RAIL_MAX = 240;
 export const RAIL_MINI = 48;
@@ -20,6 +34,16 @@ export const RAIL_STRETCH_FACTOR = 0.35;
 export const RAIL_EXPAND_COMMIT_PX = 24;
 
 export type RailMode = "expanded" | "mini";
+
+/** The rail as an instance of the shared collapse model. */
+const railModel = createCollapseModel({
+  max: RAIL_MAX,
+  mini: RAIL_MINI,
+  collapseAt: RAIL_COLLAPSE_AT,
+  stickyPx: RAIL_STICKY_PX,
+  stretchFactor: RAIL_STRETCH_FACTOR,
+  expandCommitPx: RAIL_EXPAND_COMMIT_PX,
+});
 
 /**
  * Two-character initials for the mini rail's project avatars. Two words
@@ -40,12 +64,7 @@ export function projectInitials(name: string): string {
   return ([...words[0]][0] + [...words[1]][0]).toLowerCase();
 }
 
-export type RailDragDecision =
-  | { kind: "resize"; width: number }
-  | { kind: "stretch"; width: number }
-  | { kind: "collapse" }
-  | { kind: "expand"; width: number }
-  | { kind: "track"; width: number };
+export type RailDragDecision = CollapseDragDecision;
 
 /**
  * Classify a divider-drag position while the button is held. `rawWidth`
@@ -65,28 +84,10 @@ export type RailDragDecision =
  *    outward so the rail reacts immediately instead of popping later.
  */
 export function railDragDecision(rawWidth: number, mini: boolean): RailDragDecision {
-  if (mini) {
-    if (rawWidth > RAIL_COLLAPSE_AT) {
-      return { kind: "expand", width: Math.min(RAIL_MAX, rawWidth) };
-    }
-    return { kind: "track", width: Math.max(RAIL_MINI, rawWidth) };
-  }
-  if (rawWidth < RAIL_COLLAPSE_AT - RAIL_STICKY_PX) return { kind: "collapse" };
-  if (rawWidth < RAIL_COLLAPSE_AT) {
-    const overshoot = RAIL_COLLAPSE_AT - rawWidth;
-    return {
-      kind: "stretch",
-      width: Math.round(RAIL_COLLAPSE_AT - overshoot * RAIL_STRETCH_FACTOR),
-    };
-  }
-  return { kind: "resize", width: Math.min(RAIL_MAX, rawWidth) };
+  return railModel.dragDecision(rawWidth, mini);
 }
 
-export type RailDragRelease =
-  | { kind: "spring-expand" }
-  | { kind: "settle-mini" }
-  | { kind: "bounce-back" }
-  | { kind: "stay" };
+export type RailDragRelease = CollapseDragRelease;
 
 /**
  * Classify a drag release.
@@ -100,12 +101,7 @@ export type RailDragRelease =
  * the row minimum.
  */
 export function railDragRelease(width: number, mini: boolean): RailDragRelease {
-  if (!mini) {
-    if (width < RAIL_COLLAPSE_AT) return { kind: "bounce-back" };
-    return { kind: "stay" };
-  }
-  if (width >= RAIL_MINI + RAIL_EXPAND_COMMIT_PX) return { kind: "spring-expand" };
-  return { kind: "settle-mini" };
+  return railModel.dragRelease(width, mini);
 }
 
 export interface WiggleGateState {

@@ -47,6 +47,12 @@ import (
 //   - Kind=="shell"  entries are identified by SlotID (a daemon-generated
 //     UUID) and carry ShellArgv/Cwd so a respawn can reproduce the exact
 //     invocation captured at create time. SessionID is empty.
+//   - Kind=="codex"  entries are identified by SlotID too, so two codex
+//     panes in the same cwd stay distinct. ThreadID carries the Codex CLI
+//     thread UUID, captured from the SessionStart hook once the pane is
+//     running, and is what `codex resume <ID>` is given. It may be empty:
+//     a codex pane that dies before SessionStart fires has no thread to
+//     resume.
 //
 // Migration (an earlier release Scope B additive): pre-migration rows on disk have
 // no "kind" field and no SlotID — loadLocked() defaults Kind to
@@ -69,10 +75,16 @@ type Entry struct {
 	// an earlier release; missing on disk for older indexes, defaulted to
 	// PaneKindClaude by loadLocked().
 	Kind proto.PaneKind `json:"kind,omitempty"`
-	// SlotID is the stable identifier for shell panes (Kind=="shell").
+	// SlotID is the stable identifier for shell and codex panes.
 	// Regenerated on first save only if empty and kind is shell. Empty
 	// on Claude entries — SessionID is their identity.
 	SlotID string `json:"slot_id,omitempty"`
+	// ThreadID is the Codex CLI thread UUID for Kind=="codex" entries,
+	// populated by Manager.RecordCodexThread once the pane's SessionStart
+	// hook reports it. Empty until then — restore skips codex entries
+	// without one, since `codex resume` needs a known UUID. Always empty
+	// for claude and shell entries.
+	ThreadID string `json:"thread_id,omitempty"`
 	// ShellArgv is the resolved absolute-path argv captured at shell
 	// pane create time. Used verbatim on restore — we deliberately do
 	// NOT re-resolve the project's default shell on restore because
@@ -218,6 +230,14 @@ func (s *Store) Upsert(projectID string, entry Entry) error {
 			if len(entry.ShellArgv) == 0 && len(e.ShellArgv) > 0 {
 				entry.ShellArgv = append([]string(nil), e.ShellArgv...)
 			}
+			// Preserve a captured ThreadID. The Manager upserts a codex
+			// entry at spawn time, before SessionStart has fired, so the
+			// incoming Entry's ThreadID is empty; SetThreadID fills it in
+			// asynchronously afterwards. Any later re-upsert (the liveness
+			// ticker, a restore) must not blank it back out.
+			if entry.ThreadID == "" && e.ThreadID != "" {
+				entry.ThreadID = e.ThreadID
+			}
 			entries[i] = entry
 			found = true
 			break
@@ -227,6 +247,41 @@ func (s *Store) Upsert(projectID string, entry Entry) error {
 		entries = append(entries, entry)
 	}
 	return s.saveLocked(projectID, entries)
+}
+
+// SetThreadID records the Codex thread UUID on the entry with the given
+// SlotID. Called by Manager.RecordCodexThread when a codex pane's
+// SessionStart hook reports its thread.
+//
+// Returns the ThreadID the row previously held, so the caller can notice a
+// thread id changing under it. Empty means the row had none (the normal
+// first-capture case) or no such row exists.
+//
+// An empty threadID is rejected as a no-op: clearing the field is not a
+// supported operation, since a Codex thread UUID is fixed for the life of
+// the pane. A SlotID with no matching row is also a no-op — the pane may
+// have exited and been collected from the index already.
+func (s *Store) SetThreadID(projectID, slotID, threadID string) (string, error) {
+	if slotID == "" || threadID == "" {
+		return "", nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.loadLocked(projectID)
+	if err != nil {
+		return "", err
+	}
+	for i, e := range entries {
+		if e.SlotID == slotID {
+			prev := e.ThreadID
+			if prev == threadID {
+				return prev, nil
+			}
+			entries[i].ThreadID = threadID
+			return prev, s.saveLocked(projectID, entries)
+		}
+	}
+	return "", nil
 }
 
 // Touch updates last_active_at (and optionally last_pane_id) for an

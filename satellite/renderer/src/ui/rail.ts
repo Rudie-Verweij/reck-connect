@@ -248,7 +248,7 @@ export class Rail {
       <div class="rail-footer">
         <span id="rail-count">0 projects</span>
         <button class="rail-add" id="rail-add" title="Add project">${iconPlus}<span>Add</span></button>
-        <button class="rail-collapse-chip" id="rail-collapse-chip" type="button" title="Expand rail (⇧→)" aria-label="Expand rail">»</button>
+        <button class="reck-collapse-chip rail-collapse-chip" id="rail-collapse-chip" type="button" title="Expand rail (⇧→)" aria-label="Expand rail">»</button>
       </div>
     `;
     this.listEl = this.props.root.querySelector(".rail-list") as HTMLElement;

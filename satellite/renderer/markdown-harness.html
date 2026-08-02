@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Markdown viewer harness</title>
+  </head>
+  <body>
+    <!-- Dev/e2e-only page: mounts the real MarkdownRenderer against fixture
+         documents, with no window.reckAPI, no daemon and no Electron. Served
+         by the Vite dev server; not part of the production build inputs. -->
+    <script type="module" src="/src/markdown-harness.ts"></script>
+  </body>
+</html>

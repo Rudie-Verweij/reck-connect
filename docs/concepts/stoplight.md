@@ -7,22 +7,26 @@ Each pane has a stoplight color and an agent state. These are two separate signa
 | Signal | Type | Source | Applies to |
 |--------|------|--------|-----------|
 | `stoplight` | `"gray" \| "green" \| "orange" \| "red"` | PTY activity heuristic OR agent state (depends on pane kind) | All panes |
-| `agent_state` | `"" \| "working" \| "idle" \| "attention"` | Claude Code lifecycle hook events | Claude panes only |
+| `agent_state` | `"" \| "working" \| "idle" \| "attention"` | Agent lifecycle hook events | Claude and Codex panes |
 
-For Claude panes, `agent_state` is the **authoritative source** for the stoplight. The PTY activity heuristic is only used for shell and other non-hooked panes.
+For Claude and Codex panes, `agent_state` is the **authoritative source** for the stoplight. The PTY activity heuristic is used for shell panes, and for Codex panes that have not received a hook event yet (see below).
 
 ## Stoplight colors
 
-### For Claude panes (agent-hooked)
+### For Claude and Codex panes (agent-hooked)
 
 The stoplight is derived directly from `agent_state`:
 
 | agent_state | stoplight | Meaning |
 |-------------|-----------|---------|
 | `""` (unknown) | `gray` | No hook event received yet |
-| `working` | `orange` | Claude is actively running (prompt submitted, tool in use) |
-| `idle` | `green` | Claude returned a final answer (Stop event received) |
+| `working` | `orange` | The agent is actively running (prompt submitted, tool in use, or — Codex only — compacting its context) |
+| `idle` | `green` | The agent returned a final answer (Stop event received) |
 | `attention` | `red` | Waiting for human input (permission request, elicitation) |
+
+**Codex panes with no hook events fall back to the byte-flow heuristic.** A station running with `--no-install-codex-hooks`, or one where the install failed, never delivers a Codex `agent_state`; treating that as `gray` would leave every Codex pane permanently colourless, which is strictly less useful than the guess the heuristic makes. Once any hook event lands, the pane switches to agent-state semantics for good.
+
+Claude deliberately does **not** get that fallback: `unknown` is also what an ESC interrupt produces mid-session, where `gray` is the intended answer — see the "Interrupt → gray (not green)" note under [agent_state transitions](#agent_state-transitions-claude-and-codex-panes).
 
 Exit conditions override all of the above (regardless of pane kind):
 
@@ -42,7 +46,7 @@ The idle threshold is **3 seconds** (not 5s or 30s as earlier documentation sugg
 
 The stoplight runner ticks at 1 Hz (`TickInterval = 1 * time.Second`).
 
-## agent_state transitions (Claude panes)
+## agent_state transitions (Claude and Codex panes)
 
 Driven by lifecycle hook events forwarded by the shim. State machine in `daemon/internal/pty/pane.go:RecordEvent`:
 

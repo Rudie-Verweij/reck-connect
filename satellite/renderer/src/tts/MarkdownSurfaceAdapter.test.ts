@@ -317,3 +317,46 @@ describe("MarkdownSurfaceAdapter", () => {
     });
   });
 });
+
+describe("MarkdownSurfaceAdapter — mermaid SVG is not spoken", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("omits svg text from the spoken chunk", () => {
+    // Reading a flowchart's node labels aloud mid-document is noise, and the
+    // boundary overlay can't position itself over SVG anyway.
+    const { container, body } = makeBodyWithHTML(
+      "<p>before diagram</p>" +
+        "<svg><g><text>Start</text><text>Finish</text></g></svg>" +
+        "<p>after diagram</p>",
+    );
+    const adapter = new MarkdownSurfaceAdapter({ container, body });
+    const chunk = adapter.resolveSpokenChunk();
+    expect(chunk.text).toContain("before diagram");
+    expect(chunk.text).toContain("after diagram");
+    expect(chunk.text).not.toContain("Start");
+    expect(chunk.text).not.toContain("Finish");
+  });
+});
+
+describe("MarkdownSurfaceAdapter — mermaid foreignObject labels", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("omits labels mermaid renders as foreignObject HTML", () => {
+    // Mermaid v11 flowcharts don't use SVG <text> for node labels — they embed
+    // real HTML in a <foreignObject>. Skipping by svg ancestry (rather than by
+    // tag name) is what makes those get skipped too.
+    const { container, body } = makeBodyWithHTML(
+      "<p>before diagram</p>" +
+        '<svg><g><foreignObject><div><span class="nodeLabel">Load mermaid chunk</span></div></foreignObject></g></svg>' +
+        "<p>after diagram</p>",
+    );
+    const adapter = new MarkdownSurfaceAdapter({ container, body });
+    const chunk = adapter.resolveSpokenChunk();
+    expect(chunk.text).toContain("before diagram");
+    expect(chunk.text).not.toContain("Load mermaid chunk");
+  });
+});

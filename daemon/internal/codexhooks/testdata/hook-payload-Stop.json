@@ -1,0 +1,11 @@
+{
+  "session_id": "019e11a8-58c4-7f03-a9ef-2e1c380c189b",
+  "turn_id": "019e11a8-58c7-7162-a567-f7e3ce50deda",
+  "transcript_path": null,
+  "cwd": "/var/folders/l5/b4__fk4d73s077pr0c56zbl80000gn/T/tmp.Wcm4GFDnRG",
+  "hook_event_name": "Stop",
+  "model": "gpt-5.5",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "last_assistant_message": "DONE"
+}

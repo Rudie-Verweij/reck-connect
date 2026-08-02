@@ -72,8 +72,26 @@ type CredentialSource func() (Credentials, error)
 // a poll never fires with a token that lapses in flight.
 const credRefreshSkew = time.Minute
 
+// credMaxAge bounds how long a cached read is reused REGARDLESS of the
+// token's expiry.
+//
+// Expiry alone is the wrong trigger, because the blob carries more than the
+// token: subscriptionType and rateLimitTier live there too, and those change
+// when you sign in again — while the token stays valid for hours. Without a
+// ceiling, signing in on a new plan left the daemon serving the old tier
+// until the OLD token happened to lapse, so the usage view kept reporting
+// the previous plan. Worse, Valid() treats a blob with no expiry as valid
+// forever, which cached it for the daemon's whole lifetime.
+//
+// Five minutes keeps the macOS keychain cost that motivated this cache
+// (~12 reads an hour rather than one per poll) while making a re-login show
+// up while the user is still looking for it.
+const credMaxAge = 5 * time.Minute
+
 // NewCachedCredentialSource wraps src so a successful read is reused until
-// the token is close to expiring.
+// the token is close to expiring OR the entry reaches credMaxAge —
+// whichever comes first. The age ceiling is what lets a re-login be seen;
+// see credMaxAge.
 //
 // This matters most on macOS, where reading credentials means spawning
 // `security` to hit the login keychain: without caching, a 5-minute poll
@@ -89,14 +107,17 @@ func NewCachedCredentialSource(src CredentialSource, now func() time.Time) Crede
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	var (
-		mu     sync.Mutex
-		cached Credentials
-		ok     bool
+		mu        sync.Mutex
+		cached    Credentials
+		ok        bool
+		fetchedAt time.Time
 	)
 	return func() (Credentials, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		if ok && cached.Valid(now().Add(credRefreshSkew)) {
+		t := now()
+		fresh := t.Sub(fetchedAt) < credMaxAge
+		if ok && fresh && cached.Valid(t.Add(credRefreshSkew)) {
 			return cached, nil
 		}
 		c, err := src()
@@ -107,7 +128,7 @@ func NewCachedCredentialSource(src CredentialSource, now func() time.Time) Crede
 			cached = Credentials{}
 			return c, err
 		}
-		cached, ok = c, true
+		cached, ok, fetchedAt = c, true, t
 		return c, nil
 	}
 }

@@ -31,6 +31,10 @@ const (
 type Signals struct {
 	Kind       proto.PaneKind
 	AgentState proto.AgentState
+	// HasAgentEvent is true once any lifecycle-hook event has reached the
+	// pane. Only consulted for codex panes, to tell "hooks installed, agent
+	// simply idle" apart from "hooks never installed, no signal at all".
+	HasAgentEvent bool
 
 	HasOutputEver    bool
 	LastOutputAt     time.Time
@@ -45,7 +49,7 @@ type Signals struct {
 //  1. Exited with non-zero code → red (crash / error)
 //  2. Exited with zero code → green (task finished)
 //
-// For Claude / agent-hooked panes (Kind == claude), after exit checks:
+// For agent-hooked panes (Kind == claude or codex), after exit checks:
 //  3. AgentState == attention → red
 //  4. AgentState == working   → orange
 //  5. AgentState == idle      → green
@@ -64,7 +68,18 @@ func Evaluate(sig Signals, now time.Time) proto.Stoplight {
 		}
 		return proto.StoplightGreen
 	}
-	if sig.Kind == proto.PaneKindClaude {
+	// Codex panes are hooked too (see internal/codexhooks), so once their
+	// hooks report in, their agent state is as trustworthy as Claude's.
+	//
+	// Until then, fall through to the byte-flow heuristic. A station running
+	// with --no-install-codex-hooks (or where the install failed) would
+	// otherwise leave every codex pane gray forever, which is strictly worse
+	// than the guess it used to make. Claude deliberately does NOT get this
+	// fallback: its unknown state is also what an ESC interrupt produces
+	// mid-session, and gray is the established answer there.
+	hooked := sig.Kind == proto.PaneKindClaude ||
+		(sig.Kind == proto.PaneKindCodex && sig.HasAgentEvent)
+	if hooked {
 		switch sig.AgentState {
 		case proto.AgentStateAttention:
 			return proto.StoplightRed
@@ -108,9 +123,17 @@ func (r *Runner) Run(ctx context.Context) {
 			return
 		case now := <-ticker.C:
 			for _, pane := range r.mgr.AllPanes() {
+				// A pane is registered before its child starts so agent
+				// hooks can be attributed to it. Until Start has run,
+				// State() / AgentState() describe nothing real, so
+				// evaluating them would publish a misleading colour.
+				if !pane.IsStarted() {
+					continue
+				}
 				sig := Signals{
 					Kind:             pane.Kind,
 					AgentState:       pane.AgentState(),
+					HasAgentEvent:    pane.HasAgentEvents(),
 					HasOutputEver:    len(pane.ReplayTail(1)) > 0,
 					LastOutputAt:     pane.LastOutputAt(),
 					AwaitingApproval: pane.AwaitingApproval(),

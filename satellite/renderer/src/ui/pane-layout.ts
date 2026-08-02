@@ -10,6 +10,7 @@ import { ensureHistoryButton } from "./paneControls";
 import { ensureDictationFab } from "../transcription/micOverlay";
 import { installVoiceErrorHint } from "../transcription/voiceErrorHint";
 import { computeReorder } from "./reorder";
+import { zoomedTerminalFontSize } from "./content-zoom";
 import { HoverFocusController } from "./hover-focus-controller";
 
 export interface PaneLayoutCallbacks {
@@ -259,6 +260,11 @@ export class PaneLayout {
   private views = new Map<string, LeafView>();
   private resizeObserver?: ResizeObserver;
   private currentTheme: "light" | "dark" = "dark";
+  // Content zoom factor. Terminals are canvases, so they can't inherit a CSS
+  // font-size — each one is resized explicitly via xterm's fontSize, which
+  // reflows the grid instead of scaling a bitmap. Held here so panes created
+  // AFTER a zoom change start at the right size rather than at 1.
+  private contentZoom = 1;
   // an earlier release: paneIds whose terminal lives in a popout window. The
   // syncLeafView path consults `isDetached` and renders a placeholder
   // wrapper instead of mounting a TerminalPane; drop handlers refuse
@@ -763,6 +769,11 @@ export class PaneLayout {
             this.cb.onDictationToggle?.(t.paneId, leaf.id);
           },
         });
+      }
+      // A pane created while the app is already zoomed must match the rest,
+      // not start at the default size and only catch up on the next ⌘+.
+      if (this.contentZoom !== 1) {
+        term.setFontSize(zoomedTerminalFontSize(this.contentZoom));
       }
       view.terminals.set(t.id, {
         kind: "terminal",
@@ -1302,6 +1313,23 @@ export class PaneLayout {
   private updateActiveClasses() {
     for (const [leafId, view] of this.views) {
       view.el.classList.toggle("active", leafId === this.activeLeafId);
+    }
+  }
+
+  /**
+   * Apply a content zoom factor to every live terminal.
+   *
+   * Called from boot's zoom subscription. `TerminalPane.setFontSize` no-ops
+   * when the size is unchanged and re-fits when it isn't, so this is cheap to
+   * call on every broadcast.
+   */
+  setContentZoom(factor: number): void {
+    this.contentZoom = factor;
+    const px = zoomedTerminalFontSize(factor);
+    for (const view of this.views.values()) {
+      for (const record of view.terminals.values()) {
+        if (record.kind === "terminal") record.term.setFontSize(px);
+      }
     }
   }
 

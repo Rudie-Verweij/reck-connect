@@ -356,3 +356,103 @@ describe("askPaneKind — host picker (hybrid mode, phase 10)", () => {
   });
 });
 
+
+describe("askPaneKind — split resume actions", () => {
+  function mount() {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    return root;
+  }
+
+  it("offers a separate resume action per agent", () => {
+    const root = mount();
+    void askPaneKind(root, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
+    });
+    expect(
+      root.querySelector("button[data-kind='resume-claude']"),
+    ).not.toBeNull();
+    expect(
+      root.querySelector("button[data-kind='resume-codex']"),
+    ).not.toBeNull();
+    // The old combined action must be gone, or a click would resolve to a
+    // kind the caller no longer handles.
+    expect(root.querySelector("button[data-kind='resume']")).toBeNull();
+    root.querySelector<HTMLButtonElement>("button[data-kind='claude']")?.click();
+    root.remove();
+  });
+
+  it("resolves resume-codex when the Resume Codex button is clicked", async () => {
+    const root = mount();
+    const p = askPaneKind(root, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
+    });
+    root
+      .querySelector<HTMLButtonElement>("button[data-kind='resume-codex']")
+      ?.click();
+    await expect(p).resolves.toEqual({ kind: "resume-codex", host: "station" });
+    root.remove();
+  });
+
+  it("maps r to Resume Claude and Shift+R to Resume Codex", async () => {
+    const claudeRoot = mount();
+    const claudeP = askPaneKind(claudeRoot, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
+    });
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "r", bubbles: true }),
+    );
+    await expect(claudeP).resolves.toEqual({
+      kind: "resume-claude",
+      host: "station",
+    });
+    claudeRoot.remove();
+
+    const codexRoot = mount();
+    const codexP = askPaneKind(codexRoot, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
+    });
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "R", shiftKey: true, bubbles: true }),
+    );
+    await expect(codexP).resolves.toEqual({
+      kind: "resume-codex",
+      host: "station",
+    });
+    codexRoot.remove();
+  });
+
+  // A CapsLock user pressing plain "r" reports key "R" without shiftKey.
+  // That must still be Resume Claude, not the Codex variant.
+  it("treats an unshifted capital R as Resume Claude", async () => {
+    const root = mount();
+    const p = askPaneKind(root, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
+    });
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "R", shiftKey: false, bubbles: true }),
+    );
+    await expect(p).resolves.toEqual({ kind: "resume-claude", host: "station" });
+    root.remove();
+  });
+
+  // "x" for codeX predates this change; keep it working so muscle memory
+  // isn't broken by the resume split.
+  it("keeps x as the plain Codex pane shortcut", async () => {
+    const root = mount();
+    const p = askPaneKind(root, {
+      enabledHosts: { station: true, local: false },
+      isHostReady: () => true,
+    });
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "x", bubbles: true }),
+    );
+    await expect(p).resolves.toEqual({ kind: "codex", host: "station" });
+    root.remove();
+  });
+});

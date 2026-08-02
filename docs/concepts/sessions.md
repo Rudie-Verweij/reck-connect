@@ -1,6 +1,6 @@
 # Sessions
 
-The sessions store persists a per-project index that maps pane identities (UUIDs) to metadata — name, cwd, timestamps, and (for shell panes) the original argv. This index is what powers the "Resume" and "Restore" flows after a daemon restart or crash.
+The sessions store persists a per-project index that maps pane identities (UUIDs) to metadata — name, cwd, timestamps, the original argv (shell and codex panes), and the Codex thread UUID (codex panes). This index is what powers the "Resume" and "Restore" flows after a daemon restart or crash.
 
 Source: `daemon/internal/sessions/sessions.go`, `daemon/internal/http/router.go`, `proto/proto.md` (§Capability negotiation, §Identity rule).
 
@@ -14,7 +14,7 @@ Every pane kind with persistence uses exactly one identity field. They are mutua
 | `shell` | `SlotID` | RFC 4122 v4 UUID | Yes |
 | `codex` | `SlotID` | RFC 4122 v4 UUID | Yes |
 
-This is the **Identity Rule** from the protocol spec. Codex reuses the shell `SlotID` mechanism (it has no Claude session to resume; slot continuity is what carries a codex pane across a restart). `DismissSessionsRequest.session_ids` (misnamed for historical reasons) accepts Claude SessionIDs or shell/codex SlotIDs interchangeably — the daemon matches on whichever identity the entry carries.
+This is the **Identity Rule** from the protocol spec. Codex reuses the shell `SlotID` mechanism: the slot is what carries a codex pane across a restart. A codex entry additionally records `ThreadID`, the Codex CLI thread UUID — but that is *value data*, not an identity, and the row is never keyed by it. Keying a codex row by its thread would break the liveness, rename and touch paths, which prefer `SessionID` when it is set. `DismissSessionsRequest.session_ids` (misnamed for historical reasons) accepts Claude SessionIDs or shell/codex SlotIDs interchangeably — the daemon matches on whichever identity the entry carries.
 
 ## Session Index Storage
 
@@ -29,8 +29,9 @@ Format: a JSON object `{ "entries": [...] }`. Each entry is an `Entry` struct:
 ```go
 type Entry struct {
     SessionID    string          // claude: the --resume UUID
-    SlotID       string          // shell: the slot UUID
-    Kind         proto.PaneKind  // "claude" | "shell"; defaults to "claude" for pre-Scope-B rows
+    SlotID       string          // shell + codex: the slot UUID
+    ThreadID     string          // codex only: the Codex CLI thread UUID
+    Kind         proto.PaneKind  // "claude" | "shell" | "codex"; defaults to "claude" for pre-Scope-B rows
     Name         string          // human label (claude only; "project/short-uuid")
     Cwd          string          // cwd at spawn time
     CreatedAt    time.Time
@@ -38,13 +39,15 @@ type Entry struct {
     LastPaneID   string          // pane ID that last hosted this session
     WasLive      bool            // true = was running at last observation
     DisplayName  string          // user-given override; persisted here
-    ShellArgv    []string        // shell only: exact argv to re-exec on restore
+    ShellArgv    []string        // shell + codex: exact argv to re-exec on restore
 }
 ```
 
 The store is append-mostly: entries are never deleted (only `WasLive` is cleared on graceful close). `List()` filters Claude entries whose JSONL transcript no longer exists on disk — Claude Code TTLs its own transcripts at ~30 days, so missing-JSONL entries are invisible but not removed.
 
-Shell entries pass through `List()` unconditionally because they have no external transcript to check.
+Shell and codex entries pass through `List()` unconditionally because they have no external transcript to check — Codex keeps its own thread metadata in its own store, which the daemon never reads.
+
+`Upsert` preserves a captured `ThreadID` when the incoming entry's is empty. The daemon writes a codex row before the pane starts (so the thread can be recorded the moment it is reported) and re-upserts afterwards with a freshly-built entry; without that preservation the second write, or any liveness touch, would blank the thread and silently make the pane unresumable.
 
 ## Session Lifecycle
 
@@ -65,6 +68,20 @@ Shell entries pass through `List()` unconditionally because they have no externa
 4. On restore: daemon looks up entry by `SlotID` and replays `ShellArgv` + stored `Cwd` verbatim.
 
 **Restore replays frozen argv and cwd** — project configuration that drifts after create (changed `shell` field, moved `cwd`) does NOT affect what a restore spawns. See [`concepts/panes.md`](./panes.md#shell-restore-replays-frozen-argv-and-cwd) for the authoritative explanation.
+
+### Codex pane
+
+1. Daemon generates a `SlotID` UUID and writes the entry **before** starting the child. Codex can fire its `SessionStart` hook before `CreatePane` returns, and recording a thread against a row that does not exist yet is a silent no-op.
+2. The Codex hook shim posts `SessionStart` with `session_id` — the thread UUID. `Manager.RecordCodexThread` stores it as `ThreadID`. This payload is the only place the thread appears.
+3. `WasLive=true` on spawn; cleared on graceful `DeletePane`. A pane whose start failed has its row marked not-live so it is not resurrected.
+4. On restore, the client supplies only the `SlotID` (the wire never exposes the thread). The daemon looks up the row and hydrates `ResumeSessionID` from `ThreadID`, so client-driven restore and auto-restore-on-startup take the same path. The adapter then builds:
+
+   ```
+   codex resume [-c developer_instructions=…] [extra args…] <thread-uuid>
+   ```
+
+   The subcommand leads so `-c` is parsed as its option, and the positional UUID closes argv — anything after it is read as prompt text. The resume uses the cwd the thread ran in, so the project files codex reads resolve as they did before.
+5. A row whose `ThreadID` never landed (the pane died before reporting one) has no conversation to restore. It still comes back, by replaying `ShellArgv` — same as a shell pane — just without history. The Satellite leaves such rows out of the "Resume Codex…" picker rather than offering a resume that would silently start fresh.
 
 ## Liveness Ticker
 

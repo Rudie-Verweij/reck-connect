@@ -166,3 +166,68 @@ func TestEvaluate_shell_unaffectedByAgentState(t *testing.T) {
 		t.Fatalf("shell pane with recent output should be orange, got %s", s)
 	}
 }
+
+// Codex panes are hooked (see internal/codexhooks), so once a hook event has
+// arrived their agent state drives the light exactly as Claude's does.
+func TestEvaluate_codexFollowsAgentState(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		state proto.AgentState
+		want  proto.Stoplight
+	}{
+		{proto.AgentStateAttention, proto.StoplightRed},
+		{proto.AgentStateWorking, proto.StoplightOrange},
+		{proto.AgentStateIdle, proto.StoplightGreen},
+	}
+	for _, c := range cases {
+		sig := Signals{
+			Kind:          proto.PaneKindCodex,
+			AgentState:    c.state,
+			HasAgentEvent: true,
+			// Byte-flow signals that would say "orange" on their own, so a
+			// pass here can't be the heuristic agreeing by accident.
+			HasOutputEver: true,
+			LastOutputAt:  now.Add(-1 * time.Second),
+		}
+		if got := Evaluate(sig, now); got != c.want {
+			t.Fatalf("codex agent_state=%s: want %s, got %s", c.state, c.want, got)
+		}
+	}
+}
+
+// Before any hook event arrives — a station running with
+// --no-install-codex-hooks, or one where the install failed — a codex pane
+// must keep the byte-flow behaviour it had before hooks existed, rather than
+// sitting gray forever.
+func TestEvaluate_codexWithoutHooksUsesByteFlow(t *testing.T) {
+	now := time.Now()
+	sig := Signals{
+		Kind:          proto.PaneKindCodex,
+		AgentState:    proto.AgentStateUnknown,
+		HasAgentEvent: false,
+		HasOutputEver: true,
+		LastOutputAt:  now.Add(-1 * time.Second),
+	}
+	if got := Evaluate(sig, now); got != proto.StoplightOrange {
+		t.Fatalf("unhooked codex with recent output: want orange, got %s", got)
+	}
+	sig.LastOutputAt = now.Add(-IdleThreshold - time.Second)
+	if got := Evaluate(sig, now); got != proto.StoplightGreen {
+		t.Fatalf("unhooked codex gone quiet: want green, got %s", got)
+	}
+}
+
+// Claude keeps gray on unknown: that state is also what an ESC interrupt
+// produces mid-session, so the byte-flow fallback must not leak into it.
+func TestEvaluate_claudeUnknownStaysGray(t *testing.T) {
+	now := time.Now()
+	sig := Signals{
+		Kind:          proto.PaneKindClaude,
+		AgentState:    proto.AgentStateUnknown,
+		HasOutputEver: true,
+		LastOutputAt:  now.Add(-1 * time.Second),
+	}
+	if got := Evaluate(sig, now); got != proto.StoplightGray {
+		t.Fatalf("claude unknown: want gray, got %s", got)
+	}
+}

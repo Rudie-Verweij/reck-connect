@@ -7,7 +7,7 @@ import (
 )
 
 func TestKindValid(t *testing.T) {
-	ok := []Kind{KindSessionStart, KindUserPrompt, KindPreTool, KindPostTool, KindStop, KindNotification, KindSessionEnd}
+	ok := []Kind{KindSessionStart, KindUserPrompt, KindPreTool, KindPostTool, KindStop, KindNotification, KindSessionEnd, KindPreCompact, KindPostCompact}
 	for _, k := range ok {
 		if !KindValid(k) {
 			t.Fatalf("%q should be valid", k)

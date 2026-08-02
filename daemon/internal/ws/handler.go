@@ -228,12 +228,14 @@ func (h *Handler) readPump(ctx context.Context, conn *websocket.Conn, pane *pty.
 			}
 			_ = pane.Write(bytes)
 			// A lone ESC byte sent to a "working" pane is almost always
-			// a user interrupt (Escape in Claude Code cancels the current
-			// turn). xterm.js sends arrow keys as multi-byte sequences
-			// (ESC [ A, etc.) so a single-byte ESC is unambiguous. Claude's
-			// own hooks don't fire on interrupts outside a tool call, so
-			// this keystroke is often the only signal we get.
-			if len(bytes) == 1 && bytes[0] == 0x1b && pane.Kind == proto.PaneKindClaude && pane.AgentState() == proto.AgentStateWorking {
+			// a user interrupt (Escape cancels the current turn in both
+			// Claude Code and Codex). xterm.js sends arrow keys as
+			// multi-byte sequences (ESC [ A, etc.) so a single-byte ESC is
+			// unambiguous. Neither agent's hooks fire on an interrupt
+			// outside a tool call, so this keystroke is often the only
+			// signal we get.
+			agentHooked := pane.Kind == proto.PaneKindClaude || pane.Kind == proto.PaneKindCodex
+			if len(bytes) == 1 && bytes[0] == 0x1b && agentHooked && pane.AgentState() == proto.AgentStateWorking {
 				pane.RecordEvent(events.Event{
 					ID:        events.NewID(),
 					PaneID:    pane.ID,

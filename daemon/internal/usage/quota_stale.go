@@ -69,3 +69,30 @@ func liveBucket(b Bucket, now int64) Bucket {
 	}
 	return b
 }
+
+// ResetsAtGranularity is the resolution stored resets_at values are snapped
+// to. Rate-limit windows begin and end on whole minutes, so anything finer
+// is noise.
+const ResetsAtGranularity = 60
+
+// NormalizeResetsAt snaps a window expiry to the nearest minute.
+//
+// Upstream reports the expiry as an RFC3339 string with sub-second
+// precision, and truncating it to whole seconds turns a sub-second wobble
+// around the boundary into a one-second integer flip. Observed on a real
+// export: the same 18:00:00 window stored as both 1785175199 and
+// 1785175200, alternating every few minutes across 3.6k rows.
+//
+// That matters because resets_at is the IDENTITY of a window — the forecast
+// refuses to measure a burn rate across a reset, so a flickering value
+// shattered one window into hundreds of fragments and left the weekly
+// forecast with nothing long enough to measure. Readers are defensive about
+// it anyway (see windowID in quota_forecast.go, which must stay for rows
+// already written), but there is no reason to keep recording the noise.
+func NormalizeResetsAt(b Bucket) Bucket {
+	if b.ResetsAt == nil {
+		return b
+	}
+	snapped := ((*b.ResetsAt + ResetsAtGranularity/2) / ResetsAtGranularity) * ResetsAtGranularity
+	return Bucket{Pct: b.Pct, ResetsAt: &snapped}
+}

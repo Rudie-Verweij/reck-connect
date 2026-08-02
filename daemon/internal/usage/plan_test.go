@@ -315,3 +315,76 @@ func TestProbeCredentialFailure(t *testing.T) {
 		t.Error("written = true, want false")
 	}
 }
+
+// The tier travels with the subscription through the same merge-walk. It is
+// carried separately because the two disagree: subscriptionType goes stale
+// after an upgrade while rateLimitTier tracks the real entitlement, which is
+// the whole reason the usage view was labelling a Max 5x account "Pro".
+func TestPlanDaysCarriesRateLimitTier(t *testing.T) {
+	since, until := day(2026, 7, 1), day(2026, 7, 6)
+	at := func(d, hour int) time.Time {
+		return time.Date(2026, 7, d, hour, 0, 0, 0, time.UTC)
+	}
+
+	tests := []struct {
+		name      string
+		samples   []PlanSample
+		wantSubs  []string
+		wantTiers []string
+	}{
+		{
+			name: "a tier-only change still moves the day forward",
+			samples: []PlanSample{
+				{TS: at(1, 6), Subscription: "max", RateLimitTier: "default_claude_max_5x"},
+				{TS: at(3, 6), Subscription: "max", RateLimitTier: "default_claude_max_20x"},
+			},
+			wantSubs: []string{"max", "max", "max", "max", "max"},
+			wantTiers: []string{
+				"default_claude_max_5x", "default_claude_max_5x",
+				"default_claude_max_20x", "default_claude_max_20x", "default_claude_max_20x",
+			},
+		},
+		{
+			name: "the stale-subscription case: says pro, entitled to max 5x",
+			samples: []PlanSample{
+				{TS: at(2, 6), Subscription: "pro", RateLimitTier: "default_claude_max_5x"},
+			},
+			wantSubs:  []string{"unknown", "pro", "pro", "pro", "pro"},
+			wantTiers: []string{"", "default_claude_max_5x", "default_claude_max_5x", "default_claude_max_5x", "default_claude_max_5x"},
+		},
+		{
+			name: "rows written before the tier was recorded read back empty",
+			samples: []PlanSample{
+				{TS: at(2, 6), Subscription: "pro"},
+			},
+			wantSubs:  []string{"unknown", "pro", "pro", "pro", "pro"},
+			wantTiers: []string{"", "", "", "", ""},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newPlanStore(t)
+			for _, p := range tc.samples {
+				if err := s.InsertPlanSample(p); err != nil {
+					t.Fatalf("insert: %v", err)
+				}
+			}
+			days, err := s.PlanDays(since, until, 0)
+			if err != nil {
+				t.Fatalf("PlanDays: %v", err)
+			}
+			if len(days) != len(tc.wantTiers) {
+				t.Fatalf("got %d days, want %d", len(days), len(tc.wantTiers))
+			}
+			for i := range tc.wantTiers {
+				if days[i].Subscription != tc.wantSubs[i] {
+					t.Errorf("day %d subscription = %q, want %q", i+1, days[i].Subscription, tc.wantSubs[i])
+				}
+				if days[i].RateLimitTier != tc.wantTiers[i] {
+					t.Errorf("day %d tier = %q, want %q", i+1, days[i].RateLimitTier, tc.wantTiers[i])
+				}
+			}
+		})
+	}
+}

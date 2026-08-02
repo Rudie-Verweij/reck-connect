@@ -116,3 +116,43 @@ describe("MarkdownSearchAdapter — collapsed <details>", () => {
     container.remove();
   });
 });
+
+describe("MarkdownSearchAdapter — mermaid SVG is not searchable", () => {
+  // Mermaid replaces each fence with inline SVG whose <text> nodes hold the
+  // diagram labels. Those must stay out of the flat index: the Custom
+  // Highlight API can't paint a Range inside SVG, so a "match" there would be
+  // a hit the user can never see.
+  beforeEach(() =>
+    mount(
+      "<p>alpha prose</p>" +
+        "<svg><g><text>alpha label</text></g></svg>" +
+        "<p>omega prose</p>",
+    ),
+  );
+
+  it("excludes svg text from the flat index", () => {
+    const text = adapter.getText();
+    expect(text).toContain("alpha prose");
+    expect(text).toContain("omega prose");
+    expect(text).not.toContain("alpha label");
+  });
+
+  it("leaves a single indexable occurrence of a term the diagram also uses", () => {
+    const hits = adapter.getText().split("alpha").length - 1;
+    expect(hits).toBe(1);
+  });
+});
+
+describe("MarkdownSearchAdapter — mermaid foreignObject labels", () => {
+  beforeEach(() =>
+    mount(
+      "<p>alpha prose</p>" +
+        '<svg><g><foreignObject><div><span class="nodeLabel">alpha label</span></div></foreignObject></g></svg>',
+    ),
+  );
+
+  it("excludes foreignObject HTML labels from the index", () => {
+    // The real shape mermaid v11 emits for flowchart nodes.
+    expect(adapter.getText()).not.toContain("alpha label");
+  });
+});

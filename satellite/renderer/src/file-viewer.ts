@@ -4,8 +4,15 @@
 
 import { mountFileViewer } from "./viewer/FileViewerHost";
 import { loadTheme } from "./config";
+import { initContentZoom } from "./ui/content-zoom";
 
 async function bootFileViewer(): Promise<void> {
+  // Content zoom (⌘+/⌘-). Purely CSS here — `.file-viewer-body` multiplies its
+  // font-size by `--content-zoom`, and everything inside sizes in em. The
+  // popup's title bar is outside that subtree, so it stays put and keeps its
+  // alignment with the macOS traffic lights.
+  initContentZoom();
+
   // Apply the persisted theme so first paint doesn't flash cream-on-dark.
   // The BrowserWindow already opens with the right backgroundColor; this
   // sets the html-level attribute the CSS keys off.

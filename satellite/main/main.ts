@@ -10,6 +10,12 @@ import {
   isValidHost,
   localDaemonToken,
 } from "./daemon-spawn";
+import {
+  CONTENT_ZOOM_KEY,
+  DEFAULT_ZOOM,
+  nearestStep,
+  stepZoom,
+} from "./content-zoom";
 import { registerRsyncIpc } from "./rsync-copy";
 import { registerTranscriptionIpc } from "./transcription/router";
 import { checkExternalUrl, resolveInsideMountPoint } from "./ipc-validation";
@@ -21,6 +27,11 @@ import {
   type CreateViewerOptions,
 } from "./file-viewer";
 import { composeFileViewerRoots } from "./file-roots";
+import {
+  NAV_HEIGHT,
+  POPUP_HEADER_HEIGHT,
+  trafficLightPositionFor,
+} from "./window-chrome";
 
 // Pin the Electron app name before any path / safeStorage resolution.
 //
@@ -159,7 +170,7 @@ function createWindow() {
     },
     backgroundColor: bgColor,
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 14, y: 16 },
+    trafficLightPosition: trafficLightPositionFor(NAV_HEIGHT),
   });
 
   if (isDev) {
@@ -295,7 +306,7 @@ function createPaneWindow(
     },
     backgroundColor: bgColor,
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 14, y: 16 },
+    trafficLightPosition: trafficLightPositionFor(POPUP_HEADER_HEIGHT),
   });
 
   // Use a query string (NOT a hash) so the popout boot script can read
@@ -490,13 +501,122 @@ function buildMenu() {
       ],
     },
     { role: "editMenu" },
-    { role: "viewMenu" },
+    // Hand-rolled View menu instead of `role: "viewMenu"`.
+    //
+    // The built-in role's zoom items call `webContents.setZoomLevel`, which
+    // scales the whole page — including our title bars. Since every window is
+    // `titleBarStyle: "hiddenInset"`, the macOS traffic lights sit on top of
+    // our own markup at a fixed OS size, so a title bar that grows on ⌘+ drifts
+    // out of alignment with the close button. Page zoom also scales the
+    // terminal's canvas as a bitmap rather than reflowing its grid.
+    //
+    // These items drive a content-only factor instead; see ./content-zoom.ts.
+    // Everything else the built-in role provided is reproduced below so the
+    // menu doesn't lose reload / devtools / fullscreen.
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        {
+          label: "Actual Size",
+          accelerator: "CommandOrControl+0",
+          click: () => applyContentZoom("reset"),
+        },
+        {
+          label: "Zoom In",
+          // Both the shifted and unshifted forms: on most layouts ⌘+ requires
+          // Shift, and users press whichever their keyboard puts there.
+          accelerator: "CommandOrControl+Plus",
+          click: () => applyContentZoom("in"),
+        },
+        {
+          label: "Zoom In",
+          accelerator: "CommandOrControl+=",
+          visible: false,
+          click: () => applyContentZoom("in"),
+        },
+        {
+          label: "Zoom Out",
+          accelerator: "CommandOrControl+-",
+          click: () => applyContentZoom("out"),
+        },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
     { role: "windowMenu" },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// --- Content zoom -----------------------------------------------------
+//
+// One factor for the whole app rather than per-window: a detached pane and the
+// window it came from are the same workspace, and zooming one but not the other
+// reads as a bug. Persisted so it survives a restart, which Electron's built-in
+// per-origin page zoom used to do for free.
+//
+// Title bars deliberately ignore this — see renderer/src/ui/window-header.ts.
+
+let contentZoom = DEFAULT_ZOOM;
+
+/** Push the current factor at one window (used on load and on change). */
+function sendContentZoom(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
+  win.webContents.send("zoom:set", contentZoom);
+}
+
+/** Broadcast to every open window, so popups and popouts stay in step. */
+function broadcastContentZoom(): void {
+  for (const win of BrowserWindow.getAllWindows()) sendContentZoom(win);
+}
+
+function applyContentZoom(direction: "in" | "out" | "reset"): void {
+  const next = stepZoom(contentZoom, direction);
+  if (next === contentZoom) return; // already at an end — nothing to redraw
+  contentZoom = next;
+  try {
+    writeConfig(CONTENT_ZOOM_KEY, contentZoom);
+  } catch (e) {
+    // A failed write costs the setting on next launch, not this session.
+    console.warn("[zoom] could not persist content zoom:", e);
+  }
+  broadcastContentZoom();
+}
+
+/** Restore the persisted factor at startup. Sanitized by nearestStep. */
+function loadContentZoom(): void {
+  contentZoom = nearestStep(readConfig(CONTENT_ZOOM_KEY));
+}
+
+/**
+ * Hand every window the current factor once its renderer is ready — otherwise a
+ * popout or file-viewer popup opens unzoomed while the main window is zoomed.
+ *
+ * Hooked at the app level rather than at each `new BrowserWindow` call so it
+ * covers windows created in other modules (file-viewer.ts) and any added later,
+ * without threading a priming function through them.
+ *
+ * `did-finish-load` (not `ready-to-show`) because the listener the renderer
+ * registers only exists after its bundle has evaluated. It also re-fires on
+ * reload, which is what we want.
+ */
+function registerContentZoomPriming(): void {
+  app.on("browser-window-created", (_e, win) => {
+    win.webContents.on("did-finish-load", () => sendContentZoom(win));
+  });
+}
+
 app.whenReady().then(async () => {
+  // Content zoom: restore the persisted factor and arrange for every window
+  // (including popouts and file-viewer popups) to be handed it on load. Must
+  // run before the first window is created so nothing opens unzoomed.
+  loadContentZoom();
+  registerContentZoomPriming();
+
   // Phase 2 (an earlier release, plan rev 3.1): migrate the legacy
   // mode/stationUrl/daemonToken triplet into the new `settings` +
   // `station.token` keys. Idempotent — re-runs short-circuit on the

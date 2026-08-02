@@ -84,6 +84,16 @@ export interface UsageHistogramBin {
 export interface UsagePlanDay {
   day: number;
   subscription: string;
+  /** The entitlement string, e.g. `"default_claude_max_5x"`; `""` when the
+   * daemon's credential blob didn't report one.
+   *
+   * PREFER THIS over `subscription` for display. The two disagree:
+   * `subscription` comes from `subscriptionType`, which goes stale after an
+   * upgrade (it reads `"pro"` on an account that has been Max 5x for
+   * months), while this tracks the actual entitlement — and it is the only
+   * field that distinguishes Max 5x from Max 20x at all. Fall back to
+   * `subscription` when it is empty. */
+  rate_limit_tier?: string;
 }
 
 /** Envelope for `GET /usage/histogram`. `enabled: false` means the
@@ -93,6 +103,41 @@ export interface UsagePlanDay {
  * `bucket`: zooming narrows the range but never subdivides the plan.
  * `plan_summary` counts days per tier (e.g. `{max: 40, pro: 5}`). Both
  * are absent when the plan lookup failed. */
+/** One rate-limit window's live state plus the burn rates projected from
+ * it, in percentage points per hour.
+ *
+ * `used_percentage` at `ts` is the latest ACTUAL reading — project from
+ * this, not from the plotted series, whose last value is a per-bin `MAX()`
+ * that has then been forward-filled.
+ *
+ * `resets_at` is Anthropic-reported and exact; `window_start` is it minus
+ * the window width. Neither is inferred from the series dropping to zero,
+ * because bin `MAX()` hides a reset whenever one bin straddles it.
+ *
+ * `rate_low` / `rate_high` are the 10th and 90th percentile of the burn
+ * rates this account has actually sustained — "if you keep working at your
+ * slowest / fastest observed pace". They are NOT a confidence interval and
+ * must not be labelled as one. `rate_centre` is the median of the same
+ * sample. All three come from raw rows on the daemon, so their quality does
+ * not vary with the requested `bucket`. */
+export interface UsageQuotaForecast {
+  ts: number;
+  used_percentage: number;
+  resets_at: number;
+  window_start: number;
+  rate_centre: number;
+  rate_low: number;
+  rate_high: number;
+}
+
+/** Live windows, keyed by bucket. A bucket is absent when the daemon has
+ * nothing trustworthy to say: no reading carried an expiry, the newest
+ * window has already reset, or too few active intervals survived to fit. */
+export interface UsageQuotaForecasts {
+  five_hour?: UsageQuotaForecast;
+  seven_day?: UsageQuotaForecast;
+}
+
 export interface UsageHistogramResponse {
   enabled: boolean;
   bucket?: UsageHistogramBucket;
@@ -101,6 +146,9 @@ export interface UsageHistogramResponse {
   bins?: UsageHistogramBin[];
   plan_days?: UsagePlanDay[];
   plan_summary?: Record<string, number>;
+  /** Describes the LIVE windows, so it is unrelated to `since`/`until`.
+   * Callers must check the plotted range contains now before drawing it. */
+  quota_forecast?: UsageQuotaForecasts;
 }
 
 

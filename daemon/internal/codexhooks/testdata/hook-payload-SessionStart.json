@@ -1,0 +1,9 @@
+{
+  "session_id": "019e11a8-58c4-7f03-a9ef-2e1c380c189b",
+  "transcript_path": null,
+  "cwd": "/var/folders/l5/b4__fk4d73s077pr0c56zbl80000gn/T/tmp.Wcm4GFDnRG",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-5.5",
+  "permission_mode": "bypassPermissions",
+  "source": "startup"
+}

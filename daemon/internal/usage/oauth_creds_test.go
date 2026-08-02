@@ -237,3 +237,63 @@ func TestCachedCredentialSource(t *testing.T) {
 		}
 	})
 }
+
+func TestCachedCredentialSourceRereadsAfterMaxAge(t *testing.T) {
+	// Signing in again rewrites the blob: same shape, new plan. The token
+	// is untouched and stays valid for hours, so expiry alone never
+	// triggers a re-read — which is why the usage view kept showing the old
+	// tier after a re-login.
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	tier := "default_claude_ai"
+	reads := 0
+	src := func() (Credentials, error) {
+		reads++
+		return Credentials{
+			Token:         "tok",
+			ExpiresAt:     now.Add(8 * time.Hour), // nowhere near expiring
+			Subscription:  "pro",
+			RateLimitTier: tier,
+		}, nil
+	}
+	cached := NewCachedCredentialSource(src, func() time.Time { return now })
+
+	if c, _ := cached(); c.RateLimitTier != "default_claude_ai" {
+		t.Fatalf("first read = %q", c.RateLimitTier)
+	}
+	// The user signs in on a new plan.
+	tier = "default_claude_max_5x"
+
+	// Inside the window: still the cached blob, and no extra read.
+	now = now.Add(credMaxAge / 2)
+	if c, _ := cached(); c.RateLimitTier != "default_claude_ai" {
+		t.Errorf("re-read too eagerly: %q", c.RateLimitTier)
+	}
+	if reads != 1 {
+		t.Errorf("reads = %d, want 1 while inside credMaxAge", reads)
+	}
+
+	// Past it: the new plan is picked up even though the token never lapsed.
+	now = now.Add(credMaxAge)
+	if c, _ := cached(); c.RateLimitTier != "default_claude_max_5x" {
+		t.Errorf("stale after credMaxAge: %q", c.RateLimitTier)
+	}
+}
+
+func TestCachedCredentialSourceDoesNotCacheForeverWithoutExpiry(t *testing.T) {
+	// Valid() treats a zero ExpiresAt as valid indefinitely, so before the
+	// age ceiling such a blob was cached for the daemon's whole lifetime.
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	reads := 0
+	src := func() (Credentials, error) {
+		reads++
+		return Credentials{Token: "tok"}, nil // no ExpiresAt
+	}
+	cached := NewCachedCredentialSource(src, func() time.Time { return now })
+
+	cached()
+	now = now.Add(24 * time.Hour)
+	cached()
+	if reads != 2 {
+		t.Errorf("reads = %d after a day, want 2 — an expiry-less blob was cached forever", reads)
+	}
+}

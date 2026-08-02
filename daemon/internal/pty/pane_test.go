@@ -45,6 +45,28 @@ func TestPane_RecordEvent_StateTransitions(t *testing.T) {
 	}
 }
 
+// Codex brackets a context-compaction turn with pre_compact/post_compact.
+// Both must report "working" — the agent is busy summarizing even though no
+// prompt or tool is in flight.
+//
+// Each case starts from Idle deliberately: asserting "working" straight after
+// another working-mapped event would pass even if the kind were ignored
+// entirely, since RecordEvent leaves state untouched for kinds it doesn't
+// know.
+func TestPane_RecordEvent_CompactionIsWorking(t *testing.T) {
+	for _, kind := range []events.Kind{events.KindPreCompact, events.KindPostCompact} {
+		p := newTestPane()
+		p.RecordEvent(events.Event{ID: events.NewID(), Kind: events.KindStop})
+		if got := p.AgentState(); got != proto.AgentStateIdle {
+			t.Fatalf("%s: precondition failed, want %s, got %s", kind, proto.AgentStateIdle, got)
+		}
+		p.RecordEvent(events.Event{ID: events.NewID(), Kind: kind})
+		if got := p.AgentState(); got != proto.AgentStateWorking {
+			t.Fatalf("kind=%s: want %s, got %s", kind, proto.AgentStateWorking, got)
+		}
+	}
+}
+
 func TestPane_RecordEvent_PostToolFailureInterruptGoesUnknown(t *testing.T) {
 	p := newTestPane()
 	// Start a turn: user prompt → pre/post tool → Working.

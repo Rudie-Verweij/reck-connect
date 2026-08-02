@@ -31,6 +31,14 @@ const (
 	KindStopFailure       Kind = "stop_failure"
 	KindNotification      Kind = "notification"
 	KindSessionEnd        Kind = "session_end"
+	// KindPreCompact / KindPostCompact bracket a Codex context-compaction
+	// turn. Codex CLI fires PreCompact when it is about to summarize the
+	// thread and PostCompact once the condensed system message is
+	// installed. Both map to AgentStateWorking: the agent is genuinely
+	// busy across the boundary even though no user prompt or tool is in
+	// flight. Claude Code has no equivalent hook.
+	KindPreCompact  Kind = "pre_compact"
+	KindPostCompact Kind = "post_compact"
 	// KindUserInterrupt is synthesized by the daemon (not forwarded from
 	// an agent hook) when the user sends an ESC keystroke to a pane that
 	// is currently "working". Claude Code only fires PostToolUseFailure
@@ -56,6 +64,8 @@ var ValidKinds = []Kind{
 	KindStopFailure,
 	KindNotification,
 	KindSessionEnd,
+	KindPreCompact,
+	KindPostCompact,
 }
 
 // KindValid reports whether s is one of the known Kind values.

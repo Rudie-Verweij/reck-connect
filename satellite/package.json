@@ -34,9 +34,11 @@
     "codemirror": "^6.0.2",
     "dompurify": "^3.4.2",
     "highlight.js": "^11.11.1",
+    "katex": "^0.18.1",
     "markdown-it": "^14.1.1",
     "markdown-it-anchor": "^9.2.0",
     "markdown-it-task-lists": "^2.1.1",
+    "mermaid": "^11.16.0",
     "uplot": "^1.6.32",
     "ws": "^8.21.0"
   },

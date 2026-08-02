@@ -544,10 +544,15 @@ func (s *Server) handleListSessions(w nethttp.ResponseWriter, r *nethttp.Request
 	}
 	out := make([]proto.SessionInfo, 0, len(entries))
 	for _, e := range entries {
-		// Filter to Claude entries. Pre-Scope-B on-disk rows have Kind
-		// defaulted to claude by the sessions package on load, so this
-		// is back-compatible without special-casing.
-		if e.Kind != proto.PaneKindClaude {
+		// Resumable kinds only. Claude entries resume by session id; codex
+		// entries resume by slot id, with the thread id carried alongside so
+		// a client can tell which rows are actually resumable. Shell has
+		// nothing to resume and stays out.
+		//
+		// Pre-Scope-B on-disk rows have Kind defaulted to claude by the
+		// sessions package on load, so this is back-compatible without
+		// special-casing.
+		if e.Kind != proto.PaneKindClaude && e.Kind != proto.PaneKindCodex {
 			continue
 		}
 		out = append(out, entryToWire(e))
@@ -556,9 +561,9 @@ func (s *Server) handleListSessions(w nethttp.ResponseWriter, r *nethttp.Request
 }
 
 // entryToWire converts a store Entry to the JSON-wire SessionInfo.
-// Includes Kind + SlotID for shell entries (Scope B); Claude
-// entries carry SessionID as before. Receivers should treat missing
-// kind as "claude" for back-compat.
+// Includes Kind + SlotID for shell and codex entries (Scope B), and
+// ThreadID for codex; Claude entries carry SessionID as before. Receivers
+// should treat missing kind as "claude" for back-compat.
 func entryToWire(e sessions.Entry) proto.SessionInfo {
 	return proto.SessionInfo{
 		SessionID:    e.SessionID,
@@ -570,6 +575,7 @@ func entryToWire(e sessions.Entry) proto.SessionInfo {
 		WasLive:      e.WasLive,
 		Kind:         e.Kind,
 		SlotID:       e.SlotID,
+		ThreadID:     e.ThreadID,
 	}
 }
 
@@ -1049,6 +1055,9 @@ func (s *Server) handleAgentEvent(w nethttp.ResponseWriter, r *nethttp.Request) 
 	}
 	var envelope struct {
 		ProjectID string `json:"project_id"`
+		// SessionID is codex's thread UUID, present on its SessionStart
+		// payload. Ignored for every other agent and event.
+		SessionID string `json:"session_id"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		// json.Valid passed above so a structural decode failure
@@ -1078,6 +1087,13 @@ func (s *Server) handleAgentEvent(w nethttp.ResponseWriter, r *nethttp.Request) 
 		Data:      data,
 	}
 	pane.RecordEvent(ev)
+	// Capture codex's thread UUID the first time it announces itself. This
+	// is the only place it appears, and it's what a later `codex resume`
+	// needs, so it has to be persisted against the pane's session-index row
+	// now rather than reconstructed later.
+	if agent == "codex" && kind == events.KindSessionStart && envelope.SessionID != "" {
+		s.Manager.RecordCodexThread(pane.ID, envelope.SessionID)
+	}
 	slog.Info("agent-event",
 		"pane", pane.ID,
 		"kind", kind,

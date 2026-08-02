@@ -478,3 +478,134 @@ describe("createMarkdownRenderer", () => {
     });
   });
 });
+
+describe("createMarkdownRenderer — post-mount enhancement", () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  it("passes a mermaid fence through render() with its language class intact", () => {
+    // highlight.js has no "mermaid" grammar, so the fence falls through to
+    // markdown-it's default renderer. The enhancer's selector depends on both
+    // the `language-mermaid` class and DOMPurify keeping `class`.
+    const r = createMarkdownRenderer();
+    const html = r.render("```mermaid\nflowchart TD\nA-->B\n```");
+    expect(html).toContain('<code class="language-mermaid">');
+    expect(html).toContain("flowchart TD");
+  });
+
+  it("leaves math delimiters untouched in render() — KaTeX runs post-mount", () => {
+    const r = createMarkdownRenderer();
+    expect(r.render("energy is $E=mc^2$ exactly")).toContain("$E=mc^2$");
+  });
+
+  it("whenEnhanced() resolves for a document with neither diagrams nor math", async () => {
+    const r = createMarkdownRenderer();
+    r.mount(container, r.render("# plain\n\njust prose"));
+    await expect(r.whenEnhanced()).resolves.toBeUndefined();
+  });
+
+  it("whenEnhanced() resolves before any mount()", async () => {
+    const r = createMarkdownRenderer();
+    await expect(r.whenEnhanced()).resolves.toBeUndefined();
+  });
+
+  it("whenEnhanced() tracks the most recent mount()", async () => {
+    const r = createMarkdownRenderer();
+    r.mount(container, r.render("first"));
+    await r.whenEnhanced();
+    const second = document.createElement("div");
+    document.body.appendChild(second);
+    r.mount(second, r.render("second"));
+    await expect(r.whenEnhanced()).resolves.toBeUndefined();
+  });
+
+  it("whenEnhanced() still resolves after dispose()", async () => {
+    const r = createMarkdownRenderer();
+    r.mount(container, r.render("prose"));
+    r.dispose();
+    await expect(r.whenEnhanced()).resolves.toBeUndefined();
+  });
+});
+
+describe("createMarkdownRenderer — images", () => {
+  it("marks images lazy and async-decoding", () => {
+    // Native attributes rather than an IntersectionObserver: MarkView reaches
+    // for the observer because it wants custom fade-ins, which we don't.
+    const html = createMarkdownRenderer().render("![alt text](pic.png)");
+    expect(html).toContain('loading="lazy"');
+    expect(html).toContain('decoding="async"');
+  });
+
+  it("keeps the image's own attributes alongside the lazy ones", () => {
+    const html = createMarkdownRenderer().render('![alt text](pic.png "a title")');
+    expect(html).toContain('src="pic.png"');
+    expect(html).toContain('alt="alt text"');
+    expect(html).toContain('title="a title"');
+    expect(html).toContain('loading="lazy"');
+  });
+
+  it("does not put loading/decoding on non-image tags", () => {
+    const html = createMarkdownRenderer().render("[label](./x.md)");
+    expect(html).not.toContain("loading=");
+    expect(html).not.toContain("decoding=");
+  });
+
+  it("still blocks dangerous image schemes", () => {
+    // validateLink rejects non-image data: and script-ish schemes, so the
+    // markdown stays literal text. Assert structurally: the rejected source
+    // must not have become an <img> at all. (Asserting on the raw string would
+    // pass trivially/wrongly — the scheme IS present, as escaped prose.)
+    const html = createMarkdownRenderer().render(
+      "![x](javascript:alert(1))\n\n![y](data:text/html;base64,PHN2Zz4=)",
+    );
+    const el = document.createElement("div");
+    el.innerHTML = html;
+    expect(el.querySelectorAll("img")).toHaveLength(0);
+  });
+});
+
+describe("createMarkdownRenderer — ALLOWED_TAGS widening stays safe", () => {
+  // §5 of the integration plan adds details/summary/kbd. Those are unreachable
+  // through this pipeline (see the raw-HTML test below), so the additions are
+  // defense-in-depth only — but widening the allowlist at all is exactly the
+  // "DOMPurify scope creep" risk the plan calls out, so pin the boundary.
+  it.each([
+    ["script", "<script>alert(1)</script>"],
+    ["iframe", '<iframe src="https://evil.example"></iframe>'],
+    ["object", '<object data="x"></object>'],
+    ["form", '<form action="/x"><input name="a"></form>'],
+  ])("never admits %s", (_label, raw) => {
+    const html = createMarkdownRenderer().render(raw);
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("<object");
+    expect(html).not.toContain("<form");
+  });
+
+  it("never admits inline event handlers", () => {
+    const html = createMarkdownRenderer().render(
+      '<img src="x" onerror="alert(1)">',
+    );
+    // `html: false` escapes this to prose, so the substring survives while the
+    // attribute does not — parse before asserting.
+    const el = document.createElement("div");
+    el.innerHTML = html;
+    expect(el.querySelector("[onerror]")).toBeNull();
+    expect(el.querySelectorAll("img")).toHaveLength(0);
+  });
+
+  it("still escapes raw HTML in markdown source", () => {
+    // `html: false` is the primary XSS bar — DOMPurify is belt-and-braces
+    // behind it. This pins the behaviour so a later `html: true` flip (e.g. to
+    // "make <details> work") cannot land silently.
+    const html = createMarkdownRenderer().render(
+      "<details><summary>s</summary>body</details>",
+    );
+    expect(html).toContain("&lt;details&gt;");
+    expect(html).not.toContain("<details>");
+  });
+});

@@ -1,0 +1,18 @@
+# Redacted copy of a real ~/.codex/config.toml (codex 0.128.0). The home path has
+# been replaced with ${HOME} so the fixture is portable across machines. Tests treat the file as raw
+# bytes — they don't expand the placeholder, so preservation tests must round-trip
+# the literal "${HOME}" string unchanged.
+model = "gpt-5.5"
+model_reasoning_effort = "high"
+approvals_reviewer = "user"
+[plugins."github@openai-curated"]
+enabled = true
+
+[projects."${HOME}/claude-code/Reck-Connect"]
+trust_level = "trusted"
+
+[tui.model_availability_nux]
+"gpt-5.5" = 1
+
+[notice]
+hide_full_access_warning = true

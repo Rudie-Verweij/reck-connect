@@ -27,6 +27,10 @@
   --wes-rose: #c8726e;
   --wes-sage: #7a9c6d;
   --wes-mustard: #c9982e;
+  /* Forecast band fill. Deeper than --wes-mustard so that at the low alpha
+     a projection deserves — it is a guess, and must not compete with the
+     data — the wash still reads against the paper background. */
+  --wes-mustard-deep: #a37a24;
 
   --dark-title: #f5f2ea;
   --dark-body: #b5b3a9;
@@ -46,6 +50,13 @@
   --ease-smooth: cubic-bezier(0.25, 0.1, 0.25, 1);
 
   --nav-height: 50px;
+  /* Room for the macOS traffic lights in any `hiddenInset` window's title bar.
+     Keep in step with `trafficLightPosition` in main (x: 14) — the lights are
+     ~52px wide, so 78px leaves a comfortable gutter after them. */
+  --window-header-inset: 78px;
+  /* Content zoom factor, driven by the View menu. Title bars must NOT use it
+     (see .reck-window-header); content surfaces multiply their font-size by it. */
+  --content-zoom: 1;
   --status-height: 28px;
   --tab-height: 34px;
   --rail-width: 240px;
@@ -105,21 +116,50 @@ html, body, #app {
   background: var(--app-bg);
 }
 
+/* === Shared window title bar ===================================════
+   ONE base for every window's title bar: the main window's nav, the
+   detached-pane popout header, and the file-viewer popup header. All three
+   windows are `titleBarStyle: "hiddenInset"` (main.ts, file-viewer.ts), so all
+   three have the macOS traffic lights floating over their top-left corner and
+   all three need the same two things:
+
+   1. A left inset that reserves room for those lights. Previously each surface
+      invented its own — the popups used `padding-left: 78px`, the nav used
+      `.nav-brand { margin-left: 80px }`. Two implementations 2px apart, which
+      is exactly the drift a shared base exists to prevent.
+      `--window-header-inset` is now the single source; it must stay in step
+      with `trafficLightPosition` in the main process.
+
+   2. Immunity from zoom. The traffic lights are drawn by the OS at a fixed
+      size, so a title bar that grows with zoom slides out of alignment with
+      them. Zoom is therefore CONTENT-only — see `--content-zoom` — and this
+      base deliberately never references it. Anything added here must be
+      zoom-invariant; put anything that should scale in the content area
+      instead.
+
+   Height is intentionally NOT set here: the nav is 50px and the popups are
+   38px. Each instance owns its own height, contents and colours. */
+.reck-window-header {
+  display: flex;
+  align-items: center;
+  padding-left: var(--window-header-inset);
+  user-select: none;
+  /* The bar itself drags the window; interactive children opt back out. */
+  -webkit-app-region: drag;
+}
+.reck-window-header > * {
+  -webkit-app-region: no-drag;
+}
+
 /* === Top nav (V1 .nav) === */
 
 .nav {
   background: var(--claude-dark);
   height: 100%;
-  display: flex;
-  align-items: center;
-  padding: 0 1rem;
   gap: 0.75rem;
+  padding-right: 1rem;
   border-bottom: 1px solid var(--claude-dark);
-  user-select: none;
-  -webkit-app-region: drag;
 }
-
-.nav > * { -webkit-app-region: no-drag; }
 
 .nav-brand {
   font-family: var(--font-display);
@@ -131,7 +171,6 @@ html, body, #app {
   display: flex;
   align-items: center;
   gap: 0.2rem;
-  margin-left: 80px;
 }
 
 .nav-brand .dot {
@@ -707,14 +746,10 @@ html, body, #app {
 .rail-avatar-badge.orange { background: var(--sl-orange); border-radius: 15%; transform: rotate(45deg) scale(0.9); }
 .rail-avatar-badge.red    { background: var(--sl-red);    border-radius: 1px; }
 
-/* Expand chevron: only interactive in mini — expanded mode has no
-   collapse arrow (collapse is the nav toggle / ⇧← / divider drag).
-   Pinned to the centre of the 48px column like the header mark. */
-.rail-collapse-chip {
-  position: absolute;
-  left: 24px;
-  top: 50%;
-  transform: translate(-50%, -50%);
+/* Shared look for every panel-collapse chip — the rail's expand chevron and
+   the file viewer's TOC toggle. Positioning is the caller's business; this
+   rule owns only the appearance, so the two panels can't drift apart. */
+.reck-collapse-chip {
   border: none;
   background: transparent;
   color: var(--app-text-muted);
@@ -723,11 +758,21 @@ html, body, #app {
   padding: 2px 4px;
   border-radius: 4px;
   cursor: pointer;
+}
+.reck-collapse-chip:hover { color: var(--claude-orange); }
+
+/* Expand chevron: only interactive in mini — expanded mode has no
+   collapse arrow (collapse is the nav toggle / ⇧← / divider drag).
+   Pinned to the centre of the 48px column like the header mark. */
+.rail-collapse-chip {
+  position: absolute;
+  left: 24px;
+  top: 50%;
+  transform: translate(-50%, -50%);
   opacity: 0;
   visibility: hidden;
   transition: opacity 100ms var(--ease-smooth), visibility 100ms;
 }
-.rail-collapse-chip:hover { color: var(--claude-orange); }
 .rail.rail-mini .rail-collapse-chip {
   opacity: 1;
   visibility: visible;
@@ -1228,16 +1273,31 @@ html, body, #app {
   background: var(--app-bg);
   color: var(--app-text);
 }
-.popout-header {
-  -webkit-app-region: drag;
-  display: flex;
-  align-items: center;
+/* The two popup title bars — detached pane and file viewer — are visually the
+   same bar: mono, uppercase, dimmed, on a raised background. They were separate
+   byte-identical rules; grouped here so the typography can only be changed in
+   one place.
+
+   The main window's `.nav` is deliberately NOT in this group: it has its own
+   display-font brand and dark palette. It shares the structural base
+   (`.reck-window-header`), not this skin.
+
+   On the font size: 0.7rem is 9.8px at this app's 14px root, which next to a
+   12px traffic-light dot read as a mistake. 0.9rem = 12.6px, essentially the
+   13px macOS uses for its own window titles — a cap-height a little under the
+   dot diameter is the normal, balanced relationship.
+
+   (The real culprit was alignment rather than size: the dots were centred 3px
+   off this bar's centre line. Fixed via per-window `trafficLightPosition` in
+   main — see WINDOW_HEADER_HEIGHT there, which must track the heights below.) */
+.popout-header,
+.file-viewer-header {
   gap: 0.5rem;
-  padding: 0 12px 0 78px; /* leave room for the macOS traffic lights */
+  padding-right: 12px;
   border-bottom: 1px solid var(--app-border);
   background: var(--app-bg-raised);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.9rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--app-text-dim);
@@ -2704,20 +2764,11 @@ html, body, #app {
   overflow: hidden;
 }
 
+/* Only what the file viewer adds on top of the shared popup skin: the header
+   is a positioning context for the spinner slot, and sits above the body so the
+   lightbox / banners can't paint over it. */
 .file-viewer-header {
-  -webkit-app-region: drag;
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0 12px 0 78px; /* room for macOS traffic lights */
-  border-bottom: 1px solid var(--app-border);
-  background: var(--app-bg-raised);
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--app-text-dim);
   z-index: 10;
 }
 
@@ -2836,6 +2887,85 @@ html, body, #app {
   z-index: 11;
 }
 
+/* Content row: TOC aside + body. The inline `grid-template-columns` is written
+   by attachToc's width animator (same rAF animator the rail uses), so the
+   sidebar springs open with the rail's exact feel.
+
+   `min-height: 0` is load-bearing — without it a grid item refuses to shrink
+   below its content height and `.file-viewer-body` stops being the thing that
+   scrolls, which would break search, the TTS overlay and the popup's whole
+   scroll contract. */
+.file-viewer-content {
+  display: grid;
+  grid-template-columns: 0 1fr;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Both children are placed EXPLICITLY. `[hidden]` resolves to `display: none`,
+   which drops the aside out of grid flow entirely — leaving the body to be
+   auto-placed into the first (0px) column, where it collapsed to its own
+   horizontal padding and rendered nothing. Naming the columns keeps the body
+   in the second track whether or not the aside is present. */
+.file-viewer-toc {
+  grid-column: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid var(--app-border);
+  background: var(--app-bg-raised);
+  padding: 16px 0;
+  min-width: 0;
+}
+.file-viewer-toc[hidden] { display: none; }
+
+.file-viewer-toc .reck-toc {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+.file-viewer-toc .reck-toc li { margin: 0; }
+/* Indent by heading depth. h1 sits flush; each level adds 12px. */
+.file-viewer-toc .reck-toc li[data-level="1"] a { padding-left: 16px; }
+.file-viewer-toc .reck-toc li[data-level="2"] a { padding-left: 28px; }
+.file-viewer-toc .reck-toc li[data-level="3"] a { padding-left: 40px; }
+.file-viewer-toc .reck-toc li[data-level="4"] a { padding-left: 52px; }
+
+.file-viewer-toc .reck-toc a {
+  display: block;
+  padding: 4px 12px 4px 16px;
+  color: var(--app-text-muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  /* Long headings truncate rather than widening the column. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-viewer-toc .reck-toc a:hover { color: var(--app-text); }
+.file-viewer-toc .reck-toc a.active {
+  color: var(--claude-orange);
+  border-left-color: var(--claude-orange);
+}
+
+.file-viewer-header .file-viewer-toc-toggle-slot {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+/* The mode-toggle slot already claims the right side; when both are present
+   only the first needs the auto margin. */
+.file-viewer-header .file-viewer-toc-toggle-slot:not(:empty) ~ .file-viewer-mode-toggle-slot {
+  margin-left: 0;
+}
+
+.file-viewer-content > .file-viewer-body {
+  grid-column: 2;
+  min-width: 0;
+}
+
 .file-viewer-body {
   position: relative;
   overflow: auto;
@@ -2844,6 +2974,11 @@ html, body, #app {
   font-family: var(--font-sans, var(--font-mono));
   line-height: 1.6;
   z-index: 0;
+  /* Content zoom (⌘+/⌘-). Everything inside sizes in em, so scaling the root
+     font-size here scales the whole document — prose, code, headings, the TOC
+     — without touching the title bar above it. Deliberately NOT page zoom:
+     see main/content-zoom.ts for why that broke traffic-light alignment. */
+  font-size: calc(1rem * var(--content-zoom));
 }
 
 /* Markdown content typography — close enough to the surrounding app
@@ -2972,6 +3107,55 @@ html, body, #app {
   background: rgba(28, 27, 25, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+/* Image lightbox. Positioned against `.file-viewer-body` (which is
+   `position: relative`) rather than the viewport, so it covers the reading
+   column and leaves the popup header — with its close button and mode toggle —
+   reachable. `position: sticky` on a `position: absolute` overlay would fight
+   the body's scroll, so it is pinned with `fixed`-like insets on the scroller
+   and the body's own scrolling is what it covers. */
+.file-viewer-body .reck-lightbox {
+  position: fixed;
+  inset: 38px 0 0 0; /* below the 38px header */
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--app-bg) 88%, transparent);
+  backdrop-filter: blur(2px);
+  cursor: zoom-out;
+}
+.file-viewer-body .reck-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: default;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 45%);
+}
+/* Rendered images advertise that they can be opened. */
+.file-viewer-body > p > img,
+.file-viewer-body > img {
+  cursor: zoom-in;
+}
+
+/* Mermaid diagrams. The ```mermaid fence is unwrapped out of its <pre><code>
+   before rendering (see markdownEnhancers.ts) precisely so the SVG does NOT
+   inherit the code-block treatment below — a diagram is a figure, not source.
+
+   `white-space: pre-wrap` is the fallback path: when mermaid can't parse a
+   definition it leaves the source text in place, and this keeps that text
+   readable with its line breaks instead of collapsing it into one run-on line. */
+.file-viewer-body .reck-mermaid {
+  margin: 1.2em 0;
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+.file-viewer-body .reck-mermaid svg {
+  max-width: 100%;
+  height: auto;
 }
 
 /* Static HTML preview: baseline layout for structural/media tags the
@@ -5039,6 +5223,11 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   color: var(--app-text-muted);
   /* Pulls the description up under its select, inside the form's row gap. */
   margin-top: -0.35rem;
+  /* Two lines held open: the dataset descriptions straddle the 1↔2 line
+     boundary at this card width, so letting the box size to its text would
+     shift every row below it on each dataset change. In `em` so it tracks
+     the font size rather than pinning to today's one. */
+  min-height: 2.9em;
 }
 
 .usage-export-row {
@@ -5059,6 +5248,30 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
   letter-spacing: 1px;
   text-transform: uppercase;
   color: var(--claude-mid);
+}
+
+/* Reserved, not removed. `display: none` would shrink the card by a row,
+   and .confirm-overlay centres it (2282), so the delta walks Cancel /
+   Download CSV out from under the cursor mid-click. `visibility` keeps the
+   box while dropping the control from view, the tab order and the a11y
+   tree — a pinned layout with no hard-coded height to drift out of date.
+
+   `order` sinks the reserved box to the end of the form so the fields that
+   DO apply close up to the top and the slack collects at the bottom.
+   Without it the blank sits wherever the hidden field happens to live —
+   a hole between the dates and Project — which reads as a broken layout
+   rather than as space held in reserve. */
+.usage-export-field.is-reserved {
+  visibility: hidden;
+  order: 99;
+}
+
+/* `[hidden]` is a user-agent rule, so the author-origin `display: flex`
+   above beats it on ORIGIN regardless of specificity — `field.hidden = true`
+   silently did nothing here, which is how Interval and Project came to
+   render for raw datasets. Same fix as .usage-no-series[hidden] (5359). */
+.usage-export-field[hidden] {
+  display: none;
 }
 
 .usage-export-field select,
@@ -5083,9 +5296,12 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 }
 
 /* Reserved height so a message appearing doesn't shift the buttons out
-   from under the cursor mid-click. */
+   from under the cursor mid-click. Two lines, because a daemon error is
+   interpolated into the text ("Export failed: …") and wraps past one.
+   Deliberately not ellipsised — a truncated error message is worse than
+   the rare shift a third line would cause. */
 .usage-export-status {
-  min-height: 1.15rem;
+  min-height: 2.3rem;
   font-size: 0.78rem;
   line-height: 1.15rem;
   color: var(--app-text-muted);
@@ -5109,7 +5325,15 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
     border-color 0.15s var(--ease-smooth);
 }
 
-.usage-chip:hover {
+/* The Session chip can't pin to a window whose bounds haven't arrived yet.
+   Dimmed rather than hidden: a control that appears once data loads is more
+   startling than one that is visibly not ready. */
+.usage-chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.usage-chip:not(:disabled):hover {
   background: var(--app-hover);
   color: var(--app-text);
 }
@@ -5197,6 +5421,46 @@ details.transcript-plan-detail > .transcript-md { margin-top: 6px; }
 
 .usage-chart-wrap.loading {
   opacity: 0.45;
+}
+
+/* Shown when every series toggle is off. Without it the plot is simply blank,
+   which is indistinguishable from "no usage in this period" — the user reads it
+   as missing data rather than as their own filter.
+
+   Red rather than the muted `.usage-note` treatment on purpose: this is a state
+   the user has to undo to see anything, not an observation about the data.
+   `--sl-red` is the app's existing red (the stoplight red), so this stays in
+   palette instead of introducing a second one.
+   `pointer-events: none` so drag-zoom and the legend underneath stay reachable. */
+.usage-no-series {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 3rem;
+  z-index: 2;
+  pointer-events: none;
+  border: 1.5px solid color-mix(in srgb, var(--sl-red) 70%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sl-red) 22%, transparent);
+}
+.usage-no-series[hidden] {
+  display: none;
+}
+/* Solid red fill with white text rather than tinted text on the app background:
+   the label sits on a translucent red wash, so relying on the theme's own
+   contrast made it wash out in light mode. This reads the same in both. */
+.usage-no-series > span {
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--sl-red);
+  padding: 8px 14px;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 25%);
 }
 
 .usage-note {

@@ -417,6 +417,25 @@ if ! launchctl print "$GUI_DOMAIN" >/dev/null 2>&1; then
     exit 1
 fi
 
+# `launchctl print gui/<uid>` succeeding is NOT the same as running
+# inside that GUI session. An SSH login (or any Background-session
+# shell) can see and bootstrap into gui/<uid> perfectly well — the
+# domain is reachable, bootstrap returns 0 — but because the plist sets
+# LimitLoadToSessionType=Aqua, launchd parks the RunAtLoad spawn
+# ("pended nondemand spawn = speculative", runs = 0) instead of
+# starting the daemon. The health check then sees connection-refused,
+# reports it as "auth not enforced", and the station is left with no
+# daemon at all. Record the session type so the bootstrap step below
+# knows to force the spawn, and so the failure text can name the cause.
+SESSION_MANAGER=$(launchctl managername 2>/dev/null || echo unknown)
+if [[ "$SESSION_MANAGER" != "Aqua" ]]; then
+    echo "  ! this shell is in the '$SESSION_MANAGER' session, not Aqua"
+    echo "    (SSH / non-GUI login). gui/$UID_NUM is reachable, so the"
+    echo "    install can proceed, but the RunAtLoad spawn must be forced."
+else
+    echo "  ✓ Aqua session"
+fi
+
 LEGACY_WAS_LOADED=0
 if sudo launchctl print system/$LABEL >/dev/null 2>&1; then
     LEGACY_WAS_LOADED=1
@@ -427,6 +446,13 @@ fi
 # both the file to be in place and the system domain to accept it.
 rollback_to_legacy() {
     local rc=$?
+    # An explicit `exit N` does NOT fire the ERR trap in bash, so the
+    # verify branches below must CALL this directly — they used to just
+    # `exit 1`, which skipped rollback entirely and left the station
+    # with the legacy daemon booted out and the new agent not running.
+    # Callers pass their intended exit code as $1.
+    rc=${1:-$rc}
+    if [[ "$rc" -eq 0 ]]; then rc=1; fi
     echo ""
     echo "==> Migration failed (exit $rc) — attempting rollback"
     # Tear down a half-bootstrapped LaunchAgent if present.
@@ -472,20 +498,46 @@ if launchctl print "$GUI_DOMAIN/$LABEL" >/dev/null 2>&1; then
 fi
 launchctl bootstrap "$GUI_DOMAIN" "$PLIST_TARGET"
 
-sleep 2
+# Force the RunAtLoad spawn rather than trusting it to fire. From a
+# Background-session shell it never does (see the SESSION_MANAGER note
+# in the pre-flight); from an Aqua shell this is a harmless no-op that
+# returns the already-running PID. Either way launchd spawns the
+# process into the JOB's domain — gui/<uid>, the Aqua asid — not the
+# caller's, so the daemon still lands in the session that direct PTY
+# spawn and the cgo NSPasteboard writes require.
+echo "  -> kickstart $GUI_DOMAIN/$LABEL"
+launchctl kickstart -p "$GUI_DOMAIN/$LABEL" >/dev/null 2>&1 || true
+
 echo "==> Verifying"
 HEALTH_URL=http://127.0.0.1:7315/health
-code_no_auth=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
+# Poll instead of a flat `sleep 2`. A cold start on a busy box can take
+# several seconds, and a fixed sleep turns a slow start into a spurious
+# "auth not enforced" failure — 000 (connection refused) is not a 401,
+# but it means "not up yet", not "auth is broken".
+code_no_auth=000
+for _ in $(seq 1 30); do
+    code_no_auth=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
+    if [[ "$code_no_auth" != "000" ]]; then break; fi
+    sleep 1
+done
 code_with_auth=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "$HEALTH_URL" || true)
+if [[ "$code_no_auth" == "000" ]]; then
+    echo "  ✗ nothing listening on $HEALTH_URL after 30s — the daemon never started"
+    echo "    launchctl print $GUI_DOMAIN/$LABEL   # expect 'state = running', 'runs = 1+'"
+    echo "    a 'runs = 0' with 'pended nondemand spawn' means launchd loaded the"
+    echo "    job but parked the spawn — re-run from a GUI (Aqua) session."
+    echo "    see $LOG_FILE"
+    rollback_to_legacy 1
+fi
 if [[ "$code_no_auth" != "401" ]]; then
     echo "  ✗ /health without auth returned $code_no_auth (expected 401 — auth not enforced)"
     echo "    see $LOG_FILE"
-    exit 1
+    rollback_to_legacy 1
 fi
 if [[ "$code_with_auth" != "200" ]]; then
     echo "  ✗ /health with bearer returned $code_with_auth (expected 200)"
     echo "    see $LOG_FILE"
-    exit 1
+    rollback_to_legacy 1
 fi
 echo "  ✓ auth enforced (401 without bearer, 200 with)"
 
@@ -494,7 +546,7 @@ echo "  ✓ auth enforced (401 without bearer, 200 with)"
 # silent-bootstrap-failure case slip through.
 if ! launchctl print "$GUI_DOMAIN/$LABEL" 2>/dev/null | grep -q "state = running"; then
     echo "  ✗ LaunchAgent state isn't 'running' (inspect: launchctl print $GUI_DOMAIN/$LABEL)"
-    exit 1
+    rollback_to_legacy 1
 fi
 echo "  ✓ LaunchAgent state = running under $GUI_DOMAIN"
 

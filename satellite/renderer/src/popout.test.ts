@@ -56,6 +56,36 @@ vi.mock("@client-core/terminal/terminal-pane", () => {
   return { TerminalPane: MockTerminalPane };
 });
 
+// Captured `onActivate` callbacks from the terminal path linkifier, so the
+// anchoring tests can fire a click without a real xterm.
+const pathLinkActivations: Array<(path: string) => void> = [];
+
+vi.mock("./viewer/PathLinkProvider", () => ({
+  installPathLinkProvider: (
+    _xterm: unknown,
+    opts: { onActivate: (path: string) => void },
+  ) => {
+    pathLinkActivations.push(opts.onActivate);
+    return { dispose: () => {} };
+  },
+}));
+
+// Swappable per test — the popout resolves its project cwd through
+// ApiClient.listProjects().
+let listProjectsImpl: () => Promise<{ projects: Array<{ id: string; cwd: string }> }> =
+  async () => ({ projects: [] });
+
+vi.mock("@client-core/api/client", () => ({
+  ApiClient: class {
+    listProjects() {
+      return listProjectsImpl();
+    }
+    listSessions() {
+      return Promise.resolve({ sessions: [] });
+    }
+  },
+}));
+
 interface MockReckAPI {
   config: {
     get: ReturnType<typeof vi.fn>;
@@ -254,5 +284,150 @@ describe("popout boot ", () => {
     await importPopout();
     const err = document.querySelector(".popout-error");
     expect(err?.textContent).toMatch(/settings not configured/);
+  });
+});
+
+/**
+ * Path anchoring in detached windows.
+ *
+ * A popout used to hand `openInViewer` the raw click text with no
+ * `projectCwd`, on the stated assumption that main would derive the project
+ * anchor itself. Main can't: `rootRelativeCandidate()` short-circuits to null
+ * without a cwd, so `docs/design/x.md` reached `isStationPathSafe()` still
+ * relative and was rejected outright ("not an absolute POSIX path"). Bare
+ * filenames failed the same way, leaving detached windows able to open only
+ * already-absolute paths.
+ */
+describe("popout path anchoring", () => {
+  const PANE_INFO = {
+    paneId: "pane-1",
+    projectId: "proj-1",
+    host: "station" as const,
+    title: "claude-1",
+  };
+  const CWD = "/home/strijders/projects/reck-connect";
+
+  function installApi(overrides: Partial<MockReckAPI> = {}) {
+    const api = installMockReckAPI({
+      windows: {
+        detachPane: vi.fn(),
+        reattachPane: vi.fn().mockResolvedValue({ ok: true }),
+        onPopoutClosed: vi.fn(),
+        getDetachedPaneInfo: vi.fn().mockReturnValue(PANE_INFO),
+      },
+      ...overrides,
+    });
+    api.config.get.mockImplementation(async (key: string) => {
+      if (key === "settings") {
+        return { station: { enabled: true, url: "http://station:7315" } };
+      }
+      if (key === "theme") return "dark";
+      return null;
+    });
+    (api as unknown as { files: unknown }).files = {
+      openInViewer: vi.fn().mockResolvedValue({ ok: true }),
+      resolve: vi.fn().mockResolvedValue([]),
+    };
+    return api;
+  }
+
+  function filesOf(api: MockReckAPI) {
+    return (api as unknown as { files: { openInViewer: ReturnType<typeof vi.fn> } })
+      .files;
+  }
+
+  /** Fire the terminal linkifier's activate callback captured via the mock. */
+  function activate(path: string): void {
+    const onActivate = pathLinkActivations.at(-1);
+    if (!onActivate) throw new Error("installPathLinkProvider was never called");
+    onActivate(path);
+  }
+
+  beforeEach(() => {
+    pathLinkActivations.length = 0;
+    listProjectsImpl = async () => ({
+      projects: [{ id: "proj-1", cwd: CWD }],
+    });
+  });
+
+  it("anchors a bare filename against the pane's project cwd", async () => {
+    const api = installApi();
+    await importPopout();
+    activate("CLAUDE.md");
+    expect(filesOf(api).openInViewer).toHaveBeenCalledWith(`${CWD}/CLAUDE.md`, {
+      sourceHost: "station",
+      originalText: "CLAUDE.md",
+      projectCwd: CWD,
+    });
+  });
+
+  it("anchors a root-relative path — the reported failure", async () => {
+    const api = installApi();
+    await importPopout();
+    activate("docs/design/helpspot-sync.md");
+    expect(filesOf(api).openInViewer).toHaveBeenCalledWith(
+      `${CWD}/docs/design/helpspot-sync.md`,
+      expect.objectContaining({ projectCwd: CWD }),
+    );
+  });
+
+  it("collapses ./ and ../ segments while anchoring", async () => {
+    const api = installApi();
+    await importPopout();
+    activate("./docs/../README.md");
+    expect(filesOf(api).openInViewer).toHaveBeenCalledWith(
+      `${CWD}/README.md`,
+      expect.anything(),
+    );
+  });
+
+  it("passes absolute paths through unchanged", async () => {
+    const api = installApi();
+    await importPopout();
+    activate("/etc/hosts");
+    expect(filesOf(api).openInViewer).toHaveBeenCalledWith(
+      "/etc/hosts",
+      expect.objectContaining({ originalText: "/etc/hosts" }),
+    );
+  });
+
+  it("passes home-anchored paths through unchanged", async () => {
+    // main's expandTildeForHost resolves `~` against the right home for the
+    // host; prepending a cwd here would produce a literal `~` mid-path.
+    const api = installApi();
+    await importPopout();
+    activate("~/notes.md");
+    expect(filesOf(api).openInViewer).toHaveBeenCalledWith(
+      "~/notes.md",
+      expect.anything(),
+    );
+  });
+
+  it("still opens absolute paths when the project lookup fails", async () => {
+    // Degrades to the old behaviour rather than breaking the window.
+    listProjectsImpl = async () => {
+      throw new Error("daemon unreachable");
+    };
+    const api = installApi();
+    await importPopout();
+    activate("/abs/path.md");
+    expect(filesOf(api).openInViewer).toHaveBeenCalledWith(
+      "/abs/path.md",
+      expect.objectContaining({ projectCwd: undefined }),
+    );
+  });
+
+  it("does not invent a cwd when the pane's project isn't in the catalog", async () => {
+    // A wrong cwd is worse than none: it poisons main's rescue pipeline.
+    listProjectsImpl = async () => ({
+      projects: [{ id: "some-other-project", cwd: "/elsewhere" }],
+    });
+    const api = installApi();
+    await importPopout();
+    activate("CLAUDE.md");
+    expect(filesOf(api).openInViewer).toHaveBeenCalledWith(
+      "CLAUDE.md",
+      expect.objectContaining({ projectCwd: undefined }),
+    );
   });
 });

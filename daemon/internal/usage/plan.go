@@ -45,6 +45,16 @@ type PlanSample struct {
 type PlanDay struct {
 	Day          int64  // local-midnight bin start, unix seconds
 	Subscription string // may be PlanUnknown for days before the first sample
+	// RateLimitTier is the entitlement string, e.g. 'default_claude_max_5x'.
+	// Empty when the credential blob didn't report one.
+	//
+	// Reported alongside Subscription rather than instead of it because the
+	// two disagree: subscriptionType goes stale after an upgrade (it reads
+	// "pro" on an account that has been Max 5x for months) while
+	// rateLimitTier tracks the actual entitlement. Consumers should prefer
+	// this and fall back to Subscription — which is also what keeps rows
+	// written before the tier was recorded readable.
+	RateLimitTier string
 }
 
 // InsertPlanSample appends one plan observation.
@@ -125,7 +135,7 @@ func (s *Store) PlanDays(since, until int64, tzOffsetMin int) ([]PlanDay, error)
 	// Change-only writes keep this table tiny, so reading every sample up
 	// to the range end and walking it in Go beats a per-day subquery.
 	rows, err := s.db.Query(
-		`SELECT ts, subscription FROM plan_samples WHERE ts < ? ORDER BY ts ASC, id ASC`,
+		`SELECT ts, subscription, rate_limit_tier FROM plan_samples WHERE ts < ? ORDER BY ts ASC, id ASC`,
 		until,
 	)
 	if err != nil {
@@ -134,13 +144,14 @@ func (s *Store) PlanDays(since, until int64, tzOffsetMin int) ([]PlanDay, error)
 	defer rows.Close()
 
 	type change struct {
-		ts  int64
-		sub string
+		ts   int64
+		sub  string
+		tier string
 	}
 	var changes []change
 	for rows.Next() {
 		var c change
-		if err := rows.Scan(&c.ts, &c.sub); err != nil {
+		if err := rows.Scan(&c.ts, &c.sub, &c.tier); err != nil {
 			return nil, fmt.Errorf("usage: plan days scan: %w", err)
 		}
 		changes = append(changes, c)
@@ -152,14 +163,16 @@ func (s *Store) PlanDays(since, until int64, tzOffsetMin int) ([]PlanDay, error)
 	// Merge-walk: both slices are ascending, so one pass suffices.
 	out := make([]PlanDay, 0, len(starts))
 	cur := PlanUnknown
+	curTier := ""
 	next := 0
 	for _, dayStart := range starts {
 		dayEnd := dayStart + 86400
 		for next < len(changes) && changes[next].ts < dayEnd {
 			cur = changes[next].sub
+			curTier = changes[next].tier
 			next++
 		}
-		out = append(out, PlanDay{Day: dayStart, Subscription: cur})
+		out = append(out, PlanDay{Day: dayStart, Subscription: cur, RateLimitTier: curTier})
 	}
 	return out, nil
 }
@@ -183,10 +196,19 @@ type planStore interface {
 	LatestPlan() (*PlanSample, error)
 }
 
-// DefaultPlanProbeInterval is how often to re-read the tier. Plans change
-// a handful of times a year at most, so this only needs to be frequent
-// enough to notice an upgrade within the day it happened.
-const DefaultPlanProbeInterval = time.Hour
+// DefaultPlanProbeInterval is how often to re-read the tier.
+//
+// Plans themselves change a handful of times a year, so the old hourly
+// cadence was ample for that. But it is also what governs how long the
+// usage view keeps naming the WRONG plan after you sign in again — and an
+// hour of a station insisting you are still on your old tier reads as a
+// bug, not as eventual consistency.
+//
+// A probe costs a cached credential read plus one indexed query, and
+// usually writes nothing (rows are change-only). The quota poller already
+// refreshes that same cache every credMaxAge, so matching it here adds no
+// keychain traffic that was not happening anyway.
+const DefaultPlanProbeInterval = 5 * time.Minute
 
 // PlanProbe reads the subscription tier from the local credential blob
 // and records it when it differs from the last recorded value.

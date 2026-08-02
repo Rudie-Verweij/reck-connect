@@ -42,6 +42,21 @@ contextBridge.exposeInMainWorld("reckAPI", {
     get: (key: string) => ipcRenderer.invoke("config:get", key),
     set: (key: string, value: unknown) => ipcRenderer.invoke("config:set", key, value),
   },
+  /**
+   * Content zoom. Main owns the factor (View menu, persisted) and pushes it to
+   * every window; the renderer only listens. Read-only on purpose — there is no
+   * setter, so a window can't put itself out of step with the rest of the app.
+   *
+   * Fires on every window load as well as on change, so a late-opened popup
+   * picks up the current factor rather than starting at 1.
+   */
+  zoom: {
+    onSet: (cb: (factor: number) => void) => {
+      const listener = (_e: unknown, factor: number) => cb(factor);
+      ipcRenderer.on("zoom:set", listener);
+      return () => ipcRenderer.removeListener("zoom:set", listener);
+    },
+  },
   // Voice dictation — cloud (Deepgram) path. The main process holds the API
   // key and the websocket; the renderer streams linear16 frames and receives
   // interim/final transcripts back over the event channel (issue #67).

@@ -412,7 +412,7 @@ func bucketOf(b *wireBucket) Bucket {
 	if b == nil {
 		return Bucket{}
 	}
-	return Bucket{Pct: b.UsedPercentage, ResetsAt: b.ResetsAt}
+	return NormalizeResetsAt(Bucket{Pct: b.UsedPercentage, ResetsAt: b.ResetsAt})
 }
 
 func modelFamily(id string) string {

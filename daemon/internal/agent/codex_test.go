@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/rudie-verweij/reck-connect/daemon/internal/config"
+	"github.com/rudie-verweij/reck-connect/daemon/internal/sessions"
+	"github.com/rudie-verweij/reck-connect/proto"
 )
 
 // findDeveloperInstructions returns the text codex was told to inject via
@@ -57,17 +59,98 @@ func TestCodexAdapter_usesResolvedAbsolutePath(t *testing.T) {
 	}
 }
 
-// TestCodexAdapter_rejectsResume — resuming a codex session isn't
-// supported; the adapter must still signal this clearly rather than
-// silently losing the flag.
-func TestCodexAdapter_rejectsResume(t *testing.T) {
+// Resume produces `codex resume [-c …] [extra…] <UUID>`. The subcommand
+// leads and the positional UUID closes argv, because codex reads anything
+// after it as PROMPT text.
+func TestCodexAdapter_resumeArgvShape(t *testing.T) {
 	a := &codexAdapter{codexCmd: []string{"/opt/homebrew/bin/codex"}}
-	_, err := a.BuildSpawn(SpawnRequest{
-		Project:         config.Project{ID: "p", Cwd: "/tmp"},
+	plan, err := a.BuildSpawn(SpawnRequest{
+		Project:         config.Project{ID: "p", Cwd: "/tmp", Preamble: "PROJECT-PROMPT"},
 		ResumeSessionID: "abc-123",
+		ExtraArgs:       []string{"--verbose"},
 	})
-	if !errors.Is(err, ErrResumeUnsupported) {
-		t.Fatalf("want ErrResumeUnsupported, got %v", err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if plan.Argv[0] != "/opt/homebrew/bin/codex" {
+		t.Errorf("argv[0] = %q, want the codex binary", plan.Argv[0])
+	}
+	if plan.Argv[1] != "resume" {
+		t.Errorf("argv[1] = %q, want the resume subcommand immediately after the binary", plan.Argv[1])
+	}
+	if last := plan.Argv[len(plan.Argv)-1]; last != "abc-123" {
+		t.Errorf("argv ends with %q, want the thread UUID last", last)
+	}
+	if got := findDeveloperInstructions(plan.Argv); got != "PROJECT-PROMPT" {
+		t.Errorf("developer_instructions = %q, want the preamble to survive resume", got)
+	}
+	if plan.ResumedSessionID != "abc-123" {
+		t.Errorf("ResumedSessionID = %q, want abc-123", plan.ResumedSessionID)
+	}
+	// ExtraArgs must land before the UUID, or codex reads the UUID as a
+	// value for the trailing flag.
+	extraAt, uuidAt := -1, -1
+	for i, s := range plan.Argv {
+		switch s {
+		case "--verbose":
+			extraAt = i
+		case "abc-123":
+			uuidAt = i
+		}
+	}
+	if extraAt == -1 || uuidAt == -1 || extraAt > uuidAt {
+		t.Errorf("extra args must precede the UUID; argv = %v", plan.Argv)
+	}
+}
+
+// Resuming prefers the cwd the thread actually ran in, so the project files
+// codex reads (AGENTS.md and friends) resolve the same way they did before.
+func TestCodexAdapter_resumeUsesStoredCwd(t *testing.T) {
+	a := &codexAdapter{codexCmd: []string{"/c/codex"}}
+	plan, err := a.BuildSpawn(SpawnRequest{
+		Project:         config.Project{ID: "p", Cwd: "/project/root"},
+		ResumeSessionID: "thread-1",
+		RestoreEntry:    &sessions.Entry{Kind: proto.PaneKindCodex, SlotID: "slot-1", Cwd: "/project/root/worktree"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if plan.Cwd != "/project/root/worktree" {
+		t.Errorf("Cwd = %q, want the stored cwd", plan.Cwd)
+	}
+}
+
+// A codex row whose pane died before reporting a thread has nothing to
+// resume, so restore falls back to replaying the captured argv — the pane
+// comes back in the right place, just without its conversation.
+func TestCodexAdapter_restoreWithoutThreadReplaysArgv(t *testing.T) {
+	a := &codexAdapter{codexCmd: []string{"/c/codex"}}
+	plan, err := a.BuildSpawn(SpawnRequest{
+		Project: config.Project{ID: "p", Cwd: "/project/root"},
+		RestoreEntry: &sessions.Entry{
+			Kind:      proto.PaneKindCodex,
+			SlotID:    "slot-1",
+			Cwd:       "/original/cwd",
+			ShellArgv: []string{"/old/path/codex", "--model", "gpt-5-codex"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"/old/path/codex", "--model", "gpt-5-codex"}
+	if len(plan.Argv) != len(want) {
+		t.Fatalf("argv = %v, want %v", plan.Argv, want)
+	}
+	for i := range want {
+		if plan.Argv[i] != want[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, plan.Argv[i], want[i])
+		}
+	}
+	if plan.Cwd != "/original/cwd" {
+		t.Errorf("Cwd = %q, want the captured cwd", plan.Cwd)
+	}
+	if plan.ResumedSessionID != "" {
+		t.Errorf("ResumedSessionID = %q, want empty (nothing was resumed)", plan.ResumedSessionID)
 	}
 }
 

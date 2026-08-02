@@ -121,7 +121,7 @@ interface ProjectsListResponse { projects: Project[] }
 interface CreatePaneRequest {
   kind: PaneKind;
   resume_session_id?: string;  // claude-only: spawn `claude --resume <uuid>`
-  restore_slot_id?: string;    // shell-only (Scope B): respawn under a stored SlotID with captured argv
+  restore_slot_id?: string;    // shell + codex (Scope B): respawn under a stored SlotID; shell replays captured argv, codex resumes its thread
   extra_args?: string[];       // optional; appended to Claude pane argv, ignored for shell panes
   global_preamble?: string;    // claude-only: satellite "Reck Connect prompt", middle preamble layer (baseline + global + project)
 }
@@ -151,8 +151,9 @@ interface PutProjectsResponse { ok: boolean; count: number }
 
 // --- Session persistence (extended for Scope B) ---
 interface SessionInfo {
-  session_id?: string;    // Claude identity, empty on shell rows
-  slot_id?: string;       // Shell identity (Scope B), empty on Claude rows
+  session_id?: string;    // Claude identity, empty on shell + codex rows
+  slot_id?: string;       // Shell + codex identity (Scope B), empty on Claude rows
+  thread_id?: string;     // Codex thread UUID; empty elsewhere and on not-yet-resumable codex rows
   kind?: PaneKind;        // pre-Scope-B omits; clients default to "claude"
   name: string;
   cwd: string;
@@ -206,7 +207,8 @@ interface PaneUploadsListResponse { uploads: PaneUpload[] }
 - `project_id`: URL-safe slug, user-authored in `projects.toml`.
 - `pane_id`: daemon-generated, `p_<12 hex chars>` (e.g., `p_a1b2c3d4e5f6`). Regenerated on every spawn.
 - `session_id` (Claude only): RFC 4122 v4 UUID. Stable across daemon restarts — the Satellite uses it to rekey saved layouts and to resume transcripts via `claude --resume`.
-- `slot_id` (shell only, Scope B): RFC 4122 v4 UUID. Same role as `session_id` for shell panes. Restore respawns under the recorded `slot_id` with the argv the daemon captured at the original create.
+- `slot_id` (shell + codex, Scope B): RFC 4122 v4 UUID. Same role as `session_id` for those kinds. Restore respawns under the recorded `slot_id`; for shell that replays the argv the daemon captured at the original create.
+- `thread_id` (codex only): the Codex CLI thread UUID, captured from the pane's `SessionStart` hook payload. **Not an identity** — it is value data on a `slot_id`-keyed row, and clients never send it back. A codex row with an empty `thread_id` cannot restore a conversation (its pane exited before reporting one) and should be left out of a resume picker.
 
 ## Identity rule
 
@@ -214,8 +216,11 @@ Every persistent pane has exactly one identity:
 
 - Claude panes → `session_id`. `slot_id` is always empty.
 - Shell panes  → `slot_id`.    `session_id` is always empty.
+- Codex panes  → `slot_id`.    `session_id` is always empty; `thread_id` rides alongside as value data.
 
-This extends to the restore / rename / dismiss endpoints. `DismissSessionsRequest.session_ids` is misnamed for historical reasons — it accepts Claude SessionIDs or shell SlotIDs interchangeably and the daemon matches on whichever identity the entry carries.
+This extends to the restore / rename / dismiss endpoints. `DismissSessionsRequest.session_ids` is misnamed for historical reasons — it accepts Claude SessionIDs or shell/codex SlotIDs interchangeably and the daemon matches on whichever identity the entry carries.
+
+**Resuming a codex conversation** is requested with `restore_slot_id`, never `thread_id`: the daemon looks the thread up on the row and builds `codex resume <thread-uuid>` itself. `resume_session_id` and `restore_slot_id` are mutually exclusive for every kind except codex, where a restore legitimately needs both — the slot keys the row, the thread selects the conversation.
 
 ## Capability negotiation (Scope B)
 

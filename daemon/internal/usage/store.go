@@ -210,6 +210,12 @@ CREATE TABLE IF NOT EXISTS turn_usage (
   cache_read     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_turn_session_ts ON turn_usage(session_id, ts);
+-- Every histogram and CSV export scans by time, optionally narrowed to one
+-- project — the same two shapes context_samples already indexes. Their
+-- absence here was an oversight, not a decision: it left the range
+-- predicate full-scanning the table.
+CREATE INDEX IF NOT EXISTS idx_turn_ts ON turn_usage(ts);
+CREATE INDEX IF NOT EXISTS idx_turn_project_ts ON turn_usage(project_id, ts);
 
 CREATE TABLE IF NOT EXISTS agent_sessions (
   session_id   TEXT PRIMARY KEY,

@@ -2,14 +2,17 @@ import type { PaneKind, SessionInfo } from "@proto/proto";
 import type { HostRef } from "../host";
 
 /**
- * What the user picked in the "New pane" dialog. `kind` is the pane kind
- * to spawn (or "resume" → caller follows up with `pickSession()` and
- * spawns a Claude pane against the chosen UUID). `host` is the daemon
- * the pane will run on; the caller uses it to route `apiForHost(host)`
- * calls and to stamp `Tab.host` at creation.
+ * What the user picked in the "New pane" dialog. `kind` is the pane kind to
+ * spawn, or one of the two resume actions — `"resume-claude"` /
+ * `"resume-codex"` — which the caller follows up with by calling
+ * `pickSession()` and spawning a pane of the matching kind against the
+ * chosen row. The two are separate because the identifiers differ: Claude
+ * resumes by session id, Codex by slot id. `host` is the daemon the pane
+ * will run on; the caller uses it to route `apiForHost(host)` calls and to
+ * stamp `Tab.host` at creation.
  */
 export type PaneKindChoice = {
-  kind: PaneKind | "resume";
+  kind: PaneKind | "resume-claude" | "resume-codex";
   host: HostRef;
 };
 
@@ -88,7 +91,8 @@ export function askPaneKind(
           <button class="primary" data-kind="claude">Claude Code</button>
           <button data-kind="shell">Shell</button>
           <button data-kind="codex">Codex</button>
-          <button data-kind="resume">Resume session…</button>
+          <button data-kind="resume-claude">Resume Claude…</button>
+          <button data-kind="resume-codex">Resume Codex…</button>
         </div>
       </div>
     `;
@@ -163,6 +167,15 @@ export function askPaneKind(
         return;
       }
       if (!opts.isHostReady(selectedHost)) return;
+      // Shift+R = Resume Codex. Checked before the lowercased branches so
+      // "r" can't shadow it, and gated on shiftKey so a CapsLock user
+      // pressing plain "r" still lands on Resume Claude.
+      if (e.key === "R" && e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        close({ kind: "resume-codex", host: selectedHost });
+        return;
+      }
       if (e.key === "Enter" || e.key.toLowerCase() === "c") {
         e.preventDefault();
         e.stopPropagation();
@@ -181,7 +194,7 @@ export function askPaneKind(
       } else if (e.key.toLowerCase() === "r") {
         e.preventDefault();
         e.stopPropagation();
-        close({ kind: "resume", host: selectedHost });
+        close({ kind: "resume-claude", host: selectedHost });
       }
     };
     window.addEventListener("keydown", onKey, true);

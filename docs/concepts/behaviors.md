@@ -80,6 +80,50 @@ See [hook-shims.md](./hook-shims.md).
 
 ---
 
+### The Codex hooks installer drops comments from `~/.codex/config.toml`
+
+The Codex installer round-trips the whole TOML document and rewrites only the
+slots it owns (`features.hooks` and the Reck-marked `[[hooks.<Event>]]`
+entries). Every other table — projects, plugins, TUI preferences, model
+defaults — is preserved. **Comments are not**, because TOML round-tripping does
+not retain them.
+
+Each install snapshots the previous config to
+`~/.codex/config.toml.reck-pre-install-<unix-ts>.bak` first, keeping the five
+most recent, so the commented original is recoverable.
+
+**Source:** `daemon/internal/codexhooks/install.go`
+
+**Why it matters:** it's the one lossy edge of an otherwise byte-faithful
+rewrite. A user who comments their codex config will find the comments gone
+after the first daemon start, and should reach for a snapshot rather than assume
+the config was mangled.
+
+---
+
+### A Codex pane with no hook events uses the byte-flow stoplight, not gray
+
+For Claude panes, `agent_state == unknown` means gray. Codex panes are hooked
+too, but a station started with `--no-install-codex-hooks` — or one where the
+install failed — never delivers a Codex `agent_state` at all, and gray-forever
+is less useful than the heuristic those panes used before hooks existed. So the
+agent-state branch applies to a codex pane only once some hook event has landed;
+until then it falls back to byte-flow.
+
+Claude deliberately does not get that fallback: its `unknown` is also what an
+ESC interrupt produces mid-session, where gray is the intended answer.
+
+**Source:** `daemon/internal/stoplight/stoplight.go:Evaluate`,
+`daemon/internal/pty/pane.go:HasAgentEvents`
+
+**Why it matters:** the same `unknown` state means two different things
+depending on whether hooks ever reported, and the colour differs by pane kind as
+a result. Worth knowing before concluding a Codex stoplight is misbehaving.
+
+See [stoplight.md](./stoplight.md).
+
+---
+
 ### /panes/:id/events is a debug endpoint not in proto.md
 
 `GET /panes/:pane_id/events` returns the in-memory event log for a pane (last 256 events). It is not documented in `proto/proto.md`. It is useful for diagnosing hook wiring — you can confirm that the daemon is receiving lifecycle events and what agent_state they produced.

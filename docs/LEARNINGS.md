@@ -377,3 +377,62 @@ external `codex` CLI's (unverifiable) capabilities.
   Claude-only; codex's convention is a filesystem `AGENTS.md`), `--resume`,
   the lifecycle-hook shim + rich stoplight (daemon side is already generic;
   only a `reck-codex-hook.sh` + installer are missing), and clipboard-image.
+
+## Markdown viewer: mermaid + KaTeX write past DOMPurify (epic #108)
+
+**The trigger.** `DEFAULT_RECK_CONNECT_PROMPT` had been telling every Claude
+session that the file viewer renders ```` ```mermaid ```` fences and `$..$` math.
+It didn't — no dependency, no post-mount step. The app-wide preamble was
+instructing agents to emit output the viewer drew as raw source. That is the
+failure mode to watch for: a preamble claim is a promise the renderer has to keep.
+
+**The security shape, which is not obvious from reading either file alone.**
+`render()` sanitizes the markdown-it output *string* — at which point a mermaid
+fence is still `<pre><code class="language-mermaid">`. Mermaid runs afterwards, on
+the live DOM, and **its SVG is never sanitized**. What makes that safe is
+`securityLevel: "strict"` inside mermaid itself; `"loose"` would enable click
+handlers in diagrams, i.e. script execution from user-authored markdown. Same for
+KaTeX and `throwOnError: false`. These are load-bearing settings with tests
+asserting them, not defaults someone chose for taste. A future
+serialize-and-re-sanitize pass over the mounted container would need
+`USE_PROFILES: { svg: true, svgFilters: true }` or it strips every diagram.
+
+**Post-mount output has to be hidden from the text-walkers.** Search
+(`MarkdownSearchAdapter`) and TTS (`MarkdownSurfaceAdapter`) both TreeWalk
+`.file-viewer-body`. Neither skipped SVG, so diagram labels were about to be
+indexed by search — where the Custom Highlight API can't paint a Range, making a
+match a hit the user can never see — and read aloud by Speak. The shared
+`isInsideSvg` predicate matches by **ancestry, not tag name**: mermaid v11
+flowcharts put labels in `<foreignObject>` HTML, not SVG `<text>`. A `<text>`-only
+check passes a synthetic test and misses every real diagram. KaTeX runs
+`output: "html"` for the same reason — the default emits a parallel MathML subtree
+holding the LaTeX source, which both walkers would double-count.
+
+**`html: false` escapes, it does not delete.** This makes string assertions
+actively misleading: `expect(html).not.toContain("onerror")` fails against
+perfectly safe escaped output, and `not.toContain("javascript:")` would too. Parse
+the output before asserting. It also means the widely-recommended
+`<details>`/`<summary>` `ALLOWED_TAGS` addition does nothing here, and the
+"obvious" fix — `html: true` — would remove the primary XSS bar.
+
+**jsdom can't judge rendering, and three tests proved it.** All were written
+first, passed or failed for the wrong reason, and were corrected by a real
+browser:
+- The recommended `mermaid.run({ nodes })` recipe renders the diagram *inside*
+  `<pre><code>`, because `run()` replaces a node's contents. Unit tests were happy.
+- `[hidden]` → `display: none` drops a grid child out of flow, so auto-placement
+  put `.file-viewer-body` in the 0px sidebar column, where it collapsed to its own
+  padding and rendered nothing.
+- Scroll-spy tested by scrolling to `scrollHeight` proves nothing: with
+  `rootMargin: "0px 0px -70% 0px"` every heading can sit above the band, so
+  "nothing is active" is the expected state.
+
+**Electron was silently broken in the working copy.** `node_modules/electron/dist`
+held only `LICENSE` and `version` — no `Electron.app` — and `path.txt` was empty,
+so `pnpm dev` and every Electron test died with "Electron failed to install
+correctly". `install.js` exits 0 without extracting. Fix: unzip the already-cached
+`~/Library/Caches/electron/electron-v<ver>-darwin-arm64.zip` into `dist/` and write
+`path.txt`. `launch-smoke.spec.ts` had been failing on clean `main` for the same
+reason. Also worth knowing: 5173 is Vite's default across every project, so when
+another repo's dev server owns it Playwright's `reuseExistingServer` runs the whole
+suite against *that* app — `RECK_E2E_PORT` now exists for this.

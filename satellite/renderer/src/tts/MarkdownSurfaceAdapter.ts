@@ -27,6 +27,7 @@
 
 import type { SpokenChunk, TtsBoundary, RangeMapEntry } from "./TtsEngine";
 import { applyHighlightColors } from "./highlightStyle";
+import { isInsideSvg } from "../viewer/renderedDom";
 import type {
   SpeakSurfaceAdapter,
   SurfaceHighlightTheme,
@@ -119,6 +120,10 @@ export class MarkdownSurfaceAdapter implements SpeakSurfaceAdapter {
         // which as one utterance stalls speech synthesis outright). The
         // <summary> of a collapsed group stays visible, so it stays spoken.
         if (isHiddenInCollapsedDetails(t, this.body)) continue;
+        // Mermaid diagram labels are graphics, not prose — reading a
+        // flowchart's nodes aloud mid-document is noise, and the boundary
+        // overlay can't position a rect over SVG text anyway.
+        if (isInsideSvg(t, this.body)) continue;
         if (needsSeparator && cursor > 0) {
           parts.push("\n");
           cursor += 1;

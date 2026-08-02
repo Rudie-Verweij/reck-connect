@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/rudie-verweij/reck-connect/daemon/internal/agent"
+	"github.com/rudie-verweij/reck-connect/daemon/internal/codexhooks"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/config"
 	"github.com/rudie-verweij/reck-connect/daemon/internal/hooks"
 	httpsrv "github.com/rudie-verweij/reck-connect/daemon/internal/http"
@@ -41,8 +42,12 @@ func main() {
 		installHooks   = flag.Bool("install-hooks", false, "install Claude Code hooks and exit")
 		uninstallHooks = flag.Bool("uninstall-hooks", false, "remove Claude Code hooks and exit")
 		noInstallHooks = flag.Bool("no-install-hooks", false, "skip auto-installing Claude Code hooks at startup")
-		modeFlag       = flag.String("mode", string(agent.ModeStation), "host posture: station (default; daemon runs on the always-on station Mac) or local (daemon runs on the user's laptop alongside Satellite)")
-		launcherPath   = flag.String("pane-launcher", defaultPaneLauncherPath(), "absolute path to the reck-pane-launcher helper binary; empty disables the helper and reverts to in-process pane spawn (issue #225)")
+
+		installCodexHooks   = flag.Bool("install-codex-hooks", false, "install Codex CLI hooks (~/.codex/config.toml) and exit")
+		uninstallCodexHooks = flag.Bool("uninstall-codex-hooks", false, "remove Codex CLI hooks and exit")
+		noInstallCodexHooks = flag.Bool("no-install-codex-hooks", false, "skip auto-installing Codex CLI hooks at startup")
+		modeFlag            = flag.String("mode", string(agent.ModeStation), "host posture: station (default; daemon runs on the always-on station Mac) or local (daemon runs on the user's laptop alongside Satellite)")
+		launcherPath        = flag.String("pane-launcher", defaultPaneLauncherPath(), "absolute path to the reck-pane-launcher helper binary; empty disables the helper and reverts to in-process pane spawn (issue #225)")
 
 		quotaPollInterval = flag.Duration("usage-poll-interval", usage.DefaultQuotaPollInterval,
 			"how often to poll account-level 5h/7d quota, independent of pane activity; 0 disables polling")
@@ -153,10 +158,19 @@ func main() {
 	// These run BEFORE the DAEMON_TOKEN fail-closed check below so an
 	// operator can install hooks on a fresh box that hasn't had its
 	// token file written yet.
-	if *installHooks || *uninstallHooks {
+	// The Claude trio and the Codex trio are independent: passing
+	// --install-hooks --install-codex-hooks together installs both. Asking
+	// to install and uninstall the SAME agent is a usage error, since
+	// that's almost certainly a typo and the outcome would depend on
+	// evaluation order.
+	if *installHooks || *uninstallHooks || *installCodexHooks || *uninstallCodexHooks {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			logger.Error("cannot resolve $HOME", "err", err)
+			os.Exit(1)
+		}
+		if (*installHooks && *uninstallHooks) || (*installCodexHooks && *uninstallCodexHooks) {
+			logger.Error("install and uninstall for the same agent are mutually exclusive")
 			os.Exit(1)
 		}
 		if *uninstallHooks {
@@ -165,12 +179,25 @@ func main() {
 				os.Exit(1)
 			}
 			logger.Info("hooks uninstalled", "home", home)
-		} else {
+		} else if *installHooks {
 			if err := hooks.EnsureInstalled(home); err != nil {
 				logger.Error("install hooks failed", "err", err)
 				os.Exit(1)
 			}
 			logger.Info("hooks installed", "home", home)
+		}
+		if *uninstallCodexHooks {
+			if err := codexhooks.Uninstall(home); err != nil {
+				logger.Error("uninstall codex hooks failed", "err", err)
+				os.Exit(1)
+			}
+			logger.Info("codex hooks uninstalled", "home", home)
+		} else if *installCodexHooks {
+			if err := codexhooks.EnsureInstalled(home); err != nil {
+				logger.Error("install codex hooks failed", "err", err)
+				os.Exit(1)
+			}
+			logger.Info("codex hooks installed", "home", home)
 		}
 		return
 	}
@@ -326,6 +353,21 @@ func main() {
 				logger.Warn("auto-install hooks failed; continuing without them", "err", err)
 			} else {
 				logger.Info("Reck Claude Code hooks ready", "settings", filepath.Join(home, ".claude", "settings.json"))
+			}
+		}
+	}
+
+	// Same posture for Codex CLI hooks: idempotent EnsureInstalled on every
+	// startup, gated behind --no-install-codex-hooks. Failures are
+	// non-fatal — codex panes then spawn without stoplight signal and
+	// degrade to the byte-flow heuristic, exactly as they behaved before
+	// the hooks existed.
+	if !*noInstallCodexHooks {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			if err := codexhooks.EnsureInstalled(home); err != nil {
+				logger.Warn("auto-install codex hooks failed; continuing without them", "err", err)
+			} else {
+				logger.Info("Reck Codex CLI hooks ready", "config", filepath.Join(home, ".codex", "config.toml"))
 			}
 		}
 	}

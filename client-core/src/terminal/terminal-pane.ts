@@ -104,6 +104,13 @@ function isIOS(): boolean {
   return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
 }
 
+/** Desktop default font size. Content zoom multiplies this — the renderer's
+ *  TERMINAL_BASE_FONT_PX must match it. */
+export const DEFAULT_FONT_SIZE_PX = 13;
+
+/** iOS default: ≥16px so mobile Safari doesn't auto-zoom the hidden textarea. */
+export const IOS_FONT_SIZE_PX = 17;
+
 // Fixed PTY geometry used on iOS. 33 cols at fontSize 17 renders in
 // ~336px — fits every iPhone width with a small margin, and matches
 // exactly how Claude Code lays out at "narrow desktop window" width.
@@ -410,7 +417,7 @@ export class TerminalPane {
     // iPhone width. Also ≥16px so iOS Safari doesn't auto-zoom on the
     // hidden textarea focus (the native mobile-Safari "zoom into input"
     // behaviour only fires for inputs smaller than 16px).
-    const fontSize = isIOS() ? 17 : 13;
+    const fontSize = isIOS() ? IOS_FONT_SIZE_PX : DEFAULT_FONT_SIZE_PX;
     this.term = new Terminal({
       fontFamily: '"JetBrains Mono", ui-monospace, Menlo, monospace',
       fontSize,
@@ -710,6 +717,33 @@ export class TerminalPane {
 
   setTheme(theme: PaneTheme) {
     this.term.options.theme = themeFor(theme);
+  }
+
+  /** The pane's current font size in px. */
+  getFontSize(): number {
+    return this.term.options.fontSize ?? DEFAULT_FONT_SIZE_PX;
+  }
+
+  /**
+   * Resize the terminal's text.
+   *
+   * This is how a terminal is zoomed. Page zoom (`webContents.setZoomLevel`)
+   * scales the rendered canvas as a bitmap, which softens glyphs and leaves the
+   * PTY grid disagreeing with what the user sees; changing the font size
+   * re-measures the cell and reflows the grid properly.
+   *
+   * `refit()` afterwards is not optional — the cell size just changed, so the
+   * col/row count must be recomputed and pushed to the PTY, or the remote
+   * process keeps writing for the old geometry.
+   *
+   * No-ops when the size is unchanged, so a zoom broadcast that doesn't move
+   * this pane costs nothing.
+   */
+  setFontSize(px: number): void {
+    const next = Math.max(1, Math.round(px));
+    if (this.term.options.fontSize === next) return;
+    this.term.options.fontSize = next;
+    this.refit();
   }
 
   /**

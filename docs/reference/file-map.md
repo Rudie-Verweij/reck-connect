@@ -50,6 +50,13 @@
 | `internal/hooks/install.go` | Installs `reck-claude-hook.sh` into `~/.claude/hooks/` and wires entries in `~/.claude/settings.json`; idempotent via `reck-hook-v1` marker |
 | `internal/hooks/reck-claude-hook.sh` | Embedded shell script; POSTs lifecycle events to daemon |
 
+### `internal/codexhooks`
+
+| Path | Description |
+|---|---|
+| `internal/codexhooks/install.go` | Codex mirror of `internal/hooks`: installs `reck-codex-hook.sh` into `~/.codex/hooks/` and wires `features.hooks` + `[[hooks.<Event>]]` entries in `~/.codex/config.toml`; idempotent via `reck-codex-hook-v1` marker, round-trip preserving, snapshots the prior config |
+| `internal/codexhooks/reck-codex-hook.sh` | Embedded shell script; POSTs lifecycle events to daemon with `agent=codex` |
+
 ### `internal/stoplight`
 
 | Path | Description |
@@ -61,7 +68,7 @@
 | Path | Description |
 |---|---|
 | `internal/agent/claude.go` | Claude-specific agent-state logic and spawn config |
-| `internal/agent/codex.go` | Codex-specific spawn config |
+| `internal/agent/codex.go` | Codex spawn config, including `codex resume <thread-uuid>` argv |
 | `internal/agent/shell.go` | Shell pane spawn config |
 | `internal/agent/preamble.go` | Baseline preamble injection logic |
 | `internal/agent/autoname.go` | Derives a display name from Claude session JSONL transcript |
@@ -71,7 +78,7 @@
 
 | Path | Description |
 |---|---|
-| `internal/sessions/sessions.go` | Session persistence store: `Upsert`, `List`, `SetLive`; JSON file per project under `~/.config/reck/sessions/` |
+| `internal/sessions/sessions.go` | Session persistence store: `Upsert`, `List`, `SetLive`, `SetThreadID`; JSON file per project under `~/.config/reck/sessions/` |
 
 ### `internal/events`
 

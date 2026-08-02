@@ -18,6 +18,11 @@ import taskLists from "markdown-it-task-lists";
 import hljs from "highlight.js/lib/common";
 import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
 import { createRenderedDom, isInternalLinkHref } from "./renderedDom";
+import {
+  enhanceMath,
+  enhanceMermaid,
+  type MermaidTheme,
+} from "./markdownEnhancers";
 
 export interface MarkdownRendererOptions {
   /**
@@ -49,6 +54,19 @@ export interface MarkdownRenderer {
    * interception against the (sole) handler attached to `container`.
    */
   mount(container: HTMLElement, html: string): void;
+  /**
+   * Resolves once the post-mount enhancement passes (mermaid diagrams, KaTeX
+   * math) kicked off by the most recent `mount()` have settled.
+   *
+   * `mount()` stays synchronous — callers that only need the prose on screen
+   * are unaffected — but anything that depends on the *final* layout must
+   * await this: the passes change document height, which moves scroll-spy
+   * thresholds and scroll offsets. Tests await it for determinism.
+   *
+   * Never rejects: an enhancement failure degrades to the un-enhanced source
+   * block rather than breaking the whole render.
+   */
+  whenEnhanced(): Promise<void>;
   /** Detach the click handler and clear internal references. */
   dispose(): void;
 }
@@ -124,6 +142,21 @@ function createMarkdownIt(): MarkdownIt {
     return defaultLinkOpen(tokens, idx, options, env, self);
   };
 
+  // Lazy-load images. Native attributes rather than an IntersectionObserver:
+  // MarkView reaches for the observer because it wants custom fade-in
+  // transitions, which we don't — and native works everywhere Electron does.
+  // Same wrapper idiom as `link_open` above.
+  const defaultImage =
+    md.renderer.rules.image ??
+    ((tokens, idx, options, _env, self) =>
+      self.renderToken(tokens, idx, options));
+  md.renderer.rules.image = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    token.attrSet("loading", "lazy");
+    token.attrSet("decoding", "async");
+    return defaultImage(tokens, idx, options, env, self);
+  };
+
   // Tighten markdown-it's link validator: it permits `javascript:` only under
   // explicit opt-in, but the default also allows `vbscript:` and `data:`
   // image/SVG. We restrict to schemes we will actually click through.
@@ -144,7 +177,21 @@ function createMarkdownIt(): MarkdownIt {
 const PURIFY_CONFIG: DOMPurifyConfig = {
   // Allow the classes our renderer adds (especially reck-internal-link) and
   // the highlight.js classnames. Defaults preserve `class` for benign tags.
-  ALLOWED_ATTR: ["href", "title", "alt", "src", "class", "id", "type", "checked", "disabled"],
+  // `loading`/`decoding` carry the lazy-image hints set in createMarkdownIt();
+  // without them here DOMPurify strips the attributes straight back off.
+  ALLOWED_ATTR: [
+    "href",
+    "title",
+    "alt",
+    "src",
+    "class",
+    "id",
+    "type",
+    "checked",
+    "disabled",
+    "loading",
+    "decoding",
+  ],
   ALLOWED_TAGS: [
     "a",
     "p",
@@ -174,10 +221,31 @@ const PURIFY_CONFIG: DOMPurifyConfig = {
     "th",
     "td",
     "del",
+    // §5 of docs/markdown-viewer-integration.md. NOTE: these are currently
+    // unreachable through this pipeline — `html: false` escapes raw HTML in
+    // markdown source long before DOMPurify sees it, so `<details>` renders as
+    // the literal text `&lt;details&gt;` (pinned by a test). They are listed
+    // as defense-in-depth for a future markdown-it plugin that emits them
+    // through the render pipeline.
+    //
+    // Do NOT flip `html: true` to "make them work". That is the primary XSS
+    // bar here — see the file header. Collapsible sections, if wanted, want a
+    // narrow container plugin, not raw HTML passthrough.
+    "details",
+    "summary",
+    "kbd",
   ],
   // Disallow form/iframe-style tags by omitting them from ALLOWED_TAGS.
   KEEP_CONTENT: true,
 };
+
+/** Mermaid's theme name for the app's current palette. Reads the same
+ *  `data-theme` attribute the viewer already uses to theme CodeMirror. */
+function currentMermaidTheme(): MermaidTheme {
+  return document.documentElement.getAttribute("data-theme") === "dark"
+    ? "dark"
+    : "default";
+}
 
 export function createMarkdownRenderer(
   opts: MarkdownRendererOptions = {},
@@ -187,6 +255,28 @@ export function createMarkdownRenderer(
     onLinkActivate: opts.onLinkActivate,
     onExternalActivate: opts.onExternalActivate,
   });
+
+  // Every mount() (and dispose()) bumps the generation. The enhancement
+  // passes capture the value at kick-off and re-check it after their lazy
+  // import resolves, so a popup that re-rendered — or closed — while a
+  // several-hundred-KB chunk was in flight never gets written into.
+  let generation = 0;
+  let enhancing: Promise<void> = Promise.resolve();
+
+  async function enhance(container: HTMLElement, mine: number): Promise<void> {
+    const stillCurrent = (): boolean =>
+      generation === mine && container.isConnected;
+    if (!stillCurrent()) return;
+    // Sequential, not concurrent: both passes mutate the same subtree, and
+    // running them one after the other keeps the post-enhancement layout
+    // deterministic for whoever awaits whenEnhanced().
+    await enhanceMermaid(container, {
+      theme: currentMermaidTheme(),
+      stillCurrent,
+    });
+    await enhanceMath(container, { stillCurrent });
+  }
+
   return {
     render(markdown: string): string {
       const rawHtml = md.render(markdown);
@@ -197,8 +287,14 @@ export function createMarkdownRenderer(
     },
     mount(container: HTMLElement, html: string): void {
       dom.mount(container, html);
+      const mine = ++generation;
+      enhancing = enhance(container, mine);
+    },
+    whenEnhanced(): Promise<void> {
+      return enhancing;
     },
     dispose(): void {
+      generation++;
       dom.dispose();
     },
   };
