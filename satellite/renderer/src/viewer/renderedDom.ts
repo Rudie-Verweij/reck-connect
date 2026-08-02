@@ -9,7 +9,6 @@
 // no new injection surface, but it is not itself a sanitizer.
 
 import { detectPathsInLine } from "./LinkDetector";
-import { attachLightbox, type LightboxHandle } from "./Lightbox";
 
 const INTERNAL_LINK_CLASS = "reck-internal-link";
 const PATH_LINK_TOOLTIP = "⌘+click to open";
@@ -31,29 +30,6 @@ export function isInternalLinkHref(href: string): boolean {
   if (href.startsWith("#")) return false;
   if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
   return true;
-}
-
-/**
- * True when `node` sits inside an `<svg>` subtree at or below `root`.
- *
- * Mermaid replaces each fence with inline SVG whose `<text>` elements hold the
- * diagram's node labels. Those are graphics, not prose: the surfaces that walk
- * this container's text nodes — in-popup search (`MarkdownSearchAdapter`) and
- * TTS (`MarkdownSurfaceAdapter`) — must skip them, or a search matches text the
- * highlight API can't paint and Speak reads a flowchart out loud.
- *
- * Checked by tag name rather than `instanceof SVGElement` so it holds for
- * documents from another realm (and in jsdom).
- */
-export function isInsideSvg(node: Node, root: HTMLElement): boolean {
-  let cur: Node | null = node;
-  while (cur && cur !== root) {
-    if (cur.nodeType === 1 && (cur as Element).tagName.toLowerCase() === "svg") {
-      return true;
-    }
-    cur = cur.parentNode;
-  }
-  return false;
 }
 
 export function wrapFreeTextPaths(root: HTMLElement): void {
@@ -110,14 +86,11 @@ export function createRenderedDom(
 ): RenderedDomHandle {
   let attachedContainer: HTMLElement | null = null;
   let attachedHandler: ((ev: MouseEvent) => void) | null = null;
-  let lightbox: LightboxHandle | null = null;
 
   const detach = (): void => {
     if (attachedContainer && attachedHandler) {
       attachedContainer.removeEventListener("click", attachedHandler);
     }
-    lightbox?.dispose();
-    lightbox = null;
     attachedContainer = null;
     attachedHandler = null;
   };
@@ -146,10 +119,6 @@ export function createRenderedDom(
       container.addEventListener("click", handler);
       attachedContainer = container;
       attachedHandler = handler;
-      // Registered here so the same detach() tears it down. The two handlers
-      // cannot conflict: this one acts only on anchors, the lightbox only on
-      // images that are NOT inside an anchor.
-      lightbox = attachLightbox(container);
     },
     dispose(): void {
       detach();

@@ -7,8 +7,6 @@
 // arrives in P3; editing + conflict UI arrives in P4.
 
 import { createMarkdownRenderer } from "./MarkdownRenderer";
-import { attachToc, type TocController } from "./attachToc";
-import { createWindowHeader } from "../ui/window-header";
 import { createHtmlRenderer } from "./HtmlRenderer";
 import {
   countBlockedExternalRefs,
@@ -93,19 +91,8 @@ interface ActiveSession {
 // session before installing a new one.
 const sessions = new WeakMap<HTMLElement, ActiveSession>();
 
-// Per-host TOC controller. Kept separate from ActiveSession because it is
-// installed asynchronously (after whenEnhanced() settles) and only for the
-// markdown-rendered branch, whereas a session exists for every viewer mode.
-const tocControllers = new WeakMap<HTMLElement, TocController>();
-
-function disposeToc(root: HTMLElement): void {
-  tocControllers.get(root)?.dispose();
-  tocControllers.delete(root);
-}
-
 function disposeSession(root: HTMLElement): void {
   const s = sessions.get(root);
-  disposeToc(root);
   if (!s) return;
   s.autoSave?.dispose();
   s.conflict?.dispose();
@@ -129,12 +116,6 @@ interface ViewerShell {
    *  Only the markdown branch wires a button into this slot; code
    *  files leave it empty (and `display: none` via CSS). */
   modeToggleSlot: HTMLElement;
-  /** Two-column row holding the TOC aside and `body`. */
-  content: HTMLElement;
-  /** `<aside>` the table of contents renders into. Hidden when empty. */
-  tocSlot: HTMLElement;
-  /** Header slot for the TOC show/hide chip. */
-  tocToggleSlot: HTMLElement;
 }
 
 /**
@@ -148,9 +129,8 @@ function buildShell(root: HTMLElement): ViewerShell {
   root.innerHTML = "";
   root.classList.add("file-viewer-root");
 
-  // Shared window title bar — owns the traffic-light inset, the drag region
-  // and the no-zoom rule. See ui/window-header.ts.
-  const header = createWindowHeader("file-viewer-header");
+  const header = document.createElement("div");
+  header.className = "file-viewer-header";
 
   const titleEl = document.createElement("div");
   titleEl.className = "file-viewer-title";
@@ -171,43 +151,13 @@ function buildShell(root: HTMLElement): ViewerShell {
   spinnerSlot.setAttribute("aria-hidden", "true");
   header.appendChild(spinnerSlot);
 
-  // TOC toggle. Left of the mode toggle so the header reads
-  // [title] [☰] [Edit source] [spinner]. Only the markdown-rendered branch
-  // populates it, and only when the document actually has headings.
-  const tocToggleSlot = document.createElement("div");
-  tocToggleSlot.className = "file-viewer-toc-toggle-slot";
-  header.insertBefore(tocToggleSlot, modeToggleSlot);
-
   const body = document.createElement("div");
   body.className = "file-viewer-body";
 
-  // The content row is a two-column grid: the TOC aside, then the body.
-  //
-  // `body` deliberately stays the same element and the SOLE scroll container —
-  // the search adapter, the TTS overlay positioning, toasts, banners and the
-  // documented spinner / Speak-bar partition all anchor to it. The wrapper only
-  // adds a column beside it.
-  const content = document.createElement("div");
-  content.className = "file-viewer-content";
-  const tocSlot = document.createElement("aside");
-  tocSlot.className = "file-viewer-toc";
-  tocSlot.hidden = true;
-  content.appendChild(tocSlot);
-  content.appendChild(body);
-
   root.appendChild(header);
-  root.appendChild(content);
+  root.appendChild(body);
 
-  return {
-    header,
-    spinnerSlot,
-    titleEl,
-    body,
-    modeToggleSlot,
-    content,
-    tocSlot,
-    tocToggleSlot,
-  };
+  return { header, spinnerSlot, titleEl, body, modeToggleSlot };
 }
 
 function renderErrorInto(target: HTMLElement, message: string): void {
@@ -1134,20 +1084,6 @@ async function renderStationRemote(
       },
     });
     md.mount(shell.body, md.render(result.content));
-    // Build the TOC only after the mermaid/KaTeX passes settle: both change
-    // document height, which moves every scroll-spy threshold.
-    void md.whenEnhanced().then(async () => {
-      disposeToc(root);
-      tocControllers.set(
-        root,
-        await attachToc({
-          body: shell.body,
-          tocSlot: shell.tocSlot,
-          tocToggleSlot: shell.tocToggleSlot,
-          content: shell.content,
-        }),
-      );
-    });
   } else if (mode === "html-static") {
     const html = createHtmlRenderer({
       // ⌘+click an http/https URL in the rendered view → OS default browser.
@@ -1562,20 +1498,6 @@ async function renderForPath(
       },
     });
     md.mount(shell.body, md.render(result.content));
-    // Build the TOC only after the mermaid/KaTeX passes settle: both change
-    // document height, which moves every scroll-spy threshold.
-    void md.whenEnhanced().then(async () => {
-      disposeToc(root);
-      tocControllers.set(
-        root,
-        await attachToc({
-          body: shell.body,
-          tocSlot: shell.tocSlot,
-          tocToggleSlot: shell.tocToggleSlot,
-          content: shell.content,
-        }),
-      );
-    });
   } else if (mode === "html-static") {
     const html = createHtmlRenderer({
       // ⌘+click an http/https URL in the rendered view → OS default browser.
