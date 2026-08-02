@@ -18,9 +18,6 @@ import "@xterm/xterm/css/xterm.css";
 import { TerminalPane } from "@client-core/terminal/terminal-pane";
 import { installPathLinkProvider } from "./viewer/PathLinkProvider";
 import { installUrlLinkProvider } from "./viewer/UrlLinkProvider";
-import { resolveActivatePath } from "./viewer/resolveActivatePath";
-import { createWindowHeader } from "./ui/window-header";
-import { initContentZoom, zoomedTerminalFontSize } from "./ui/content-zoom";
 import type { HostRef } from "./host";
 // `loadSettings` reads via the same IPC channels the main renderer uses;
 // the popout's preload exposes the same `reckAPI` surface, so this works
@@ -115,9 +112,8 @@ async function bootPopout(): Promise<void> {
   // Header chrome: title + reattach button. -webkit-app-region: drag
   // on the header (set in styles.css) lets the user move the window
   // even when the OS title bar is hidden by `titleBarStyle: hiddenInset`.
-  // Shared window title bar — owns the traffic-light inset, the drag region
-  // and the no-zoom rule. See ui/window-header.ts.
-  const header = createWindowHeader("popout-header");
+  const header = document.createElement("div");
+  header.className = "popout-header";
   const titleEl = document.createElement("div");
   titleEl.className = "popout-title";
   titleEl.textContent = info.title || info.paneId;
@@ -157,18 +153,6 @@ async function bootPopout(): Promise<void> {
   const wsBase = resolved.baseUrl.replace(/^http/, "ws");
   const wsUrl = `${wsBase}/ws/${encodeURIComponent(info.projectId)}/${encodeURIComponent(info.paneId)}`;
 
-  // The pane's project cwd — the anchor that turns a bare filename or a
-  // root-relative path from terminal scrollback into something openable.
-  //
-  // Filled in asynchronously below, once the ApiClient exists. Both link
-  // handlers read it at CLICK time, which is always long after boot, so the
-  // async fill is not a race in practice; a click before it lands simply
-  // degrades to the absolute-only behaviour this window had before.
-  //
-  // A popout is pinned to one pane for its whole lifetime, so its project
-  // can't change and one lookup is enough.
-  let paneProjectCwd: string | null = null;
-
   const term = new TerminalPane({
     wsUrl,
     // Capture the token by reference: the local-daemon token can rotate
@@ -180,48 +164,17 @@ async function bootPopout(): Promise<void> {
   });
   body.appendChild(term.container);
   term.mount();
-  // Content zoom. The terminal is a canvas, so it can't inherit a CSS
-  // font-size — resize it through xterm instead, which reflows the grid and
-  // re-fits the PTY. The subscription fires immediately, so a popout opened
-  // while the app is already zoomed starts at the right size.
-  const contentZoom = initContentZoom();
-  contentZoom.subscribe((factor) => term.setFontSize(zoomedTerminalFontSize(factor)));
   // Install the file-path xterm linkifier on the popout's terminal so
   // detached panes behave like main-window panes — Cmd+click on a path in
-  // scrollback opens the file viewer popup.
-  //
-  // Resolution mirrors the main window's pane handler (boot.ts): anchor the
-  // click text against the pane's project cwd here, in the renderer, and
-  // thread that cwd through the IPC.
-  //
-  // This used to pass the raw text with no cwd, on the assumption that main
-  // would derive the project anchor itself. It can't: `rootRelativeCandidate`
-  // returns null without a cwd, so `docs/x.md` reached `isStationPathSafe`
-  // still relative and was rejected ("not an absolute POSIX path"). Detached
-  // windows could therefore only open already-absolute paths.
-  //
-  // `originalText` carries the pre-resolution text so main can tell a
-  // deterministic input (absolute, `~/x`) from a guess worth rescuing with the
-  // suffix-fallback search — that is what makes a bare filename still open
-  // when the anchored guess misses.
-  //
-  // `info.host` lets main expand `~/` against the right home and route station
-  // paths through the local sshfs mount.
+  // scrollback opens the file viewer popup. No projectCwd here (a popout
+  // has no active-project context); main derives the project anchor from
+  // the resolved path. `info.host` lets main expand `~/` against the right
+  // home and route station paths through the local sshfs mount.
   installPathLinkProvider(term.getXterm(), {
     resolveBatch: (paths) => window.reckAPI.files.resolve(paths),
     onActivate: (filePath) => {
-      const target = resolveActivatePath(filePath, paneProjectCwd);
-      console.log("[click:popout-pane] activate -> openInViewer", {
-        paneId: info.paneId,
+      void window.reckAPI.files.openInViewer(filePath, {
         sourceHost: info.host,
-        projectCwd: paneProjectCwd,
-        originalText: filePath,
-        target,
-      });
-      void window.reckAPI.files.openInViewer(target, {
-        sourceHost: info.host,
-        originalText: filePath,
-        projectCwd: paneProjectCwd ?? undefined,
       });
     },
   });
@@ -278,29 +231,6 @@ async function bootPopout(): Promise<void> {
     baseUrl: resolved.baseUrl,
     token: resolved.token ?? undefined,
   });
-
-  // Resolve the pane's project cwd (declared above) from the daemon catalog —
-  // the same source the main window's `currentProjects` comes from.
-  //
-  // Failure leaves it null on purpose. An ABSENT cwd degrades to absolute-only
-  // resolution, which is what this window did before; a WRONG cwd would poison
-  // main's rescue pipeline, so a project that isn't in the catalog is treated
-  // as "no anchor" rather than guessed at.
-  void (async () => {
-    try {
-      const res = await api.listProjects();
-      const match = res.projects.find((p) => p.id === info.projectId);
-      paneProjectCwd = match?.cwd ?? null;
-      if (!match) {
-        console.warn(
-          `[popout] project ${info.projectId} not in the daemon catalog — ` +
-            "relative path clicks will not resolve",
-        );
-      }
-    } catch (e) {
-      console.warn("[popout] project cwd lookup failed:", e);
-    }
-  })();
   // Narrowed copies for the closures below — TS drops the `!info`
   // guard's narrowing inside nested functions.
   const panePaneId = info.paneId;
@@ -317,22 +247,13 @@ async function bootPopout(): Promise<void> {
     projectId: () => paneProjectId,
     api: () => api,
     // ⌘+click a path in the transcript → open it in the file viewer. Mirrors
-    // this popout's pane linkifier (above): anchor against the pane's project
-    // cwd in the renderer, then thread that cwd through the IPC. Main cannot
-    // anchor a relative path on its own — see the linkifier comment above.
+    // this popout's pane linkifier (above): pass the raw href + host and let
+    // main resolve it (the detached window has no project cwd to anchor with).
     linkHandlers: () => ({
       onLinkActivate: (href) => {
-        const target = resolveActivatePath(href, paneProjectCwd);
-        console.log("[click:popout-transcript] activate -> openInViewer", {
-          sourceHost: paneHost,
-          projectCwd: paneProjectCwd,
-          originalText: href,
-          target,
-        });
-        void window.reckAPI.files.openInViewer(target, {
+        void window.reckAPI.files.openInViewer(href, {
           sourceHost: paneHost,
           originalText: href,
-          projectCwd: paneProjectCwd ?? undefined,
         });
       },
       // ⌘+click an http/https URL in the transcript → OS default browser.

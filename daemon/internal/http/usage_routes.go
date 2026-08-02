@@ -321,49 +321,14 @@ func (s *Server) handleUsageHistogram(w nethttp.ResponseWriter, r *nethttp.Reque
 		planDays := make([]map[string]any, 0, len(days))
 		for _, d := range days {
 			planDays = append(planDays, map[string]any{
-				"day":             d.Day,
-				"subscription":    d.Subscription,
-				"rate_limit_tier": d.RateLimitTier,
+				"day":          d.Day,
+				"subscription": d.Subscription,
 			})
 		}
 		resp["plan_days"] = planDays
 		resp["plan_summary"] = usage.PlanSummary(days)
 	}
-
-	// Burn-rate forecast for the LIVE windows, so it rides along on the same
-	// call as the plan block. Deliberately not range-scoped: it describes
-	// what is true now, and the caller decides whether the range it is
-	// plotting contains now. Computed from raw quota_samples, so its quality
-	// doesn't vary with the `bucket` the caller asked for. Degrades to "no
-	// forecast" on error rather than failing the histogram.
-	if fh, sd, err := s.UsageStore.QuotaForecasts(time.Now()); err == nil {
-		windows := map[string]any{}
-		if fh != nil {
-			windows["five_hour"] = quotaForecastToWire(fh)
-		}
-		if sd != nil {
-			windows["seven_day"] = quotaForecastToWire(sd)
-		}
-		if len(windows) > 0 {
-			resp["quota_forecast"] = windows
-		}
-	}
 	writeJSON(w, resp)
-}
-
-// quotaForecastToWire encodes one window's live state and projected rates.
-// Field names match addBucket's vocabulary so the two quota surfaces read
-// alike. Rates are percentage points per hour.
-func quotaForecastToWire(f *usage.QuotaForecast) map[string]any {
-	return map[string]any{
-		"ts":              f.TS,
-		"used_percentage": f.Pct,
-		"resets_at":       f.ResetsAt,
-		"window_start":    f.WindowStart,
-		"rate_centre":     f.RateCentre,
-		"rate_low":        f.RateLow,
-		"rate_high":       f.RateHigh,
-	}
 }
 
 // --- poll settings ---------------------------------------------------

@@ -258,10 +258,7 @@ func windowToBucket(w *usageWindow) Bucket {
 	b := Bucket{Pct: copyF(w.Utilization)}
 	if w.ResetsAt != nil {
 		if t, err := time.Parse(time.RFC3339, *w.ResetsAt); err == nil {
-			// Round, don't truncate: the string carries sub-second precision
-			// and t.Unix() floors it, which is what turned a wobble around
-			// the boundary into a one-second flip. See NormalizeResetsAt.
-			unix := t.Round(time.Minute).Unix()
+			unix := t.Unix()
 			b.ResetsAt = &unix
 		}
 		// An unparseable timestamp costs us resets_at, not the whole

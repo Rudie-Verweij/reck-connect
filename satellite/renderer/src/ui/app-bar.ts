@@ -1,5 +1,4 @@
 import { iconChart, iconLightbulb, iconMoon, iconRail } from "./icons";
-import { WINDOW_HEADER_CLASS } from "./window-header";
 
 export type Theme = "light" | "dark";
 
@@ -16,10 +15,7 @@ export class AppBar {
 
   constructor(private props: AppBarProps) {
     this.props.root.innerHTML = `
-      <!-- Shared window title bar: the traffic-light inset, drag region and
-           no-zoom rule come from WINDOW_HEADER_CLASS. The nav class adds only
-           this window's own height, colours and spacing. -->
-      <div class="${WINDOW_HEADER_CLASS} nav">
+      <div class="nav">
         <div class="nav-brand">Reck<span class="dot"></span></div>
         <div class="nav-subtitle">Satellite</div>
         <div class="nav-spacer"></div>

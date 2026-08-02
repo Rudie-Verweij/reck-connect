@@ -14,7 +14,6 @@
 
 import type { OffsetRange } from "./matcher";
 import type { SearchSurfaceAdapter, SurfaceKind } from "./SearchSurfaceAdapter";
-import { isInsideSvg } from "../viewer/renderedDom";
 
 export interface MarkdownSearchAdapterOptions {
   /** Where the search bar mounts. Must be `position: relative`. */
@@ -196,10 +195,6 @@ export class MarkdownSearchAdapter implements SearchSurfaceAdapter {
         const t = node as Text;
         const text = t.data;
         if (!text) continue;
-        // Mermaid diagram labels stay out of the index. The Custom Highlight
-        // API can't paint a Range inside SVG, so a match there would be a hit
-        // the user is told about but can never see.
-        if (isInsideSvg(t, this.body)) continue;
         if (needsSeparator && cursor > 0) {
           parts.push("\n");
           cursor += 1;

@@ -623,19 +623,11 @@ cwd-relative path printed from inside a subdirectory becomes ambiguous
 Good: \`services/foo/main.py\`, \`<project-root>/services/foo/main.py\`.
 Ambiguous: \`main.py\` (relative to which subdir?).
 
-RENDERING — FILE CONTENT ONLY:
-A \`.md\` file opened in the Reck viewer popup renders Mermaid diagrams
-(\`\`\`mermaid blocks), KaTeX math (inline \`$..$\`, display \`$$..$$\`),
-images (click one to enlarge it), tables, task lists and syntax-
-highlighted code. Its headings become a collapsible table of contents.
-
-NONE of that applies to your TERMINAL OUTPUT, which is plain text. A
-\`\`\`mermaid block or \`$..$\` printed into the chat is unreadable source,
-not a diagram — never use them there. They belong only inside \`.md\`
-files you write for the user to open.
-
-Raw HTML inside markdown is escaped rather than rendered — \`<details>\`
-and \`<br>\` appear literally — so use markdown constructs instead.`;
+RENDERING:
+The Reck file viewer renders Markdown popups with Mermaid diagrams
+(\`\`\`mermaid blocks) and KaTeX math (inline \`$..$\`, display \`$$..$$\`).
+You can freely emit diagrams and math notation in any \`.md\` file the
+user might open — they'll render rather than appearing as raw source.`;
 
 export async function loadReckConnectPrompt(): Promise<string | null> {
   const raw = await window.reckAPI.config.get<string>(RECK_CONNECT_PROMPT_KEY);
@@ -918,63 +910,4 @@ export async function saveDropPromptTemplate(template: string): Promise<void> {
  */
 export function renderDropPrompt(template: string, path: string, filename: string): string {
   return template.split("{path}").join(path).split("{filename}").join(filename);
-}
-
-// --- File-viewer table of contents ---
-//
-// Mode + width persist independently so the sidebar restores exactly as the
-// user left it, matching the rail's contract (loadRailMode / loadRailWidth).
-// Unlike the rail, the default is COLLAPSED: the popup is small and most files
-// opened in Reck are short enough not to want a TOC.
-import { TOC_MAX, TOC_MINI, TOC_DEFAULT_WIDTH } from "./viewer/tocCollapse";
-
-const TOC_MODE_KEY = "fileViewerTocMode";
-const TOC_WIDTH_KEY = "fileViewerTocWidth";
-
-export type TocMode = "expanded" | "mini";
-
-/** Any value that isn't exactly "expanded" resolves to "mini" — the safe
- *  default for malformed or pre-feature configs. */
-export async function loadFileViewerTocMode(): Promise<TocMode> {
-  const raw = await window.reckAPI.config.get<string>(TOC_MODE_KEY);
-  return raw === "expanded" ? "expanded" : "mini";
-}
-
-export async function saveFileViewerTocMode(mode: TocMode): Promise<void> {
-  await window.reckAPI.config.set(TOC_MODE_KEY, mode);
-}
-
-/** Clamped on read so a corrupted value can't feed NaN — or a 99999px
- *  sidebar — into the popup's grid template. */
-export async function loadFileViewerTocWidth(): Promise<number> {
-  const raw = await window.reckAPI.config.get<number>(TOC_WIDTH_KEY);
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return TOC_DEFAULT_WIDTH;
-  return Math.max(TOC_MINI, Math.min(TOC_MAX, raw));
-}
-
-export async function saveFileViewerTocWidth(width: number): Promise<void> {
-  await window.reckAPI.config.set(TOC_WIDTH_KEY, width);
-}
-
-// --- Usage overlay view state ---
-//
-// Reopening the usage overlay used to reset to Week / default bins / all
-// projects / all series. These remember the SHAPE of the view (granularity, bin
-// width, project filter, series toggles) but deliberately not the anchor date —
-// see viewer-adjacent rationale in ui/usage-prefs.ts.
-import {
-  sanitizeUsagePrefs,
-  type UsagePrefs,
-} from "./ui/usage-prefs";
-
-const USAGE_PREFS_KEY = "usageView";
-
-export async function loadUsagePrefs(): Promise<UsagePrefs> {
-  return sanitizeUsagePrefs(
-    await window.reckAPI.config.get<unknown>(USAGE_PREFS_KEY),
-  );
-}
-
-export async function saveUsagePrefs(prefs: UsagePrefs): Promise<void> {
-  await window.reckAPI.config.set(USAGE_PREFS_KEY, prefs);
 }

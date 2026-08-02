@@ -10,10 +10,6 @@ import {
   saveSettings,
   applyProjectOrder,
   resolveClaudeLaunchArgs,
-  loadFileViewerTocMode,
-  saveFileViewerTocMode,
-  loadFileViewerTocWidth,
-  saveFileViewerTocWidth,
   saveClaudeLaunchArgs,
   saveClaudeLaunchArgsForProject,
   stampLegacyHost,
@@ -36,7 +32,6 @@ import {
   renderDropPrompt,
   type Settings,
 } from "./config";
-import { TOC_MAX, TOC_MINI } from "./viewer/tocCollapse";
 import type { Project } from "@proto/proto";
 
 function mk(id: string, name: string): Project {
@@ -633,90 +628,5 @@ describe("drag-drop config", () => {
     expect(renderDropPrompt("{path} :: {filename} :: {path}", "sub/x.md", "x.md")).toBe(
       "sub/x.md :: x.md :: sub/x.md",
     );
-  });
-});
-
-describe("file-viewer TOC mode", () => {
-  // Mirrors loadRailMode/saveRailMode: anything that isn't exactly the
-  // expected value resolves to the default, so a malformed persisted value
-  // can't leave the popup in a broken state. Default is "mini" — the popup is
-  // small and most files opened in Reck are short.
-  let store: Map<string, unknown>;
-
-  beforeEach(() => {
-    store = new Map();
-    (window as unknown as { reckAPI: unknown }).reckAPI = {
-      config: {
-        get: async <T>(k: string) => (store.has(k) ? (store.get(k) as T) : null),
-        set: async (k: string, v: unknown) => {
-          store.set(k, v);
-          return true;
-        },
-      },
-    };
-  });
-
-  it.each([
-    ["missing", undefined],
-    ["null", null],
-    ["malformed", 42],
-    ["unknown string", "sideways"],
-    ["the expanded value spelled wrong", "Expanded"],
-  ])("resolves %s to mini", async (_label, raw) => {
-    if (raw !== undefined) store.set("fileViewerTocMode", raw);
-    expect(await loadFileViewerTocMode()).toBe("mini");
-  });
-
-  it("round-trips an explicit expanded", async () => {
-    await saveFileViewerTocMode("expanded");
-    expect(store.get("fileViewerTocMode")).toBe("expanded");
-    expect(await loadFileViewerTocMode()).toBe("expanded");
-  });
-
-  it("clamps a persisted width into the allowed range", async () => {
-    store.set("fileViewerTocWidth", 99999);
-    expect(await loadFileViewerTocWidth()).toBe(TOC_MAX);
-    store.set("fileViewerTocWidth", -5);
-    expect(await loadFileViewerTocWidth()).toBe(TOC_MINI);
-    store.set("fileViewerTocWidth", "not a number");
-    expect(await loadFileViewerTocWidth()).toBe(TOC_MAX);
-  });
-
-  it("round-trips a legitimate width", async () => {
-    await saveFileViewerTocWidth(180);
-    expect(await loadFileViewerTocWidth()).toBe(180);
-  });
-});
-
-describe("DEFAULT_RECK_CONNECT_PROMPT — rendering section", () => {
-  // This text is appended to every Claude pane, so a weakened instruction
-  // shows up as diagrams appearing in terminal output. The original wording
-  // ("You can freely emit diagrams…") read as blanket permission and did
-  // exactly that; these pin the scope so it can't quietly regress.
-  const prompt = DEFAULT_RECK_CONNECT_PROMPT;
-
-  it("scopes rendering to file content", () => {
-    expect(prompt).toMatch(/FILE CONTENT ONLY/);
-  });
-
-  it("explicitly forbids diagrams and math in terminal output", () => {
-    expect(prompt).toMatch(/TERMINAL OUTPUT/);
-    expect(prompt).toMatch(/never use them there/i);
-  });
-
-  it("still advertises the capabilities that make it worth using", () => {
-    for (const capability of [/Mermaid/, /KaTeX/, /table of contents/i, /enlarge/i]) {
-      expect(prompt).toMatch(capability);
-    }
-  });
-
-  it("warns that raw HTML is escaped", () => {
-    // `html: false` in the markdown renderer — agents reach for <details>
-    // constantly, and it renders literally.
-    expect(prompt).toMatch(/escaped rather than rendered/);
-  });
-
-  it("keeps the path-conventions section intact", () => {
-    expect(prompt).toMatch(/PATH CONVENTIONS/);
   });
 });

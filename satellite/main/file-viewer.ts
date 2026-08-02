@@ -13,7 +13,6 @@
 // is the thin shim that connects those handlers to `ipcMain.handle`.
 
 import crypto from "node:crypto";
-import { POPUP_HEADER_HEIGHT, trafficLightPositionFor } from "./window-chrome";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -1329,7 +1328,7 @@ export function createFileViewerWindow(
     },
     backgroundColor: opts.bgColor,
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: trafficLightPositionFor(POPUP_HEADER_HEIGHT),
+    trafficLightPosition: { x: 14, y: 16 },
   });
 
   const params = new URLSearchParams({ path: opts.resolvedPath });

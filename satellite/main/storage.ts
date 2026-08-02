@@ -55,10 +55,6 @@ export const CONFIG_KEYS = [
   "railWiggleEnabled",
   "railWigglePixels",
   "railWiggleLegMs",
-  // File-viewer table of contents — same mode+width pair as the rail, for the
-  // popup's collapsible TOC sidebar. Default mode is "mini" (collapsed).
-  "fileViewerTocMode",
-  "fileViewerTocWidth",
   "theme",
   "projectNames",
   "projectOrder",
@@ -98,14 +94,6 @@ export const CONFIG_KEYS = [
   // blocks the secret half (same split as settings / station.token).
   "transcription",
   "transcription.deepgramKey",
-  // Content zoom factor (View menu). Main owns and persists it; the renderer
-  // only receives it over `zoom:set`, but it lives here because main writes it
-  // through the same storage layer.
-  "contentZoom",
-  // Usage overlay view state: { granularity, bucket, projectId, shown }.
-  // Non-secret. The anchor date is deliberately not part of it — reopening a
-  // "Day" view shows today.
-  "usageView",
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
