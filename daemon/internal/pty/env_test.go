@@ -91,6 +91,31 @@ func TestPaneBaseEnv_forwardsClaudeCodePrefix(t *testing.T) {
 	}
 }
 
+// TestPaneBaseEnv_dropsOAuthTokenDespitePrefix pins the denylist: the
+// CLAUDE_CODE_ prefix must keep forwarding feature flags, but the
+// setup-token credential that shares the prefix must never reach a pane.
+// Forwarding it puts Claude Code into bare credential mode, which starves
+// the stored claude.ai login and breaks Remote Control (see envDenylist).
+func TestPaneBaseEnv_dropsOAuthTokenDespitePrefix(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-not-for-panes")
+	t.Setenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
+
+	for _, kv := range paneBaseEnv() {
+		if len(kv) >= 24 && kv[:24] == "CLAUDE_CODE_OAUTH_TOKEN=" {
+			t.Fatalf("paneBaseEnv forwarded CLAUDE_CODE_OAUTH_TOKEN into a pane: %q", kv)
+		}
+	}
+	found := false
+	for _, kv := range paneBaseEnv() {
+		if kv == "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("denylist must not disturb the CLAUDE_CODE_ prefix family; flag was dropped")
+	}
+}
+
 func TestPaneBaseEnv_forwardsReckDaemonURL(t *testing.T) {
 	t.Setenv("RECK_DAEMON_URL", "http://127.0.0.1:7315")
 	env := paneBaseEnv()

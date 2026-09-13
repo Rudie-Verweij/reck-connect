@@ -61,6 +61,33 @@ After login the LaunchAgent catches up automatically (`RunAtLoad` + `KeepAlive`)
 
 A reboot recovery command worth remembering for the SSH-once-it's-up phase: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/eu.verwey.reck-stationd.plist` will re-bootstrap an unloaded daemon without a full re-install.
 
+### Claude login on a macOS station: one store, never over SSH
+
+Linux stations keep the claude.ai login in exactly one place, `~/.claude/.credentials.json`, so every `claude` process reads and refreshes the same login. macOS has **two** places, and a station can end up using both:
+
+| Where the login lives | Who reads and writes it |
+|---|---|
+| Login keychain, item `Claude Code-credentials` | Every Reck pane (they run in the Aqua session) |
+| `~/.claude/.credentials.json` (plaintext fallback) | Any `claude` started over SSH — the keychain answers "interaction not allowed" there, so Claude Code writes the file instead |
+
+The two copies never sync. Each `/login` mints a new grant into whichever store that process can reach. If you log in over `tailscale ssh`, the panes keep the older keychain grant, which stops being refreshed and eventually reports **"Login expired · run /login"** — while an SSH shell on the same machine says it is logged in. The reverse also happens.
+
+Rules that keep the station on one store:
+
+1. **Log in from a Reck pane, never from an SSH shell.** Open any Claude pane from the Satellite and run `/login` there. That writes the keychain, which every pane shares.
+2. **Never export `CLAUDE_CODE_OAUTH_TOKEN` on the station** — not in a shell profile, not with `launchctl setenv`, not in the plist. The daemon strips it from pane environments (see `envDenylist` in `daemon/internal/pty/pane.go`), but a pane that does receive it runs in Claude Code's "bare" credential mode: it never reads or refreshes the stored login, so that login expires unnoticed, and Remote Control — which needs the stored login, not the token — fails with "login expired". `claude setup-token` is for CI, not for a station.
+3. **If both stores exist, keep the keychain.** Close any SSH-started `claude`, then:
+
+   ```bash
+   rm ~/.claude/.credentials.json
+   ```
+
+   If a pane then asks, run `/login` inside that pane. `install-station.sh` warns when it finds two stores or a token override.
+
+Why not the file everywhere, like Linux? Claude Code has no switch for that: it probes the keychain with `security show-keychain-info` and only uses the file when the probe returns "interaction not allowed" (exit 36). Panes in the Aqua session never get that answer. The only way to force the file would be to run the daemon outside the Aqua session, which issue #215 rules out (direct PTY spawn and pasteboard writes need Aqua).
+
+Related: parallel sessions on one machine coordinate token renewal since Claude Code v2.1.211, so a dozen panes sharing the keychain login is fine. What is not fine is two stores.
+
 ### macOS Accessibility / AppleEvents permissions for `mcp__computer-use__*`
 
 If a station pane uses `mcp__computer-use__*` (or any other tool that calls AX / AppleEvents APIs through Claude or an MCP server), macOS will gate the call on a TCC permission grant. **Grant Accessibility to `/usr/local/bin/reck-pane-launcher` — NOT to `/usr/local/bin/reck-stationd`.**

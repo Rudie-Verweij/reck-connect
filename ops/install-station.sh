@@ -232,6 +232,48 @@ if ! /usr/bin/env -i PATH="$PLIST_PATH" HOME="$HOME" claude --version >/dev/null
 fi
 echo "  ✓ 'claude --version' executes under LaunchAgent PATH"
 
+# Step 5: Claude login store pre-flight (macOS only; warnings, never fatal).
+#
+# On macOS Claude Code keeps the claude.ai login in the login keychain,
+# but falls back to the plaintext ~/.claude/.credentials.json whenever
+# the keychain answers "interaction not allowed" — which is exactly what
+# every SSH session gets. Panes run in the Aqua session and read the
+# keychain; a `claude` started over SSH reads the file. The two copies
+# never sync, so a /login done over SSH leaves the panes on an older
+# grant that eventually reports "login expired". Linux stations have one
+# file and cannot get into this state.
+#
+# A CLAUDE_CODE_OAUTH_TOKEN in the daemon's environment is worse: the
+# daemon forwards CLAUDE_CODE_* into panes (pane.go denylists this one
+# now), and a pane holding it runs in Claude Code's "bare" credential
+# mode — it never touches the stored login, that login silently expires,
+# and Remote Control (which needs the stored login, not the token) fails.
+if [[ "$(uname)" == "Darwin" ]]; then
+  echo "==> Checking the Claude login store"
+  LOGIN_WARN=0
+  if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] || \
+     launchctl print "gui/$(id -u)" 2>/dev/null | grep -q 'CLAUDE_CODE_OAUTH_TOKEN'; then
+    LOGIN_WARN=1
+    echo "  ! CLAUDE_CODE_OAUTH_TOKEN is set (shell env or launchd gui domain)."
+    echo "    The daemon no longer forwards it into panes, but leaving it set"
+    echo "    hides an expired stored login. Remove it:"
+    echo "      launchctl unsetenv CLAUDE_CODE_OAUTH_TOKEN   # from a GUI-session shell"
+    echo "    and drop it from your shell profile / LaunchAgents."
+  fi
+  if [[ -f "$HOME/.claude/.credentials.json" ]] && \
+     security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1; then
+    LOGIN_WARN=1
+    echo "  ! Two Claude login stores exist: the login keychain AND"
+    echo "    ~/.claude/.credentials.json. The file is what a /login over SSH"
+    echo "    writes; panes use the keychain. Keep one: close any SSH-started"
+    echo "    claude, then  rm ~/.claude/.credentials.json  and, if a pane asks,"
+    echo "    run /login inside a Reck pane (never over SSH)."
+  fi
+  if [[ "$LOGIN_WARN" == "0" ]]; then
+    echo "  ✓ single login store (keychain), no OAuth token override"
+  fi
+fi
+
 echo "==> Building reck-stationd + reck-pane-launcher"
 # Stage the unprivileged build in a private per-user dir (BSD mktemp -d
 # defaults to mode 0700 under $TMPDIR, not world-writable /tmp) so a

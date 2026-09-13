@@ -244,6 +244,23 @@ var envAllowlist = map[string]bool{
 //     in this prefix set and never will be.
 var envAllowlistPrefixes = []string{"LC_", "CLAUDE_CODE_"}
 
+// envDenylist names variables that match an allowlisted prefix but are
+// auth material and must never reach a pane.
+//
+// CLAUDE_CODE_OAUTH_TOKEN is the one-year token `claude setup-token`
+// mints. It sits under the CLAUDE_CODE_ prefix, so without this entry a
+// station operator who exports it (shell profile, `launchctl setenv`,
+// the plist) silently hands every pane a credential that outranks the
+// stored claude.ai login. Claude Code then runs the pane in "bare"
+// credential mode: it never reads or refreshes the keychain login, so
+// that login expires unnoticed, and Remote Control — which needs the
+// stored login, not the token — fails with "login expired, run /login".
+// Observed on a macOS station 2026-09-12/13: every pane answered prompts
+// fine while /remote-control kept demanding a fresh login.
+var envDenylist = map[string]bool{
+	"CLAUDE_CODE_OAUTH_TOKEN": true,
+}
+
 // paneBaseEnv returns the daemon's env filtered through envAllowlist.
 // Used by Spawn to construct the child environment from a known-safe
 // subset rather than inheriting the daemon's own secrets.
@@ -261,6 +278,9 @@ func paneBaseEnv() []string {
 			continue
 		}
 		k := kv[:eq]
+		if envDenylist[k] {
+			continue
+		}
 		if envAllowlist[k] {
 			out = append(out, kv)
 			continue
